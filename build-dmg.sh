@@ -1,0 +1,1 @@
+mvn package appbundle:bundle
