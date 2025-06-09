@@ -49,6 +49,8 @@ import com.biglybt.pif.ui.config.Parameter;
 public class ConfigSectionInterfaceDisplaySWT
 	extends ConfigSectionImpl
 {
+	public static final String REFID_SECTION_SIDEBAR = "section-sidebar";
+	public static final String REFID_SECTION_TOOLBAR = "section-toolbar";
 
 	public static final String SECTION_ID = "display";
 
@@ -227,7 +229,23 @@ public class ConfigSectionInterfaceDisplaySWT
 			add(new BooleanParameterImpl("IconBar.visible.bottom", "iconBar.bottom"),
 					listToolbarItems);
 		}
+		
+			// back forward
+		
+		add(new BooleanParameterImpl(
+				"IconBar.visible." + TorrentUtil.BF_ITEM_BACK,
+				"label.back"), listToolbarItems);
+		
+		add(new BooleanParameterImpl(
+				"IconBar.visible." + TorrentUtil.BF_ITEM_FORWARD,
+				"label.forward"), listToolbarItems);
+	
+			// other toolbar items
 
+		add(new BooleanParameterImpl(
+				"IconBar.visible." + TorrentUtil.TU_ITEM_PAUSE,
+				"v3.MainWindow.button.pause"), listToolbarItems);
+		
 		add(new BooleanParameterImpl(
 				"IconBar.visible." + TorrentUtil.TU_ITEM_RECHECK,
 				"MyTorrentsView.menu.recheck"), listToolbarItems);
@@ -235,6 +253,14 @@ public class ConfigSectionInterfaceDisplaySWT
 		add(new BooleanParameterImpl(
 				"IconBar.visible." + TorrentUtil.TU_ITEM_CHECK_FILES,
 				"MyTorrentsView.menu.checkfilesexist"), listToolbarItems);
+
+		add(new BooleanParameterImpl(
+				"IconBar.visible." + TorrentUtil.TU_ITEM_ALLOCATE,
+				"label.allocate"), listToolbarItems);
+		
+		add(new BooleanParameterImpl(
+				"IconBar.visible." + TorrentUtil.TU_ITEM_ARCHIVE,
+				"MyTorrentsView.menu.archive"), listToolbarItems);
 
 		if (isAZ3) {
 			add(new BooleanParameterImpl(
@@ -245,7 +271,7 @@ public class ConfigSectionInterfaceDisplaySWT
 		ParameterGroupImpl pgToolbarItems = new ParameterGroupImpl(null,
 				listToolbarItems).setNumberOfColumns2(0);
 		add("pgToolbarItems", pgToolbarItems, listToolbar);
-
+		
 		// row 3
 
 		add(new BooleanParameterImpl("IconBar.start.stop.separate",
@@ -254,6 +280,8 @@ public class ConfigSectionInterfaceDisplaySWT
 		ParameterGroupImpl pgToolbar = new ParameterGroupImpl(
 				"MainWindow.menu.view.iconbar", listToolbar);
 		add(pgToolbar);
+
+		pgToolbar.setReferenceID( REFID_SECTION_TOOLBAR );
 
 		// Group: sidebar
 		/////////
@@ -350,8 +378,20 @@ public class ConfigSectionInterfaceDisplaySWT
 				add(compact, listSideBar);
 			}
 
-			add(new ParameterGroupImpl("v3.MainWindow.menu.view.sidebar",
-					listSideBar));
+			String[] pop_labs = {
+					MessageText.getString("sb.dblclick.action.ontop"),
+					MessageText.getString("sb.dblclick.action.independent"),
+				};
+
+				add(new IntListParameterImpl("Side Bar Double Click Action",
+						"sb.dblclick.action", new int[] {
+							0,
+							1,
+						}, pop_labs), listSideBar);
+			
+			ParameterGroupImpl group = add(new ParameterGroupImpl("v3.MainWindow.menu.view.sidebar", listSideBar));
+			
+			group.setReferenceID( REFID_SECTION_SIDEBAR );
 		}
 
 		// Group: status bar
@@ -373,6 +413,21 @@ public class ConfigSectionInterfaceDisplaySWT
 		add(new ParameterGroupImpl("ConfigView.section.style.status",
 				listStatusBar));
 
+		// Group: Views
+		
+		
+		List<Parameter> listViews = new ArrayList<>();
+
+		List<Parameter> blocksView = new ArrayList<>();
+
+		add(new IntParameterImpl("blocks.view.max.active","blocks.view.max.active",100, Integer.MAX_VALUE ),
+				Parameter.MODE_INTERMEDIATE, blocksView);
+
+		ParameterGroupImpl blocksViewGroup = new ParameterGroupImpl("Pieces.column.blocks", blocksView);
+		add( blocksViewGroup, listViews );
+				 
+		add( new ParameterGroupImpl("label.views", listViews));
+		
 		// Group: display units
 		/////////
 
@@ -652,6 +707,11 @@ public class ConfigSectionInterfaceDisplaySWT
 				"ConfigView.section.style.graphicsUpdate", 1, Integer.MAX_VALUE),
 				listRefresh);
 
+		BooleanParameterImpl disableWhenMin = new BooleanParameterImpl(
+				"GUI Refresh Disable When Minimized", "ConfigView.section.style.guiUpdateDisableWhenMin");
+		
+		add(disableWhenMin, Parameter.MODE_INTERMEDIATE, listRefresh);
+		
 		add(new ParameterGroupImpl("upnp.refresh.button", listRefresh));
 
 	}

@@ -48,7 +48,8 @@ SimpleXMLParserDocumentImpl
 {
 	private static DocumentBuilderFactory 		dbf_singleton;
 
-	private URL			source_url;
+	private final String	title_debug;
+	private URL				source_url;
 
 	private Document						document;
 	private SimpleXMLParserDocumentNodeImpl	root_node;
@@ -60,6 +61,8 @@ SimpleXMLParserDocumentImpl
 
 		throws SimpleXMLParserDocumentException
 	{
+		title_debug = file.getAbsolutePath();
+		
 		try{
 
 			create( FileUtil.newFileInputStream( file ));
@@ -76,7 +79,8 @@ SimpleXMLParserDocumentImpl
 
 		throws SimpleXMLParserDocumentException
 	{
-
+		title_debug = "data...";
+		
 		create(new ByteArrayInputStream(data.getBytes(Constants.DEFAULT_ENCODING_CHARSET)));
 	}
 
@@ -89,6 +93,8 @@ SimpleXMLParserDocumentImpl
 	{
 		source_url		= _source_url;
 
+		title_debug = source_url.toExternalForm();
+		
 		create( _input_stream );
 	}
 
@@ -143,7 +149,7 @@ SimpleXMLParserDocumentImpl
 			_input_stream = new BufferedInputStream( _input_stream );
 		}
 
-		_input_stream.mark( 100*1024 );
+		_input_stream.mark( 500*1024 );
 
 			// prevent the parser from screwing with our stream by closing it
 
@@ -159,14 +165,17 @@ SimpleXMLParserDocumentImpl
 			String msg = Debug.getNestedExceptionMessage( e );
 
 			if (	( msg.contains( "entity" ) && msg.contains( "was referenced" )) ||
-					msg.contains( "entity reference" )){
+					msg.contains( "entity reference" ) ||
+					msg.contains( "reference to entity" )){
 
 				try{
 						// nasty hack to try and handle HTML entities that some annoying feeds include :(
 
 					_input_stream.reset();
 
-					createSupport( new EntityFudger( _input_stream ));
+					EntityFudger fudger = new EntityFudger( _input_stream );
+										
+					createSupport( fudger );
 
 					return;
 
@@ -195,7 +204,7 @@ SimpleXMLParserDocumentImpl
 
 					String stuff = FileUtil.readInputStreamAsStringWithTruncation( _input_stream, 2014 );
 
-					Debug.out( "RSS parsing failed for '" + stuff + "': " + Debug.getExceptionMessage( error ));
+					Debug.out( "RSS parsing of '" + title_debug + "' failed for '" + stuff + "': " + Debug.getExceptionMessage( error ));
 
 				}catch( Throwable e ){
 				}
@@ -563,12 +572,20 @@ SimpleXMLParserDocumentImpl
     EntityFudger
     	extends InputStream
     {
+    	private static final char[] CDATA_START	= "<![CDATA[".toCharArray();
+    	private static final char[] CDATA_END	= "]]>".toCharArray();
+    	
     	private InputStream		is;
 
-    	char[]	buffer		= new char[16];
+    	boolean in_cdata;
+    	
+    	int	cdata_start_pos = 0;
+    	int cdata_end_pos	= 0;
+    	
+    	char[]	buffer		= new char[64];
     	int		buffer_pos	= 0;
 
-    	char[] 	insertion		= new char[16];
+    	char[] 	insertion		= new char[64];
     	int		insertion_pos	= 0;
     	int		insertion_len	= 0;
 
@@ -577,6 +594,19 @@ SimpleXMLParserDocumentImpl
     		InputStream		_is )
     	{
     		is		= _is;
+    		
+    		/*
+    		try{
+    			FileUtil.writeBytesAsFile( "C:\\temp\\fudge.txt", FileUtil.readInputStreamAsByteArray( is, 500*1024 ));
+    			
+    			is.reset();
+    			
+    		}catch( Throwable e ){
+    			
+    			e.printStackTrace();
+    			
+    		}
+    		*/
     	}
 
     	@Override
@@ -627,7 +657,45 @@ SimpleXMLParserDocumentImpl
 	     				return( buffer[0]&0xff );
 	     			}
 	     		}
+	     		
+	     		if ( in_cdata ){
+	     			
+	     			if ( b == CDATA_END[ cdata_end_pos ]){
 
+	     				cdata_end_pos++;
+		     			
+		     			if ( cdata_end_pos == CDATA_END.length ){
+		     						     				
+		     				in_cdata		= false;
+		     				cdata_end_pos	= 0;
+		     			}
+	     			}else{
+	     				
+	     				cdata_end_pos = 0;
+	     			}
+	     		}else{
+	     			
+		     		if ( b == CDATA_START[ cdata_start_pos ]){
+		     			
+		     			cdata_start_pos++;
+		     			
+		     			if ( cdata_start_pos == CDATA_START.length ){
+		     						     				
+		     				in_cdata		= true;
+		     				cdata_start_pos	= 0;
+		     			}	     			
+		     		}else{
+		     			
+		     			cdata_start_pos= 0;
+		     		}
+	     		}
+
+	     		
+	     		if ( in_cdata ){
+	     			
+	     			return( b );
+	     		}
+	     		
 	     			// normal byte
 
 	     		if ( buffer_pos == 0 ){
@@ -730,14 +798,23 @@ SimpleXMLParserDocumentImpl
 
 		     					}else{
 
-		     							// not a valid entity reference
+		     							// not a valid entity reference, probably some unescaped &blag in a <title> element...
 
-		    	     				System.arraycopy( buffer, 0, insertion, 0, buffer_pos );
+		     						//System.out.println( "Invalid entity reference: '" + new String( buffer, 0, buffer_pos ) + "' - inserting escape" );
+		     						
+		     						char[] chars = "&amp;".toCharArray();
 
+		     						System.arraycopy( chars, 0, insertion, 0, chars.length );
+		     						
+		     						insertion_len	= chars.length;
+		     						
+		    	     				System.arraycopy( buffer, 1, insertion, insertion_len, buffer_pos );
+		    	     				
+		    	     				insertion_len += buffer_pos-1;
+		    	     				
 		    	     				buffer_pos		= 0;
 		    	     				insertion_pos	= 0;
-		    	     				insertion_len	= buffer_pos;
-
+		    	     				
 		    	     				return( insertion[insertion_pos++] );
 		     					}
 		     				}

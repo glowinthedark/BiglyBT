@@ -130,9 +130,9 @@ public interface TableView<DATASOURCETYPE>
 	Object getFirstSelectedDataSource();
 
 	/**
-	 * @return
+	 * @return Prefix for i18n strings. Typically {@link #getTableID()} + "View"
 	 */
-	String getPropertiesPrefix();
+	String getTextPrefixID();
 
 	/**
 	 * Get the row associated with a datasource
@@ -193,7 +193,7 @@ public interface TableView<DATASOURCETYPE>
 	/**
 	 * Sort rows using the columns specified in {@link #getSortColumns()}
 	 */
-	void sortRows(boolean bForceDataRefresh);
+	void sortRows(boolean bForceDataRefresh,boolean async);
 
 	/**
 	 * @return
@@ -205,6 +205,13 @@ public interface TableView<DATASOURCETYPE>
 	 *
 	 */
 	void processDataSourceQueue();
+
+	/**
+	 * Process the queue of datasources to be added and removed
+	 *
+	 * @param refocusAfter If selected were in focus, ensure they remain in focus
+	 */
+	void processDataSourceQueue(boolean refocusAfter);
 
 	/**
 	 * @param bForceSort
@@ -231,19 +238,19 @@ public interface TableView<DATASOURCETYPE>
 	 *
 	 * @param runner Code to run for each row/datasource
 	 */
-	void runForAllRows(TableGroupRowRunner runner);
+	int runForAllRows(TableGroupRowRunner runner);
 
 	/** For every row source, run the code provided by the specified
 	 * parameter.
 	 *
 	 * @param runner Code to run for each row/datasource
 	 */
-	void runForAllRows(TableGroupRowVisibilityRunner runner);
+	int runForAllRows(TableGroupRowVisibilityRunner runner);
 
 	/**
 	 * @param runner
 	 */
-	void runForSelectedRows(TableGroupRowRunner runner);
+	int runForSelectedRows(TableGroupRowRunner runner);
 
 	/**
 	 * Does not fire off selection events
@@ -282,6 +289,10 @@ public interface TableView<DATASOURCETYPE>
 	 */
 	TableRowCore getFocusedRow();
 
+	public void
+	showRow(
+		TableRowCore	row );
+	
 	/**
 	 * @return
 	 */
@@ -363,6 +374,8 @@ public interface TableView<DATASOURCETYPE>
 	 */
 	int getRowDefaultHeight();
 
+	int getLineHeight();
+	
 	boolean isColumnVisible(TableColumn column);
 
 	/**
@@ -387,6 +400,8 @@ public interface TableView<DATASOURCETYPE>
 	 * @since 3.1.1.1
 	 */
 	TableColumn getTableColumn(String columnName);
+	
+	TableColumn getTableColumn(String columnName, boolean localized );
 
 	void setEnabled(boolean enable);
 
@@ -454,4 +469,12 @@ public interface TableView<DATASOURCETYPE>
 	void removeExpansionChangeListener(TableExpansionChangeListener listener);
 
 	boolean isTableSelected();
+	
+	boolean canMoveBack();
+	
+	void moveBack();
+	
+	boolean canMoveForward();
+	
+	void moveForward();
 }

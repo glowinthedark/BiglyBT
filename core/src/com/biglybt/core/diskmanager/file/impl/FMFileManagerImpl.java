@@ -25,7 +25,6 @@ package com.biglybt.core.diskmanager.file.impl;
  *
  */
 
-import java.io.File;
 import java.util.*;
 
 import com.biglybt.core.config.COConfigurationManager;
@@ -65,20 +64,17 @@ FMFileManagerImpl
 		}
 	}
 
-	protected final LinkedHashMap		map;
+	protected final LinkedHashMap<FMFileLimited,FMFileLimited>		map;
 	protected final AEMonitor			map_mon	= new AEMonitor( "FMFileManager:Map");
-
-	protected final HashMap<Object,LinkFileMap>			links		= new HashMap<>();
-	protected final AEMonitor			links_mon	= new AEMonitor( "FMFileManager:Links");
 
 	protected final boolean			limited;
 	protected final int				limit_size;
 
-	protected AESemaphore		close_queue_sem;
-	protected List				close_queue;
-	protected final AEMonitor			close_queue_mon	= new AEMonitor( "FMFileManager:CQ");
+	protected AESemaphore			close_queue_sem;
+	protected List<FMFileLimited>	close_queue;
+	protected final AEMonitor		close_queue_mon	= new AEMonitor( "FMFileManager:CQ");
 
-	protected List				files;
+	protected List<FMFile>				files;
 	protected final AEMonitor			files_mon		= new AEMonitor( "FMFileManager:File");
 
 	protected
@@ -92,172 +88,36 @@ FMFileManagerImpl
 
 			System.out.println( "FMFileManager::init: limit = " + limit_size );
 
-			files = new ArrayList();
+			files = new ArrayList<>();
 		}
 
-		map	= new LinkedHashMap( limit_size, (float)0.75, true );	// ACCESS order selected - this means oldest
+		map	= new LinkedHashMap<>( limit_size, (float)0.75, true );	// ACCESS order selected - this means oldest
 
 		if ( limited ){
 
 			close_queue_sem	= new AESemaphore("FMFileManager::closeqsem");
 
-			close_queue		= new LinkedList();
+			close_queue		= new LinkedList<>();
 
-			Thread	t = new AEThread("FMFileManager::closeQueueDispatcher")
+			new AEThread2("FMFileManager::closeQueueDispatcher")
 				{
 					@Override
 					public void
-					runSupport()
+					run()
 					{
 						closeQueueDispatch();
 					}
-				};
-
-			t.setDaemon(true);
-
-			t.start();
+				}.start();
 		}
-	}
-
-	protected LinkFileMap
-	getLinksEntry(
-		TOTorrent	torrent )
-	{
-		Object	links_key;
-
-		try{
-
-			links_key = torrent.getHashWrapper();
-
-		}catch( Throwable e ){
-
-			Debug.printStackTrace(e);
-
-			links_key	= "";
-		}
-
-		LinkFileMap	links_entry = links.get( links_key );
-
-		if ( links_entry == null ){
-
-			links_entry	= new LinkFileMap();
-
-			links.put( links_key, links_entry );
-		}
-
-		return( links_entry );
-	}
-
-	@Override
-	public void
-	setFileLinks(
-		TOTorrent 		torrent,
-		LinkFileMap		new_links )
-	{
-		try{
-			links_mon.enter();
-
-			LinkFileMap	links_entry = getLinksEntry( torrent );
-
-			Iterator<LinkFileMap.Entry>	it = new_links.entryIterator();
-
-			while( it.hasNext()){
-
-				LinkFileMap.Entry	entry = it.next();
-
-				int		index	= entry.getIndex();
-
-				File	source 	= entry.getFromFile();
-				File	target	= entry.getToFile();
-
-				// System.out.println( "setLink:" + source + " -> " + target );
-
-				if ( target != null && !FileUtil.areFilePathsIdentical( source, target )){
-
-					if ( index >= 0 ){
-
-						links_entry.put( index, source, target );
-
-					}else{
-
-						links_entry.putMigration( source, target );
-					}
-				}else{
-
-					links_entry.remove( index, source );
-				}
-			}
-		}finally{
-
-			links_mon.exit();
-		}
-	}
-
-	@Override
-	public File
-	getFileLink(
-		TOTorrent	torrent,
-		int			file_index,
-		File		file )
-	{
-			// this function works on the currently defined links and will only accept
-			// them as valid if their 'from' location matches the 'file' being queried.
-			// if not the origial file is returned, NOT null
-
-			// These semantics are important during file-move operations as the move-file
-			// logic does not update links until AFTER the move is complete. If we don't
-			// verify the 'from' path in this case then teh old existing linkage overrides
-			// the new destination during the move process and causes it to fail with
-			// 'file already exists'. There is possibly an argument that we shouldn't
-			// take links into account when moving
-
-		try{
-			links_mon.enter();
-
-			LinkFileMap	links_entry = getLinksEntry( torrent );
-
-			LinkFileMap.Entry	entry = links_entry.getEntry( file_index, file );
-
-			File res = null;
-
-			if ( entry == null ){
-
-				res = file;
-
-			}else{
-
-				if ( file.equals( entry.getFromFile())){
-
-					res = entry.getToFile();
-
-				}else{
-
-					res = file;
-				}
-			}
-
-			// System.out.println( "getLink:" + file + " -> " + res );
-
-			return( res );
-
-		}finally{
-
-			links_mon.exit();
-		}
-	}
-
-	@Override
-	public boolean hasLinks(TOTorrent torrent) {
-		return getLinksEntry(torrent).hasLinks();
 	}
 
 	@Override
 	public FMFile
 	createFile(
-		FMFileOwner	owner,
-		File		file,
-		int			type,
-		boolean		force )
+		FMFileOwner				owner,
+		StringInterner.FileKey	file,
+		int						type,
+		boolean					force )
 
 		throws FMFileManagerException
 	{
@@ -299,7 +159,6 @@ FMFileManagerImpl
 
 		return( res );
 	}
-
 
 	protected void
 	getSlot(
@@ -504,6 +363,49 @@ FMFileManagerImpl
 			writer.exdent();
 		}
 	}
+	
+	protected void
+	generate(
+		IndentWriter	writer,
+		TOTorrent		torrent )
+	{
+		writer.println( "FMFileManager slots" );
+
+		try{
+			HashWrapper hw = torrent.getHashWrapper();
+			
+			try{
+				writer.indent();
+	
+				try{
+					map_mon.enter();
+	
+					Iterator it = map.keySet().iterator();
+	
+					while( it.hasNext()){
+	
+						FMFileLimited	file = (FMFileLimited)it.next();
+	
+						if ( file.getOwner().getTorrentFile().getTorrent().getHashWrapper() == hw ){
+						
+							writer.println( file.getString());
+						}
+					}
+	
+				}finally{
+	
+					map_mon.exit();
+				}
+			}finally{
+	
+				writer.exdent();
+			}
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+		}
+	}
+	
 	protected static void
 	generateEvidence(
 		IndentWriter	writer )
@@ -511,5 +413,15 @@ FMFileManagerImpl
 		getSingleton();
 
 		singleton.generate( writer );
+	}
+	
+	public void
+	generateEvidence(
+		IndentWriter	writer,
+		TOTorrent		torrent )
+	{
+		getSingleton();
+
+		singleton.generate( writer, torrent );
 	}
 }

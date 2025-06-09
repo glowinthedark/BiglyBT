@@ -39,6 +39,7 @@ import com.biglybt.ui.swt.utils.FontUtils;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.*;
 import org.eclipse.swt.events.*;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -52,13 +53,16 @@ import org.eclipse.swt.widgets.Shell;
  */
 public class DonationWindow
 {
-	public static boolean DEBUG = System.getProperty("donations.debug", "0").equals(
-			"1");
+	public static boolean DEBUG = System.getProperty("donations.debug", "0").equals("1");
 
-	static int reAskEveryHours = 96;
-
-	private static int initialAskHours = 48;
-
+	private static final long DAY_IN_MILLIS			= 24*60*60*1000;
+	
+	private static final int RE_ASK_EVERY_HOURS 	= 96;
+	private static 		 int INIT_ASK_HOURS 		= 48;
+	private static final int MAX_MIN_DAYS			= 60;
+	private static final int MAX_MAX_DAYS			= 180;
+	
+	
 	static boolean pageLoadedOk = false;
 
 	static Shell shell = null;
@@ -66,6 +70,7 @@ public class DonationWindow
 	static BrowserWrapper.BrowserFunction browserFunction;
 
 	private static int extraHeight;
+	private static GridLayout shellLayout;
 
 	public static void 
 	checkForDonationPopup() 
@@ -79,16 +84,25 @@ public class DonationWindow
 				return;
 			}
 	
+			long now = SystemTime.getCurrentTime();
+			
 			long maxDate = COConfigurationManager.getLongParameter("donations.maxDate", 0);
 			
-			boolean force = maxDate > 0 && SystemTime.getCurrentTime() > maxDate;
+			if ( maxDate - now > MAX_MAX_DAYS*DAY_IN_MILLIS ){
+				
+				maxDate = now + MAX_MAX_DAYS*DAY_IN_MILLIS;
+				
+				COConfigurationManager.setParameter("donations.maxDate", maxDate);
+			}
+			
+			boolean force = maxDate > 0 && now > maxDate;
 	
 			if ( force ){
 			
 					// bump up max-date to avoid multiple 'concurrent' additions from triggering
 					// multiple windows
 				
-				COConfigurationManager.setParameter("donations.maxDate", maxDate + 24*60*60*1000 );
+				COConfigurationManager.setParameter("donations.maxDate", maxDate + DAY_IN_MILLIS );
 			}
 			
 				//Check if user has already donated first
@@ -122,7 +136,7 @@ public class DonationWindow
 				
 					// First Time
 				
-				COConfigurationManager.setParameter( "donations.nextAskHours", hours	+ initialAskHours );
+				COConfigurationManager.setParameter( "donations.nextAskHours", hours	+ INIT_ASK_HOURS );
 				
 				COConfigurationManager.save();
 				
@@ -144,16 +158,30 @@ public class DonationWindow
 	
 			long minDate = COConfigurationManager.getLongParameter("donations.minDate",	0);
 			
-			if (minDate > 0 && minDate > SystemTime.getCurrentTime()) {
+			if ( minDate - now > MAX_MIN_DAYS*DAY_IN_MILLIS ){
+				
+				minDate = now + MAX_MIN_DAYS*DAY_IN_MILLIS;
+				
+				COConfigurationManager.setParameter("donations.minDate", minDate);
+			}
+			
+			if (minDate > 0 && minDate > now ) {
 				if (DEBUG) {
 					new MessageBoxShell(SWT.OK, "Donation Test", "Wait "
-							+ ((SystemTime.getCurrentTime() - minDate) / 1000 / 3600 / 24)
+							+ ((SystemTime.getCurrentTime() - minDate) / DAY_IN_MILLIS )
 							+ " days").open(null);
 				}
 				return;
 			}
 	
-			COConfigurationManager.setParameter("donations.nextAskHours", hours	+ reAskEveryHours);
+			if ( alreadyDonated ){
+				
+					// we don't want to re-ask users that have already donated very frequently
+				
+				updateMinDate( false );
+			}
+			
+			COConfigurationManager.setParameter("donations.nextAskHours", hours	+ RE_ASK_EVERY_HOURS);
 			
 			COConfigurationManager.save();
 		}
@@ -170,14 +198,18 @@ public class DonationWindow
 		});
 	}
 
-	public static void _open(final boolean showNoLoad, final String sourceRef) {
+	private static void _open(final boolean showNoLoad, final String sourceRef) {
 		if (shell != null && !shell.isDisposed()) {
 			return;
 		}
+		extraHeight = 0;
 		final Shell parentShell = Utils.findAnyShell();
-		shell = ShellFactory.createShell(parentShell,
-				SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
-		shell.setLayout(new GridLayout(1, true));
+		shell = ShellFactory.createShell(parentShell,SWT.DIALOG_TRIM | SWT.RESIZE);
+		shellLayout = Utils.getSimpleGridLayout(1);
+		shellLayout.marginWidth = 10;
+		shellLayout.marginHeight = 10;
+		shell.setLayout(shellLayout);
+
 		if (parentShell != null) {
 			parentShell.setCursor(shell.getDisplay().getSystemCursor(SWT.CURSOR_WAIT));
 		}
@@ -246,15 +278,12 @@ public class DonationWindow
 			return;
 		}
 		browser.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-		
-		browser.addTitleListener(new TitleListener() {
-			@Override
-			public void changed(TitleEvent event) {
-				if (shell == null || shell.isDisposed()) {
-					return;
-				}
-				shell.setText(event.title);
+
+		browser.addTitleListener(event -> {
+			if (shell == null || shell.isDisposed()) {
+				return;
 			}
+			shell.setText(event.title);
 		});
 
 		browserFunction = browser.addBrowserFunction(
@@ -294,7 +323,7 @@ public class DonationWindow
 						}
 						shell.open();
 					} else if (text.contains("reset-ask-time")) {
-						int time = reAskEveryHours;
+						int time = RE_ASK_EVERY_HOURS;
 						String[] strings = text.split(" ");
 						if (strings.length > 1) {
 							try {
@@ -321,10 +350,15 @@ public class DonationWindow
 						String[] strings = text.split(" ");
 						if (strings.length > 2) {
 							try {
-								int w = Integer.parseInt(strings[1]);
-								int h = Integer.parseInt(strings[2]) + extraHeight;
+								// no idea if dpi adjustment needed for non-windows
+								Point dpi = Constants.isWindows ? Utils.getDisplay().getDPI() : new Point(96, 96);
+								int nw = Integer.parseInt(strings[1]);
+								int nh = Integer.parseInt(strings[2]);
+								int w = (int) (nw * (dpi.x / 96.0)) + (shellLayout.verticalSpacing * 2) + (shellLayout.marginWidth * 2);
+								int h = (int) (nh * (dpi.y / 96.0)) + extraHeight + (shellLayout.verticalSpacing * 2)  + (shellLayout.marginWidth * 2);
 
 								Rectangle computeTrim = shell.computeTrim(0, 0, w, h);
+								//System.out.println("trim " + shell.computeTrim(0,0,0,0) + " filled: " + computeTrim + "; dpi=" + dpi + "; s=" + w + ", " + h);
 								shell.setSize(computeTrim.width, computeTrim.height);
 							} catch (Exception ignore) {
 							}
@@ -374,11 +408,13 @@ public class DonationWindow
 
 		if ( browser.isFake()){
 
-			browser.setUrl( Constants.URL_DONATION );
+			browser.setFakeUrl( Constants.URL_DONATION, (s)->{
+				neverAskAgain();
+			});
 
 			browser.setText( "Please follow the link to donate via an external browser" );
 
-			shell.setSize( 400, 500 );
+			shell.setSize( 800, 500 );
 
 			Utils.centreWindow(shell);
 
@@ -395,48 +431,44 @@ public class DonationWindow
 	 *
 	 * @since 4.0.0.5
 	 */
-	protected static void  neverAskAgain() {
+	private static void  neverAskAgain() {
 		COConfigurationManager.setParameter("donations.donated", true);
-		updateMinDate();
+		updateMinDate( true );
 		COConfigurationManager.save();
 	}
 
-	/**
-	 *
-	 *
-	 * @since 4.0.0.5
-	 */
-	public static void resetAskTime() {
-		resetAskTime(reAskEveryHours);
-	}
-
-	public static void resetAskTime(int askEveryHours) {
+	private static void resetAskTime(int askEveryHours) {
 		long upTime = StatsFactory.getStats().getTotalUpTime();
 		int hours = (int) (upTime / (60 * 60)); //secs * mins
 		int nextAsk = hours + askEveryHours;
 		COConfigurationManager.setParameter("donations.nextAskHours", nextAsk);
 		COConfigurationManager.setParameter("donations.lastVersion", Constants.BIGLYBT_VERSION);
-		updateMinDate();
+		updateMinDate( false );
 		COConfigurationManager.save();
 	}
 
-	public static void updateMinDate() {
-		COConfigurationManager.setParameter("donations.minDate", SystemTime.getOffsetTime(1000L * 3600 * 24 * 30));  //30d ahead
-		COConfigurationManager.setParameter("donations.maxDate", SystemTime.getOffsetTime(1000L * 3600 * 24 * 120));  //4mo ahead
+	private static void updateMinDate( boolean isNever ) {
+		long min_days;
+		long max_days;
+		
+		if ( isNever ){
+			min_days = 60;
+			max_days = 180;
+		}else{
+			min_days = 30;
+			max_days = 120;
+		}
+		
+		COConfigurationManager.setParameter("donations.minDate", SystemTime.getOffsetTime( DAY_IN_MILLIS*min_days ));
+		COConfigurationManager.setParameter("donations.maxDate", SystemTime.getOffsetTime( DAY_IN_MILLIS*max_days ));
 		//COConfigurationManager.save();
 	}
 
-   //unused
-	//public static void setMinDate(long timestamp) {
-	//	COConfigurationManager.setParameter("donations.minDate", timestamp);
-	//	COConfigurationManager.save();
-	//}
-
 	public static int getInitialAskHours() {
-		return initialAskHours;
+		return INIT_ASK_HOURS;
 	}
 
 	public static void setInitialAskHours(int i) {
-		initialAskHours = i;
+		INIT_ASK_HOURS = i;
 	}
 }

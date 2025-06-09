@@ -110,8 +110,9 @@ public class SWTSkin
 
 	private String startID;
 
-	private boolean autoSizeOnLayout = true;
-
+	private boolean autoSizeOnLayout 		= true;
+	private boolean autoSizeOnLayoutForce	= false;
+	
 	/**
 	 *
 	 */
@@ -718,21 +719,23 @@ public class SWTSkin
 
 		int width = skinProperties.getPxValue(startID + ".width", -1);
 		int height = skinProperties.getPxValue(startID + ".height", -1);
-		if (skinComposite instanceof AEShell) {
-			((AEShell) skinComposite).setAdjustPXforDPI(false);
-		}
 
 		if (autoSizeOnLayout) {
-  		if (width > 0 && height == -1) {
-  			Point computeSize = skinComposite.computeSize(width, SWT.DEFAULT);
-  			skinComposite.setSize(computeSize);
-  		} else if (height > 0 && width == -1) {
-  			Point computeSize = skinComposite.computeSize(SWT.DEFAULT, height);
-  			skinComposite.setSize(computeSize);
-  		} else if (height > 0 && width > 0) {
-  			skinComposite.setSize(width, height);
+			if (width > 0 && height == -1) {
+				Point computeSize = skinComposite.computeSize(width, SWT.DEFAULT);
+				skinComposite.setSize(computeSize);
+			} else if (height > 0 && width == -1) {
+				Point computeSize = skinComposite.computeSize(SWT.DEFAULT, height);
+				skinComposite.setSize(computeSize);
+			} else if (height > 0 && width > 0) {
+				skinComposite.setSize(width, height);
 
-  		}
+			}else{
+				if ( autoSizeOnLayoutForce ){
+					Point computeSize = skinComposite.computeSize(SWT.DEFAULT, SWT.DEFAULT);
+					skinComposite.setSize(computeSize);
+				}
+			}
 		} else {
 			try {
 				skinComposite.requestLayout();
@@ -1068,7 +1071,7 @@ public class SWTSkin
 		// XXX This could get ugly, we should could the # of
 		//     SWTSkinPropertiesParam to determine if this needs optimizing
 		//     ie. if a top container has paramValues, every child will get a new
-		//         object.  How would this affect memory/performace?
+		//         object.  How would this affect memory/performance?
 		if (paramValues != null) {
 			properties = new SWTSkinPropertiesParamImpl(properties, paramValues);
 		}
@@ -1596,10 +1599,16 @@ public class SWTSkin
 				skinObject = createTabFolder(properties, sID, sConfigID, sTypeParams,
 						parentSkinObject);
 			} else if (sType.equals("expandbar")) {
-				skinObject = createExpandBar(properties, sID, sConfigID, sTypeParams,
+				skinObject = createExpandBar1(properties, sID, sConfigID, sTypeParams,
 						parentSkinObject);
 			} else if (sType.equals("expanditem")) {
-				skinObject = createExpandItem(properties, sID, sConfigID, sTypeParams,
+				skinObject = createExpandItem1(properties, sID, sConfigID, sTypeParams,
+						parentSkinObject);
+			} else if (sType.equals("expandbar2")) {
+				skinObject = createExpandBar2(properties, sID, sConfigID, sTypeParams,
+						parentSkinObject);
+			} else if (sType.equals("expanditem2")) {
+				skinObject = createExpandItem2(properties, sID, sConfigID, sTypeParams,
 						parentSkinObject);
 			} else {
 				System.err.println(sConfigID + ": Invalid type of " + sType);
@@ -1673,7 +1682,7 @@ public class SWTSkin
 		return skinObject;
 	}
 
-	private SWTSkinObject createExpandBar(SWTSkinProperties properties, String id,
+	private SWTSkinObject createExpandBar1(SWTSkinProperties properties, String id,
 			String configID, String[] typeParams, SWTSkinObject parentSkinObject) {
 		String[] sItems = properties.getStringArray(configID + ".widgets");
 
@@ -1682,7 +1691,7 @@ public class SWTSkin
 					+ properties.getStringValue(configID + ".widgets"));
 		}
 
-		SWTSkinObject skinObject = new SWTSkinObjectExpandBar(this, properties, id,
+		SWTSkinObject skinObject = new SWTSkinObjectExpandBar1(this, properties, id,
 				configID, parentSkinObject);
 		addToControlMap(skinObject);
 
@@ -1694,7 +1703,28 @@ public class SWTSkin
 		return skinObject;
 	}
 
-	private SWTSkinObject createExpandItem(SWTSkinProperties properties, String id,
+	private SWTSkinObject createExpandBar2(SWTSkinProperties properties, String id,
+			String configID, String[] typeParams, SWTSkinObject parentSkinObject) {
+		String[] sItems = properties.getStringArray(configID + ".widgets");
+
+		if (DEBUGLAYOUT) {
+			System.out.println("createExpandBar: " + id + ";"
+					+ properties.getStringValue(configID + ".widgets"));
+		}
+
+		SWTSkinObject skinObject = new SWTSkinObjectExpandBar2(this, properties, id,
+				configID, parentSkinObject);
+		addToControlMap(skinObject);
+
+		if (sItems != null) {
+			addContainerChildren(skinObject, sItems, properties);
+		}
+
+
+		return skinObject;
+	}
+	
+	private SWTSkinObject createExpandItem1(SWTSkinProperties properties, String id,
 			String configID, String[] typeParams, SWTSkinObject parentSkinObject) {
 		String[] sItems = properties.getStringArray(configID + ".widgets");
 
@@ -1703,7 +1733,7 @@ public class SWTSkin
 					+ properties.getStringValue(configID + ".widgets"));
 		}
 
-		SWTSkinObject skinObject = new SWTSkinObjectExpandItem(this, properties, id,
+		SWTSkinObject skinObject = new SWTSkinObjectExpandItem1(this, properties, id,
 				configID, parentSkinObject);
 		addToControlMap(skinObject);
 
@@ -1714,6 +1744,25 @@ public class SWTSkin
 		return skinObject;
 	}
 
+	private SWTSkinObject createExpandItem2(SWTSkinProperties properties, String id,
+			String configID, String[] typeParams, SWTSkinObject parentSkinObject) {
+		String[] sItems = properties.getStringArray(configID + ".widgets");
+
+		if (DEBUGLAYOUT) {
+			System.out.println("createExpandItem2: " + id + ";"
+					+ properties.getStringValue(configID + ".widgets"));
+		}
+
+		SWTSkinObject skinObject = new SWTSkinObjectExpandItem2(this, properties, id,
+				configID, parentSkinObject);
+		addToControlMap(skinObject);
+
+		if (sItems != null) {
+			addContainerChildren(skinObject, sItems, properties);
+		}
+
+		return skinObject;
+	}
 
 	private SWTSkinObject createTextbox(SWTSkinProperties properties, String id,
 			String configID, String[] typeParams, SWTSkinObject parentSkinObject) {
@@ -1892,7 +1941,7 @@ public class SWTSkin
 			// XXX This could get ugly, we should could the # of
 			//     SWTSkinPropertiesParam to determine if this needs optimizing
 			//     ie. if a top container has paramValues, every child will get a new
-			//         object.  How would this affect memory/performace?
+			//         object.  How would this affect memory/performance?
 			if (paramValues != null) {
 				properties = new SWTSkinPropertiesParamImpl(properties, paramValues);
 			}
@@ -2056,8 +2105,9 @@ public class SWTSkin
 		}
 	}
 
-	public void setAutoSizeOnLayout(boolean autoSizeOnLayout) {
-		this.autoSizeOnLayout = autoSizeOnLayout;
+	public void setAutoSizeOnLayout(boolean autoSizeOnLayout, boolean force ) {
+		this.autoSizeOnLayout 		= autoSizeOnLayout;
+		this.autoSizeOnLayoutForce 	= force;
 	}
 
 	public boolean isAutoSizeOnLayout() {

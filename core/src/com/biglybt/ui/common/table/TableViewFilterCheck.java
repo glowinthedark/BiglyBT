@@ -20,6 +20,8 @@
 
 package com.biglybt.ui.common.table;
 
+import java.util.Map;
+
 /**
  * @author TuxPaper
  * @created Oct 4, 2009
@@ -27,13 +29,29 @@ package com.biglybt.ui.common.table;
  */
 public interface TableViewFilterCheck<DATASOURCETYPE>
 {
-	public boolean filterCheck(DATASOURCETYPE ds, String filter, boolean regex);
-
-	public void filterSet(String filter);
-
-	public interface TableViewFilterCheckEx<DATASOURCETYPE>
-		extends TableViewFilterCheck<DATASOURCETYPE>
-	{
-		public void viewChanged(TableView<DATASOURCETYPE> view);
+		/**
+		 * @deprecated remove when rcm plugin updates to use confusable version
+		 **/
+	
+	public default boolean filterCheck(DATASOURCETYPE ds, String filter, boolean regex ){
+		return( true );
 	}
+
+	public default boolean filterCheck(DATASOURCETYPE ds, String filter, boolean regex, boolean confusable ){
+		if ( confusable ){
+			return( false );
+		}else{
+			return( filterCheck( ds, filter, regex ));
+		}
+	}
+	
+	public default void filterSet(String filter){}
+	
+	public default void filterSet(String filter, boolean regex ){
+		filterSet( filter );
+	}
+
+	public default void setRefilterCache( Map<Object,Object> cache ){};
+	
+	public default void viewChanged(TableView<DATASOURCETYPE> view){};
 }

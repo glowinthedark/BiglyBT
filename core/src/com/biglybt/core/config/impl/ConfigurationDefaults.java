@@ -87,6 +87,9 @@ public class ConfigurationDefaults {
 
 
   private final Hashtable parameter_verifiers	= new Hashtable();
+  
+  		// these shouldn't be here as SWT UI specific...
+  
 	public static final String CFG_TORRENTADD_OPENOPTIONS_MANY = "many";
 	public static final String CFG_TORRENTADD_OPENOPTIONS_ALWAYS = "always";
 	public static final String CFG_TORRENTADD_OPENOPTIONS_NEVER = "never";
@@ -163,6 +166,7 @@ public class ConfigurationDefaults {
     def.put("IPV4 Prefer Stack", FALSE );
     def.put(ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES, FALSE );
     def.put(ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES, FALSE );
+    def.put(ConfigKeys.Connection.SCFG_CONNECTION_TEST_DOMAIN, "www.google.com;nettest.biglybt.com");
 
     def.put("max active torrents", new Long(4));
     def.put("max downloads", new Long(4));
@@ -222,15 +226,16 @@ public class ConfigurationDefaults {
     def.put( "Max LAN Download Speed KBs", ZERO );
     def.put( "Max LAN Upload Speed KBs", ZERO );
 
-    def.put("Use Resume", TRUE);
     def.put("On Resume Recheck All", FALSE);
     def.put("Save Resume Interval", new Long(5));
     def.put("Check Pieces on Completion", TRUE);
+    def.put("Check Pieces on Completion Before Move", FALSE);
     def.put("Merge Same Size Files", TRUE );
     def.put("Merge Same Size Files Extended", FALSE );
     def.put("Merge Same Size Files Tolerance", ZERO );
     def.put(ConfigKeys.File.ICFG_MERGE_SAME_SIZE_FILES_MIN_PIECES, 5 );
     def.put(ConfigKeys.File.BCFG_SKIP_COMP_DL_FILE_CHECKS, FALSE );
+    def.put(ConfigKeys.File.BCFG_SKIP_INCOMP_DL_FILE_CHECKS, FALSE );
     def.put(ConfigKeys.File.BCFG_FILE_MOVE_ORIGIN_DELETE_FAIL_IS_WARNING, FALSE );
     def.put("Stop Ratio", new Float(0));
     def.put("Stop Peers Ratio", ZERO);
@@ -247,6 +252,10 @@ public class ConfigurationDefaults {
 
     def.put("Enable Subfolder for DND Files", FALSE );
     def.put("Subfolder for DND Files", ".dnd_az!" );
+    
+    def.put(ConfigKeys.File.BCFG_ENABLE_ALT_LOC_FOR_DND_FILES, FALSE );
+    def.put(ConfigKeys.File.SCFG_ALT_LOC_FOR_DND_FILES, FileUtil.getUserFile( "active" ).getAbsolutePath());
+
     def.put("Max File Links Supported", 2048 );
 
     def.put("Ip Filter Enabled", TRUE);
@@ -281,25 +290,34 @@ public class ConfigurationDefaults {
 
     def.put("Pause Downloads On Exit", FALSE );
     def.put("Resume Downloads On Start", FALSE );
-    def.put("On Downloading Complete Do", "Nothing" );
-    def.put("On Seeding Complete Do", "Nothing" );
+    def.put("On Downloading Complete Do", ConfigKeys.CA_NOTHING );
+    def.put("On Seeding Complete Do", ConfigKeys.CA_NOTHING );
     def.put("Stop Triggers Auto Reset", TRUE );
+    def.put( ConfigKeys.StartupShutdown.ICFG_STOP_DATE_TIME, 0 );
+    def.put( ConfigKeys.StartupShutdown.SCFG_STOP_DATE_TIME_DO, ConfigKeys.CA_QUIT_VUZE );
+    
+    def.put( ConfigKeys.StartupShutdown.ICFG_STOP_FORCE_TERMINATE_AFTER, 2 );
     def.put("Prompt To Abort Shutdown", TRUE );
     def.put("Prevent Sleep Downloading", TRUE );
     def.put("Prevent Sleep FP Seeding", FALSE );
     def.put("Prevent Sleep Tag", "" );
 
-    def.put("Auto Restart When Idle", ZERO );
+    def.put(ConfigKeys.StartupShutdown.ICFG_AUTO_RESTART_WHEN_IDLE, ZERO );
+    def.put(ConfigKeys.StartupShutdown.BCFG_AUTO_RESTART_WHEN_IDLE_PROMPT, TRUE );
 
-    def.put( "Download History Enabled", TRUE );
+    def.put( ConfigKeys.File.BCFG_DOWNLOAD_HISTORY_ENABLED, TRUE );
+    def.put( ConfigKeys.File.BCFG_DOWNLOAD_HISTORY_DONT_ADD_DUP, FALSE );
 
     // SWT GUI Settings
 
     def.put("User Mode", ZERO);
 
     //default data location options
+    
     def.put( CFG_TORRENTADD_OPENOPTIONS, CFG_TORRENTADD_OPENOPTIONS_ALWAYS);
-    def.put( CFG_TORRENTADD_OPENOPTIONS_SEP, TRUE );
+    def.put( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_SEP, TRUE );
+    def.put( ConfigKeys.File.ICFG_UI_ADDTORRENT_OPENOPTIONS_AUTO_CLOSE_SECS, ZERO );
+    def.put( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_ALWAYS_SIDEBAR, FALSE );
 
 	File f = null;
 
@@ -320,7 +338,8 @@ public class ConfigurationDefaults {
 
 	def.put("Default save path", f.getAbsolutePath());
 	def.put("saveTo_list.max_entries", new Long(15));
-
+	def.put(ConfigKeys.File.BCFG_ALWAYS_CREATE_TORRENT_SUB_FOLDER, FALSE );
+	
     def.put("update.start",TRUE);
     def.put("update.periodic",TRUE);
     def.put("update.opendialog",TRUE);
@@ -409,11 +428,14 @@ public class ConfigurationDefaults {
     def.put( "Start Watched Torrents Stopped", FALSE );	// removed, use mode below, migrated in checker
     def.put( "Watch Torrents Add Mode", ZERO );
     def.put( "Watch Torrent Always Rename", FALSE );
+    def.put( ConfigKeys.File.BCFG_WATCH_TORRENT_USE_TOD, FALSE );
     def.put( "Watch Torrent Folder Path", "" );
     def.put( "Watch Torrent Folder Path Count", ONE );
     def.put( ConfigKeys.Transfer.BCFG_PRIORITIZE_FIRST_PIECE, FALSE );
+    def.put( ConfigKeys.Transfer.ICFG_PRIORITIZE_FIRST_MB, 0 );
     def.put( ConfigKeys.Transfer.BCFG_PRIORITIZE_FIRST_PIECE_FORCE, FALSE );
     def.put( "Prioritize Most Completed Files", FALSE );
+    def.put( ConfigKeys.Transfer.ICFG_SET_FILE_PRIORITY_REM_PIECE, ZERO );
     def.put( "Piece Picker Request Hint Enabled", TRUE );
     def.put( "Use Lazy Bitfield", FALSE );
     def.put( "Zero New", FALSE );
@@ -429,6 +451,7 @@ public class ConfigurationDefaults {
     def.put( "Popup Download Finished", FALSE);
     def.put( "Popup File Finished", FALSE);
     def.put( "Popup Download Added", FALSE);
+    def.put( "Popup Check Complete", FALSE );
     def.put( "Notify Download Finished", FALSE);
     def.put( "Show Timestamp For Alerts", FALSE);
     def.put( "Request Attention On New Download", TRUE );
@@ -443,19 +466,22 @@ public class ConfigurationDefaults {
     def.put( ConfigKeys.File.ICFG_INSUFFICIENT_SPACE_DOWNLOAD_RESTART_MINS, 10 );
     def.put( ConfigKeys.File.BCFG_MISSING_FILE_DOWNLOAD_RESTART, FALSE );
     def.put( ConfigKeys.File.ICFG_MISSING_FILE_DOWNLOAD_RESTART_MINS, 30 );
+    def.put( ConfigKeys.File.BCFG_UPLOAD_ONLY_ON_WRITE_ERROR_ENABLE, FALSE );
 
     def.put( "Play Download Error", FALSE );
     def.put( "Play Download Error File", "" );
     def.put( "Play Download Error Announcement", FALSE);
     def.put( "Play Download Error Announcement Text", "Download Error");
     def.put( "Popup Download Error", FALSE);
-
+    
     def.put( "Play Notification Added Announcement", FALSE );
     def.put( "Play Notification Added Announcement Text", "Notification Added" );
     def.put( "Play Notification Added", FALSE );
     def.put( "Play Notification Added File", "" );
 
     def.put( Tag.BCFG_TRACKER_AUTO_TAG_INTERESTING_TRACKERS, TRUE );
+    def.put( Tag.ICFG_TAG_AUTO_FULL_REAPPLY_PERIOD_SECS, 30 );
+    def.put( Tag.BCFG_TAG_SHOW_SWARM_TAGS_IN_OVERVIEW, TRUE );
     
     //default torrent directory option
     def.put( "Save Torrent Files", TRUE );
@@ -482,7 +508,7 @@ public class ConfigurationDefaults {
     def.put( "Stats File", StatsWriterPeriodic.DEFAULT_STATS_FILE_NAME );
     def.put( "long.term.stats.enable", TRUE );
     def.put( "long.term.stats.weekstart", Calendar.SUNDAY );
-    def.put( "Stats Smoothing Secs", new Long( 2*60 ));
+    def.put( ConfigKeys.Stats.ICFG_STATS_SMOOTHING_SECS, new Long( GeneralUtils.SMOOTHING_UPDATE_WINDOW_DEFAULT ));
     def.put( "File.Torrent.AutoSkipExtensions", "" );
     def.put( "File.Torrent.AutoSkipFiles", "" );
     def.put( "File.Torrent.AutoSkipFiles.RegExp", FALSE );
@@ -563,8 +589,8 @@ public class ConfigurationDefaults {
 
     def.put( "Network Selection Prompt", FALSE );
     def.put( "Network Selection Default.Public", TRUE );
-    def.put( "Network Selection Default.I2P", FALSE );
-    def.put( "Network Selection Default.Tor", FALSE );
+    def.put( "Network Selection Default.I2P", FALSE );	// we want this to be false initially so network mixing is enabled for public torrents
+    def.put( "Network Selection Default.Tor", FALSE );	// otherwise it is assumed that the user is manually managing their nets
     def.put( "Tracker Network Selection Default.Public", TRUE);
     def.put( "Tracker Network Selection Default.I2P", TRUE);
     def.put( "Tracker Network Selection Default.Tor", TRUE);
@@ -578,6 +604,7 @@ public class ConfigurationDefaults {
     def.put( "Peer Source Selection Default.PeerExchange", TRUE);
     def.put( "Peer Source Selection Default.Plugin", TRUE);
     def.put( "Peer Source Selection Default.Incoming", TRUE);
+    def.put( "Peer Source Selection Default.HolePunch", TRUE);
 
     def.put( "config.style.useSIUnits", FALSE );
     def.put( "config.style.forceSIValues", Constants.isOSX?FALSE:TRUE );
@@ -595,6 +622,7 @@ public class ConfigurationDefaults {
     def.put( "Sharing Torrent Comment", "" );
     def.put( "Sharing Permit DHT", TRUE);
     def.put( "Sharing Torrent Private", FALSE);
+    def.put( ConfigKeys.Sharing.SCFG_SHARING_TORRENT_VERSION, String.valueOf( TOTorrent.TT_V1 ));
     def.put( "Sharing Disable RCM", FALSE);
     def.put( "Sharing Is Persistent", FALSE);
 
@@ -612,8 +640,11 @@ public class ConfigurationDefaults {
     def.put( "Auto Update", TRUE );
     def.put( "Alert on close", FALSE );
     def.put( "diskmanager.hashchecking.strategy", ONE );
-    def.put( "diskmanager.hashchecking.smallestfirst", TRUE );
+    def.put( ConfigKeys.File.BCFG_DISKMANAGER_HASHCHECKING_SMALLESTFIRST, TRUE );
+    def.put( ConfigKeys.File.BCFG_DISKMANAGER_ALLOC_SMALLESTFIRST, TRUE );
+    def.put( ConfigKeys.File.BCFG_DISKMANAGER_MOVE_SMALLESTFIRST, TRUE );
     def.put( ConfigKeys.File.BCFG_DISKMANAGER_ONE_OP_PER_FS, FALSE );
+    def.put( ConfigKeys.File.BCFG_DISKMANAGER_ONE_OP_PER_FS_CONC_READ, FALSE );
     def.put( "diskmanager.hashchecking.maxactive", ONE );
     def.put( "Default Start Torrents Stopped", FALSE);
     def.put( "Default Start Torrents Stopped Auto Pause", FALSE );
@@ -627,9 +658,9 @@ public class ConfigurationDefaults {
     def.put( "diskmanager.perf.cache.size", new Long(4));		// 4 MB
     def.put( "diskmanager.perf.cache.notsmallerthan", new Long(1024));	// 1024 K
     def.put( "diskmanager.perf.read.maxthreads", new Long(32));
-    def.put( "diskmanager.perf.read.maxmb", new Long(5));
+    def.put( "diskmanager.perf.read.maxmb", new Long(10));
     def.put( "diskmanager.perf.write.maxthreads", new Long(32));
-    def.put( "diskmanager.perf.write.maxmb", new Long(5));
+    def.put( "diskmanager.perf.write.maxmb", new Long(10));
     def.put( "diskmanager.perf.cache.trace", FALSE);
     def.put( "diskmanager.perf.cache.flushpieces", TRUE);
     def.put( "diskmanager.perf.read.aggregate.enable", FALSE );
@@ -647,7 +678,7 @@ public class ConfigurationDefaults {
     def.put( "peercontrol.udp.fallback.connect.fail", TRUE );
     def.put( "peercontrol.udp.fallback.connect.drop", TRUE );
     def.put( "peercontrol.udp.probe.enable", FALSE );
-    def.put( "peercontrol.hide.piece", FALSE );
+    def.put( ConfigKeys.Transfer.BCFG_PEERCONTROL_HIDE_PIECE, FALSE );
     def.put( "peercontrol.scheduler.use.priorities", TRUE );
     def.put( "peercontrol.prefer.udp", FALSE );
     def.put( ConfigKeys.Connection.BCFG_PEERCONTROL_PREFER_IPV6_CONNECTIONS, FALSE );
@@ -726,6 +757,7 @@ public class ConfigurationDefaults {
     def.put( "Completed Files Directory", "" );
     def.put( "Move Only When In Default Save Dir", TRUE );
     def.put( "Move Torrent When Done", TRUE );
+    def.put( ConfigKeys.File.BCFG_FILE_MOVE_ADD_SUB_FOLDER, FALSE );
     def.put( ConfigKeys.File.SCFG_FILE_USE_TEMP_AND_MOVE_PATH, "" );
     def.put( ConfigKeys.File.BCFG_FILE_USE_TEMP_AND_MOVE_ENABLE, FALSE );
 
@@ -753,7 +785,8 @@ public class ConfigurationDefaults {
     def.put("FileBrowse.usePathFinder", FALSE);
 
     def.put( "Beta Programme Enabled", FALSE );
-    def.put( "def.deletetorrent", TRUE );
+    def.put( ConfigKeys.File.BCFG_DEF_DELETETORRENT, TRUE );
+    def.put( ConfigKeys.File.BCFG_DEF_DELETEALLSELECTED, FALSE );
     def.put( "tb.confirm.delete.content", Long.valueOf(0) ); // 0=ask; 1=delete content; 2=delete torrent
 
     def.put( "br.backup.auto.enable", FALSE );
@@ -761,6 +794,7 @@ public class ConfigurationDefaults {
     def.put( "br.backup.auto.everyhours", ZERO );
     def.put( "br.backup.auto.retain", 5L );
     def.put( ConfigKeys.BackupRestore.BCFG_BACKUP_PLUGINS, TRUE );
+    def.put( ConfigKeys.BackupRestore.BCFG_BACKUP_PAUSE_DOWNLOADS, FALSE );
     
     //temp section for SpeedManagerAlgorithmProviderV2
 
@@ -799,16 +833,6 @@ public class ConfigurationDefaults {
     def.put( "subscriptions.auto.start.max.mb", ZERO );
     def.put( "subscriptions.auto.dl.mark.read.days", ZERO );
 
-    def.put( "Show Side Bar", TRUE );
-    def.put( "Side Bar Top Level Gap", ONE );
-    def.put( "Show Options In Side Bar", FALSE );
-    def.put( "Show New In Side Bar", TRUE );
-    def.put( "Show Downloading In Side Bar", TRUE );
-    def.put( "Side Bar Close Position", ZERO );
-    def.put( "Side Bar Indent Expanders", TRUE );
-    def.put( "Side Bar Compact View", FALSE );
-    def.put( "Side Bar Hide Left Icon", FALSE );
-    
     def.put( "Share Ratio Progress Interval", 1000L );	// thousandths
 
     def.put( "search.showRCMView", FALSE );

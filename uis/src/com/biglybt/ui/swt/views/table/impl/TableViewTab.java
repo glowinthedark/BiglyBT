@@ -27,7 +27,7 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.AEDiagnosticsEvidenceGenerator;
 import com.biglybt.core.util.IndentWriter;
 import com.biglybt.ui.common.table.TableView;
-import com.biglybt.ui.common.table.TableViewFilterCheck.TableViewFilterCheckEx;
+import com.biglybt.ui.common.table.TableViewFilterCheck;
 import com.biglybt.ui.mdi.MdiEntry;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.components.BubbleTextBox;
@@ -47,15 +47,15 @@ public abstract class TableViewTab<DATASOURCETYPE>
 		ObfuscateImage
 {
 	private TableViewSWT<DATASOURCETYPE> tv;
-	private final String propertiesPrefix;
+	private final String textPrefixID;
 	private Composite composite;
 	private UISWTView swtView;
 	private BubbleTextBox filterTextControl;
-	private TableViewFilterCheckEx<DATASOURCETYPE> filterCheck;
+	private TableViewFilterCheck<DATASOURCETYPE> filterCheck;
+	private boolean enableTabs = true;
 
-
-	public TableViewTab(String propertiesPrefix) {
-		this.propertiesPrefix = propertiesPrefix;
+	public TableViewTab(String textPrefixID) {
+		this.textPrefixID = textPrefixID;
 	}
 
 	public TableViewSWT<DATASOURCETYPE> getTableView() {
@@ -68,6 +68,11 @@ public abstract class TableViewTab<DATASOURCETYPE>
 			// composite though....
 		
 		tv = initYourTableView();
+		
+		if ( !enableTabs ){
+			tv.setEnableTabViews( false, false );
+		}
+		
 		Composite parent = initComposite(composite);
 		
 		if ( swtView == null ){
@@ -96,6 +101,13 @@ public abstract class TableViewTab<DATASOURCETYPE>
 		tableViewTabInitComplete();
 	}
 
+	public void
+	setEnableTabViews(
+		boolean	b )
+	{
+		enableTabs = b;
+	}
+	
 	public void tableViewTabInitComplete() {
 	}
 
@@ -132,7 +144,7 @@ public abstract class TableViewTab<DATASOURCETYPE>
 	}
 
 	public String getFullTitle() {
-		return MessageText.getString(getPropertiesPrefix() + ".title.full");
+		return MessageText.getString(getTextPrefixID() + ".title.full");
 	}
 
 	/* (non-Javadoc)
@@ -149,8 +161,8 @@ public abstract class TableViewTab<DATASOURCETYPE>
 		return composite;
 	}
 
-	public String getPropertiesPrefix() {
-		return propertiesPrefix;
+	public String getTextPrefixID() {
+		return textPrefixID;
 	}
 
 	public void viewActivated() {
@@ -235,7 +247,7 @@ public abstract class TableViewTab<DATASOURCETYPE>
 	}
 
 	public void enableFilterCheck(BubbleTextBox textControl,
-			TableViewFilterCheckEx<DATASOURCETYPE> filter_check_handler) {
+			TableViewFilterCheck<DATASOURCETYPE> filter_check_handler) {
 		if (tv != null) {
 			tv.enableFilterCheck(textControl, filter_check_handler);
 		} else {

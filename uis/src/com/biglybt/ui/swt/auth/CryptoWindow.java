@@ -97,15 +97,7 @@ CryptoWindow
 
 				dialog[0] = new cryptoDialog( sem, display, handler_type, action_type, last_pw_incorrect, reason );
 
-				while ( !( display.isDisposed() || sem.isReleasedForever())){
-
-					if ( !display.readAndDispatch()){
-
-						display.sleep();
-					}
-				}
-
-				if ( display.isDisposed()){
+				if ( Utils.readAndDispatchLoop(()->sem.isReleasedForever())){
 
 					return( null );
 				}
@@ -358,7 +350,7 @@ CryptoWindow
 				linkLabel.setText(MessageText.getString("ConfigView.label.please.visit.here"));
 				linkLabel.setData(Wiki.PUBLIC_PRIVATE_KEYS);
 				linkLabel.setCursor(display.getSystemCursor(SWT.CURSOR_HAND));
-				linkLabel.setForeground(Colors.blue);
+				Utils.setLinkForeground(linkLabel);
 				gridData = new GridData();
 				gridData.horizontalSpan = 3;
 				linkLabel.setLayoutData(gridData);
@@ -377,7 +369,7 @@ CryptoWindow
 
 				// line
 
-			Label labelSeparator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
+			Control labelSeparator = Utils.createSkinnedLabelSeparator(shell, SWT.HORIZONTAL);
 			gridData = new GridData(GridData.FILL_HORIZONTAL);
 			gridData.horizontalSpan = 3;
 			labelSeparator.setLayoutData(gridData);

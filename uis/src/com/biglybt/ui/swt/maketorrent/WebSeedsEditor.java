@@ -140,7 +140,7 @@ public class WebSeedsEditor {
     			}
     		});
 
-    Label labelSeparator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
+    Control labelSeparator = Utils.createSkinnedLabelSeparator(shell, SWT.HORIZONTAL);
     gridData = new GridData(GridData.FILL_HORIZONTAL);
     gridData.horizontalSpan = 3;
     labelSeparator.setLayoutData(gridData);
@@ -360,7 +360,7 @@ public class WebSeedsEditor {
       public void handleEvent (Event e) {
       	String url = text.getText();
       	if ( validURL(url)){
-      		text.setForeground( null );
+      		Utils.setSkinnedForeground(text, null);
       		item.setForeground( null );
       	}else{
       		text.setForeground( Colors.colorError );
@@ -377,7 +377,7 @@ public class WebSeedsEditor {
 	    public void handleEvent (Event e) {
     		String url = text.getText();
     		if ( validURL(url)){
-    			text.setForeground( null );
+    			Utils.setSkinnedForeground(text, null);
     			item.setForeground( null );
     		}else{
     			text.setForeground( Colors.colorError );

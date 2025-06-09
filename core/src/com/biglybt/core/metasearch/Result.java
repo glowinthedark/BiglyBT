@@ -56,6 +56,7 @@ Result
 	public abstract int getNbPeers();
 	public abstract int getNbSeeds();
 	public abstract int getNbSuperSeeds();
+	public abstract int getNbCompleted();
 	public abstract int getComments();
 	public abstract int getVotes();
 	public abstract int getVotesDown();
@@ -77,6 +78,8 @@ Result
 	public abstract String getUID();
 	public abstract String getHash();
 
+	public abstract String getDescription();
+	
 	protected
 	Result(
 		Engine		_engine )
@@ -247,6 +250,12 @@ Result
 		}
 		
 		object.put("c", this.getCategory());
+		
+		String[] tags = this.getTags();
+		if ( tags != null && tags.length > 0 ){
+			object.put( "tgs", Arrays.asList( tags ));
+		}
+		
 		object.put("n",this.getName());
 
 		int	super_seeds = getNbSuperSeeds();
@@ -277,6 +286,13 @@ Result
 			object.put("p","-1");
 		}
 
+		int completed = getNbCompleted();
+		
+		if ( completed >= 0 ) {
+			
+			object.put( "gr", "" + completed);	// grabbed
+		}
+		
 		int	comments = getComments();
 
 		if ( comments >= 0 ){
@@ -321,6 +337,11 @@ Result
 
 		if ( this.getDownloadLink().length() > 0 ){
 			object.put("dl", this.getDownloadLink());
+		}else{
+			String tl = getTorrentLink();
+			if ( tl.length() > 0 ){
+				object.put("dl", tl );
+			}
 		}
 
 		if ( this.getDownloadButtonLink().length() > 0 ){
@@ -419,7 +440,9 @@ Result
 
 		if ( c == 'h' || c == 'H' || c == 'f' || c == 'F' ){
 
-			if ( MetaSearchManagerFactory.getSingleton().getProxyRequestsEnabled()){
+			int pt = MetaSearchManagerFactory.getSingleton().getProxyRequestsEnabled();
+			
+			if ( pt != MetaSearchManager.PROXY_NONE ){
 
 				try{
 					String host =  new URL( link ).getHost();
@@ -444,7 +467,14 @@ Result
 
 				}
 
-				return( "tor:" + link );
+				if ( pt == MetaSearchManager.PROXY_TOR ){
+				
+					return( "tor:" + link );
+					
+				}else{
+					
+					return( "i2p:" + link );
+				}
 			}
 		}
 
@@ -469,7 +499,7 @@ Result
 		}
 	}
 
-	protected static String removeHTMLTags(String input) {
+	public static String removeHTMLTags(String input) {
 		if ( input == null ){
 			return( null );
 		}

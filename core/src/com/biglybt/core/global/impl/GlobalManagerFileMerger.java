@@ -76,6 +76,22 @@ GlobalManagerFileMerger
 	
 	static final Object merged_data_lock = new Object();
 
+	static volatile boolean	switch_to_upload_only_enable;
+	
+	static{
+		 COConfigurationManager.addAndFireParameterListeners(
+			new String[]{
+				ConfigKeys.File.BCFG_UPLOAD_ONLY_ON_WRITE_ERROR_ENABLE,
+			},
+			new ParameterListener(){
+				@Override
+				public void parameterChanged(String parameterName) {
+										
+	    	    	switch_to_upload_only_enable	= COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_UPLOAD_ONLY_ON_WRITE_ERROR_ENABLE );
+				}
+			});
+	}
+	
 	private final GlobalManagerImpl		gm;
 
 	private LoggerChannel 	log;
@@ -90,8 +106,8 @@ GlobalManagerFileMerger
 
 	final Map<HashWrapper,DownloadManager>		dm_map = new HashMap<>();
 
-	final List<SameSizeFiles>				sames 		= new ArrayList<>();
-	final Set<DownloadManager>				sames_dms	= new IdentityHashSet<>();
+	final CopyOnWriteList<SameSizeFiles>	sames_cow		= new CopyOnWriteList<>();
+	volatile Set<DownloadManager>			sames_dms_cow	= new IdentityHashSet<>();
 	
 	final AsyncDispatcher		read_write_dispatcher 	= new AsyncDispatcher( "GMFM" );
 	final AsyncDispatcher 		sync_dispatcher 		= new AsyncDispatcher( "GMFM:serial" );
@@ -174,14 +190,14 @@ GlobalManagerFileMerger
 						
 						synchronized( dm_map ){
 
-							for ( SameSizeFiles s: sames ){
+							for ( SameSizeFiles s: sames_cow ){
 
 								s.destroy();
 							}
 							
-							sames.clear();
+							sames_cow.clear();
 							
-							sames_dms.clear();
+							sames_dms_cow = new IdentityHashSet<DownloadManager>();
 							
 							syncFileSets( true );
 						}
@@ -313,43 +329,37 @@ GlobalManagerFileMerger
 	isSwarmMergingZ(
 		DownloadManager		dm )
 	{
-		synchronized( dm_map ){
-
-			return( sames_dms.contains( dm ));
-		}
+		return( sames_dms_cow.contains( dm ));
 	}
 
 	protected String
 	getSwarmMergingInfo(
 		DownloadManager		dm )
 	{
-		synchronized( dm_map ){
+		if ( sames_cow.size() > 0 ){
 
-			if ( sames.size() > 0 ){
+			StringBuffer	result = null;
 
-				StringBuffer	result = null;
+			for ( SameSizeFiles s: sames_cow ){
 
-				for ( SameSizeFiles s: sames ){
+				if ( s.hasDownloadManager( dm )){
 
-					if ( s.hasDownloadManager( dm )){
+					String info = s.getInfo();
 
-						String info = s.getInfo();
+					if ( result == null ){
 
-						if ( result == null ){
+						result = new StringBuffer( 1024 );
 
-							result = new StringBuffer( 1024 );
+					}else{
 
-						}else{
-
-							result.append( "\n" );
-						}
-
-						result.append( info );
+						result.append( "\n" );
 					}
-				}
 
-				return( result==null?null:result.toString());
+					result.append( info );
+				}
 			}
+
+			return( result==null?null:result.toString());
 		}
 
 		return( null );
@@ -750,7 +760,7 @@ GlobalManagerFileMerger
 					}
 				}
 
-				List<SameSizeFiles>	sames_copy = new LinkedList<>(sames);
+				List<SameSizeFiles>	sames_copy = new LinkedList<>(sames_cow.getList());
 
 				for ( Set<DiskManagerFileInfo> set: interesting ){
 
@@ -774,7 +784,7 @@ GlobalManagerFileMerger
 
 					if ( !found ){
 
-						sames.add( new SameSizeFiles( set ));
+						sames_cow.add( new SameSizeFiles( set ));
 					}
 				}
 
@@ -782,22 +792,26 @@ GlobalManagerFileMerger
 
 					dead.destroy();
 
-					sames.remove( dead );
+					sames_cow.remove( dead );
 				}
 
 				if ( enabled ){
 					
-					log( "Scan result: dm_map=" + dm_map.size() + ", sames=" + sames.size());
+					log( "Scan result: dm_map=" + dm_map.size() + ", sames=" + sames_cow.size());
 				}
 				
-				sames_dms.clear();
+				sames_dms_cow = new IdentityHashSet<DownloadManager>();
 				
-				if ( sames.size() > 0 ){
+				if ( sames_cow.size() > 0 ){
 
-					for ( SameSizeFiles same: sames ){
+					Set<DownloadManager> sames_dms_temp = new IdentityHashSet<DownloadManager>();
+					
+					for ( SameSizeFiles same: sames_cow ){
 						
-						sames_dms.addAll( same.getDownloadManagers());
+						sames_dms_temp.addAll( same.getDownloadManagers());
 					}
+					
+					sames_dms_cow = sames_dms_temp;
 					
 					if ( timer_event == null ){
 
@@ -818,7 +832,7 @@ GlobalManagerFileMerger
 
 										synchronized( dm_map ){
 
-											for ( SameSizeFiles s: sames ){
+											for ( SameSizeFiles s: sames_cow ){
 
 												s.sync( tick_count );
 											}
@@ -1364,9 +1378,9 @@ GlobalManagerFileMerger
 
 			for ( SameSizeFileWrapper file: file_wrappers ){
 
-				msg += file.getDownloadManager().getDisplayName() + " - " + file.getFile().getTorrentFile().getRelativePath() + "\n";
+				msg += "    " + file.getDownloadManager().getDisplayName() + " - " + file.getFile().getTorrentFile().getRelativePath() + "\n";
 			}
-			msg += "\nToo many hash fails in " + failed.getDownloadManager().getDisplayName();
+			msg += "\n    - too many hash fails in " + failed.getDownloadManager().getDisplayName();
 
 			abandon_reason = msg;
 			
@@ -1498,6 +1512,7 @@ GlobalManagerFileMerger
 				}
 			}
 		}
+		
 		private String
 		getString()
 		{
@@ -1691,6 +1706,13 @@ GlobalManagerFileMerger
 						continue;
 					}
 
+					if ( switch_to_upload_only_enable &&  target_disk_manager.getDownload().getStats().getDownloadRateLimitBytesPerSecond() == -1 ){
+						
+							// don't merge into a download that's switched to "upload only" 
+						
+						continue;
+					}
+					
 					read_write_dispatcher.dispatch(
 						new AERunnable()
 						{
@@ -2473,14 +2495,11 @@ GlobalManagerFileMerger
 	logCurrentState(
 		IndentWriter	write )
 	{
-		synchronized( dm_map ){
-
-			log( write, "Same size file sets=" + sames.size() + ", dm_map=" + dm_map.size());
+		log( write, "Same size file sets=" + sames_cow.size() + ", dm_map=" + dm_map.size());
 			
-			for ( SameSizeFiles same: sames ){
+		for ( SameSizeFiles same: sames_cow ){
 				
-				same.logCurrentState( write );
-			}
+			same.logCurrentState( write );
 		}
 	}
 	

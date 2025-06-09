@@ -20,6 +20,9 @@
 
 package com.biglybt.core.disk;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * @author parg
  *
@@ -29,19 +32,32 @@ DiskManagerListener
 {
 	public void
 	stateChanged(
-		int oldState,
-		int	newState );
+		DiskManager		dm,
+		int 			oldState,
+		int				newState );
 
+	public default void
+	filePriorityChanged(
+		DiskManager			dm,
+		DiskManagerFileInfo	file )
+	{
+		filePriorityChanged( dm, Collections.singletonList( file ));
+	}
+
+	
 	public void
 	filePriorityChanged(
-		DiskManagerFileInfo		file );
+		DiskManager					dm,
+		List<DiskManagerFileInfo>	files );
 
 	public void
 	pieceDoneChanged(
+		DiskManager				dm,
 		DiskManagerPiece		piece );
 
 	public default void
 	fileCompleted(
+		DiskManager				dm,
 		DiskManagerFileInfo		file )
 	{
 	}

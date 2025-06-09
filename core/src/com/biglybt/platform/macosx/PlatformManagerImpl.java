@@ -36,6 +36,7 @@ import com.biglybt.core.logging.Logger;
 import com.biglybt.core.util.*;
 import com.biglybt.pif.platform.PlatformManagerException;
 import com.biglybt.platform.PlatformManager;
+import com.biglybt.platform.PlatformManagerBase;
 import com.biglybt.platform.PlatformManagerCapabilities;
 import com.biglybt.platform.PlatformManagerListener;
 import com.biglybt.platform.PlatformManagerPingCallback;
@@ -49,7 +50,10 @@ import com.biglybt.platform.macosx.access.jnilib.OSXAccess;
  * @version 1.0 Initial Version
  * @see PlatformManager
  */
-public class PlatformManagerImpl implements PlatformManager, AEDiagnosticsEvidenceGenerator
+public class 
+PlatformManagerImpl
+	extends PlatformManagerBase
+	implements PlatformManager, AEDiagnosticsEvidenceGenerator
 {
 	private static final LogIDs LOGID = LogIDs.CORE;
 
@@ -168,6 +172,17 @@ public class PlatformManagerImpl implements PlatformManager, AEDiagnosticsEviden
   	        }
 	        } catch (Throwable t) {
 	        	// likely java.lang.UnsatisfiedLinkError -- older version
+	        }
+	        
+	        try{
+	        	double version = Double.parseDouble(getVersion());
+	        	
+	        	if ( version >= 1.13 ){
+	        		
+	        		OSXAccess.disableAppNap();
+	        	}
+	        }catch( Throwable e ){
+	        	e.printStackTrace();
 	        }
         }
 
@@ -500,19 +515,7 @@ public class PlatformManagerImpl implements PlatformManager, AEDiagnosticsEviden
 
 		throws PlatformManagerException
 	{
-		String vendor = System.getProperty( "java.vendor", "<unknown>" );
-
-		String lc_vendor = vendor.toLowerCase( Locale.US );
-		
-		if ( 	!lc_vendor.startsWith( "sun " ) && 
-				!lc_vendor.startsWith( "oracle " ) &&
-				!lc_vendor.contains( "openjdk" )){
-
-			throw( new PlatformManagerException(
-						MessageText.getString(
-							"platform.jvmopt.sunonly",
-							new String[]{ vendor })));
-		}
+		checkCanUseJVMOptions();
 		
 		File[] option_files = getJVMOptionFiles();
 
@@ -1384,7 +1387,29 @@ public class PlatformManagerImpl implements PlatformManager, AEDiagnosticsEviden
   		if (mod_name != null && mod_name.endsWith(".app")) {
   			return mod_name;
   		}
-		return( SystemProperties.getApplicationPath() + SystemProperties.getApplicationName() + ".app" );
+  		
+  		String app_path = SystemProperties.getApplicationPath();
+  		
+  		String app_name = SystemProperties.getApplicationName() + ".app";
+  		
+		String result = app_path + app_name;
+		
+		if ( !new File( result ).exists()){
+			
+				// since restructuring the install layout the app_path is /Applications/BiglyBT/.biglybt
+			
+			if ( app_path.endsWith( "/.biglybt/" )){
+				
+				String test = app_path.substring( 0, app_path.length()-9) + app_name;
+				
+				if ( new File( test ).exists()){
+					
+					result = test;
+				}
+			}
+		}
+		
+		return( result );
     }
 
   	/**
@@ -1518,7 +1543,7 @@ public class PlatformManagerImpl implements PlatformManager, AEDiagnosticsEviden
 
 			try {
 				// We can only use FileManager after CocoaUIEnhancer has been initialized
-				// because refering to FileManager earlier will prevent our main menu from
+				// because referring to FileManager earlier will prevent our main menu from
 				// working
 				Class<?> claCocoaUIEnhancer = Class.forName("com.biglybt.ui.swt.osx.CocoaUIEnhancer");
 				if (((Boolean) claCocoaUIEnhancer.getMethod("isInitialized").invoke(null)).booleanValue()) {

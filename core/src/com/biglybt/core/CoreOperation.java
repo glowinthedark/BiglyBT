@@ -19,6 +19,8 @@
 
 package com.biglybt.core;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 public interface
 CoreOperation
 {
@@ -27,12 +29,38 @@ CoreOperation
 	public static final int	OP_DOWNLOAD_EXPORT			= 4;
 	public static final int	OP_DOWNLOAD_ALLOCATION		= 5;
 	public static final int	OP_DOWNLOAD_CHECKING		= 6;
+	public static final int	OP_DOWNLOAD_COPY			= 7;
 
-	public static final int[] OP_SORT_ORDER = { -1, -1, 3, 0, 4, 1, 2 };
+	public static final int[] OP_SORT_ORDER = { -1, -1, 3, 0, 4, 1, 2, 5 };
 	
 	public int
 	getOperationType();
 
 	public CoreOperationTask
 	getTask();
+	
+	public boolean
+	isRemoved();
+	
+	public void
+	setRemoved();
+	
+	public static abstract class
+	CoreOperationAdapter
+		implements CoreOperation
+	{
+		private AtomicBoolean	removed = new AtomicBoolean();
+		
+		public boolean
+		isRemoved()
+		{
+			return( removed.get());
+		}
+		
+		public void
+		setRemoved()
+		{
+			removed.set( true );
+		}
+	}
 }

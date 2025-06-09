@@ -10,6 +10,8 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.events.*;
+import org.eclipse.swt.layout.FormAttachment;
+import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -24,7 +26,9 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.ipfilter.IpFilter;
 import com.biglybt.core.ipfilter.IpFilterManagerFactory;
 import com.biglybt.core.networkmanager.NetworkManager;
+import com.biglybt.core.networkmanager.Transport;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
+import com.biglybt.core.networkmanager.impl.tcp.TCPNetworkManager;
 import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.peer.util.PeerUtils;
@@ -37,22 +41,27 @@ import com.biglybt.plugin.net.buddy.BuddyPluginUtils;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.common.table.*;
+import com.biglybt.ui.common.table.TableViewFilterCheck;
 import com.biglybt.ui.common.table.impl.TableColumnManager;
 import com.biglybt.ui.mdi.MultipleDocumentInterface;
+import com.biglybt.ui.swt.MenuBuildUtils;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.SimpleTextEntryWindow;
 import com.biglybt.ui.swt.Utils;
+import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.mainwindow.ClipboardCopy;
 import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.pifimpl.UISWTViewCoreEventListener;
 import com.biglybt.ui.swt.views.peer.PeerFilesView;
-import com.biglybt.ui.swt.views.peer.PeerInfoView;
+import com.biglybt.ui.swt.views.peer.PeerPieceMapView;
 import com.biglybt.ui.swt.views.peer.RemotePieceDistributionView;
+import com.biglybt.ui.swt.views.table.TableRowSWT;
 import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.ui.swt.views.table.TableViewSWTMenuFillListener;
 import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
 import com.biglybt.ui.swt.views.table.impl.TableViewTab;
+import com.biglybt.ui.swt.views.table.utils.TableColumnFilterHelper;
 import com.biglybt.ui.swt.views.tableitems.peers.*;
 
 import com.biglybt.pif.peers.Peer;
@@ -63,7 +72,8 @@ import com.biglybt.pif.ui.tables.TableManager;
 public abstract class 
 PeersViewBase
 	extends TableViewTab<PEPeer>
-	implements UISWTViewCoreEventListener, TableLifeCycleListener, TableViewSWTMenuFillListener, TableSelectionListener
+	implements 	UISWTViewCoreEventListener, TableLifeCycleListener,
+				TableViewSWTMenuFillListener, TableSelectionListener, TableViewFilterCheck<PEPeer>
 {
 
 	public static final Class<Peer> PLUGIN_DS_TYPE = Peer.class;
@@ -79,6 +89,7 @@ PeersViewBase
 				new PiecesItem(table_id),
 				new PercentItem(table_id),
 				new PercentHaveWeNeedItem(table_id),
+				new PercentHaveTheyNeedItem(table_id),
 				new DownSpeedItem(table_id),
 				new UpSpeedItem(table_id),
 				new PeerSourceItem(table_id),
@@ -118,6 +129,8 @@ PeersViewBase
 				new ASItem(table_id),
 				new IndexItem(table_id),
 				new ColumnPeerNetwork(table_id),
+				new LocalInterfaceItem(table_id),
+				new BytesQueuedForUpload(table_id),
 		};
 	}
 
@@ -129,7 +142,10 @@ PeersViewBase
 		tcManager.setDefaultColumnNames( TableManager.TABLE_TORRENT_PEERS, basicItems );
 	}
 	
-	protected TableViewSWT<PEPeer> tv;
+	private BubbleTextBox bubbleTextBox;
+	
+	protected TableViewSWT<PEPeer> 			tv;
+	private TableColumnFilterHelper<PEPeer>	col_filter_helper;
 	
 	protected Shell shell;
 
@@ -185,8 +201,31 @@ PeersViewBase
 			gridLayout.marginHeight = gridLayout.marginWidth = 0;
 			tableParent.setLayout(gridLayout);
 	
-			tab1.setControl( tableParent );
+			Composite cTop = new Composite(tableParent, SWT.NONE);
+
+			cTop.setLayoutData(new GridData(SWT.FILL, SWT.BEGINNING, true, false));
+			cTop.setLayout(new FormLayout());
+
+			bubbleTextBox = new BubbleTextBox(cTop, SWT.BORDER | SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL | SWT.SINGLE);
+
+			FormData fd = new FormData();
+			fd.right = new FormAttachment(100, 0);
+			fd.width = 140;
 			
+			bubbleTextBox.setMessageAndLayout( "", fd);
+	
+			String tooltip = MessageText.getString("filter.tt.start");
+			tooltip += MessageText.getString("peersview.filter.tt.line1");
+			tooltip += MessageText.getString("column.filter.tt.line2");
+			
+			bubbleTextBox.setTooltip( tooltip );
+			
+			if ( tv != null ){
+			
+				tv.enableFilterCheck(bubbleTextBox, this, false );
+			}
+			
+			tab1.setControl( tableParent );			
 			
 			final CTabItem tab2 = new CTabItem(tab_folder, SWT.NONE);
 			
@@ -319,7 +358,7 @@ PeersViewBase
 		if ( table_id == TableManager.TABLE_TORRENT_PEERS ){
 			
 			tv = TableViewFactory.createTableViewSWT(PLUGIN_DS_TYPE,
-					TableManager.TABLE_TORRENT_PEERS, getPropertiesPrefix(), basicItems,
+					TableManager.TABLE_TORRENT_PEERS, getTextPrefixID(), basicItems,
 					"pieces", SWT.MULTI | SWT.FULL_SELECTION | SWT.VIRTUAL);
 			
 		}else{
@@ -334,9 +373,11 @@ PeersViewBase
 			tcManager.setDefaultColumnNames( TableManager.TABLE_ALL_PEERS, basicItems );
 
 			tv = TableViewFactory.createTableViewSWT(PLUGIN_DS_TYPE,
-					TableManager.TABLE_ALL_PEERS, getPropertiesPrefix(), basicItems,
+					TableManager.TABLE_ALL_PEERS, getTextPrefixID(), basicItems,
 					"connected_time", SWT.MULTI | SWT.FULL_SELECTION | SWT.VIRTUAL);
 		}
+		
+		col_filter_helper = new TableColumnFilterHelper<PEPeer>( tv, "pb:search" );
 		
 		tv.setRowDefaultHeightEM(1);
 		
@@ -368,7 +409,7 @@ PeersViewBase
 		}
 
 		vm.registerView(PLUGIN_DS_TYPE, new UISWTViewBuilderCore(
-				"PeerInfoView", null, PeerInfoView.class));
+				PeerPieceMapView.VIEW_ID, null, PeerPieceMapView.class));
 
 		vm.registerView(PLUGIN_DS_TYPE,
 				new UISWTViewBuilderCore("RemotePieceDistributionView", null,
@@ -397,6 +438,30 @@ PeersViewBase
 				break;
 			}
 		}
+	}
+		
+	@Override
+	public void 
+	filterSet(
+		String filter) 
+	{
+		col_filter_helper.filterSet( filter );
+	}
+		
+	@Override
+	public boolean 
+	filterCheck(
+		PEPeer 		ds, 
+		String 		filter, 
+		boolean 	regex, 
+		boolean 	confusable )
+	{
+		if ( confusable ){
+			
+			return( false );
+		}
+				
+		return( col_filter_helper.filterCheck( ds, filter, regex, ds.getClient(), false ));
 	}
 	
 	protected void
@@ -447,7 +512,7 @@ PeersViewBase
 		
 		swarm_view.setAlwaysShowDownloadName( true );
 		
-		swarm_view.initialize( parent );
+		swarm_view.initialize( parent, false );
 		
 		swarm_view.getComposite().setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 		
@@ -570,21 +635,21 @@ PeersViewBase
 	
 	public static void
 	fillMenu(
-		Menu				menu,
-		PEPeer				peer,
-		DownloadManager 	download_specific )
+		Menu					menu,
+		PEPeer					peer,
+		List<DownloadManager> 	download_specific )
 	{
 		PEPeer[] peers = {peer};
 
 		fillMenu( menu, peers, menu.getShell(), download_specific );
 	}
-
+	
 	public static void
 	fillMenu(
-		Menu 				menu,
-		TableView<PEPeer> 	tv,
-		Shell 				shell,
-		DownloadManager		 download_specific )
+		Menu 					menu,
+		TableView<PEPeer> 		tv,
+		Shell 					shell,
+		List<DownloadManager>	download_specific )
 	{
 		List<PEPeer>	o_peers = (List<PEPeer>)(Object)tv.getSelectedDataSources();
 
@@ -599,7 +664,7 @@ PeersViewBase
 		final Menu 				menu,
 		final PEPeer[]			peers,
 		final Shell 			shell,
-		DownloadManager 		download_specific )
+		List<DownloadManager>	download_specific )
 	{
 		boolean hasSelection = (peers.length > 0);
 
@@ -712,7 +777,8 @@ PeersViewBase
 		}
 		
 
-		if (download_specific != null) {
+		if (!download_specific.isEmpty()){
+			
 			final MenuItem block_item = new MenuItem(menu, SWT.CHECK);
 			PEPeer peer = peers.length==0?null:peers[0];
 
@@ -894,7 +960,7 @@ PeersViewBase
 			@Override
 			public void run(PEPeer peer) {
 				if ( !peer.isMyPeer()){
-					peer.getManager().removePeer(peer,"Peer kicked" );
+					peer.getManager().removePeer(peer,"Peer kicked", Transport.CR_PEER_CHURN );
 				}
 			}
 		});
@@ -973,7 +1039,7 @@ PeersViewBase
 							}
 						}
 							
-						peer.getManager().removePeer(peer, "Peer kicked and banned");
+						peer.getManager().removePeer(peer, "Peer kicked and banned", Transport.CR_IP_BLOCKED );
 					}
 				}
 			};
@@ -993,7 +1059,7 @@ PeersViewBase
 						String msg = MessageText.getString("PeersView.menu.kickandban.reason");
 						IpFilterManagerFactory.getSingleton().getIPFilter().ban(peer.getIp(),
 								msg, true );
-						peer.getManager().removePeer(peer, "Peer kicked and banned");
+						peer.getManager().removePeer(peer, "Peer kicked and banned", Transport.CR_IP_BLOCKED );
 					}
 				}
 			});
@@ -1068,7 +1134,7 @@ PeersViewBase
 	
 								filter.ban( peer.getIp(), msg, true, mins );
 	
-								peer.getManager().removePeer(peer, "Peer kicked and banned");
+								peer.getManager().removePeer(peer, "Peer kicked and banned", Transport.CR_IP_BLOCKED);
 							}
 						}
 					}
@@ -1085,13 +1151,22 @@ PeersViewBase
 	
 	private static String
 	getMyPeerDetails(
-		DownloadManager		dm )
+		List<DownloadManager>		dms )
 	{
 		InetAddress ip = NetworkAdmin.getSingleton().getDefaultPublicAddress();
 
 		InetAddress ip_v6 = NetworkAdmin.getSingleton().getDefaultPublicAddressV6();
 		
-		int port = dm.getTCPListeningPortNumber();
+		int port;
+		
+		if ( dms.isEmpty()){
+			
+			port = TCPNetworkManager.getSingleton().getDefaultTCPListeningPortNumber();
+			
+		}else{
+			
+			port = dms.get(0).getTCPListeningPortNumber();
+		}
 		
 		String	str = "";
 			
@@ -1113,13 +1188,13 @@ PeersViewBase
 	
 	protected static boolean
 	addPeersMenu(
-		DownloadManager 	man,
-		String				column_name,
-		Menu				menu,
-		PEPeer[]			peers )
+		List<DownloadManager> 	managers,
+		String					column_name,
+		Menu					menu,
+		PEPeer[]				peers )
 	{
-		new MenuItem( menu, SWT.SEPARATOR);
-
+		MenuBuildUtils.addSeparator( menu );
+		
 		MenuItem copy_me_item = new MenuItem( menu, SWT.PUSH );
 
 		Messages.setLanguageText( copy_me_item, "menu.copy.my.peer");
@@ -1133,7 +1208,7 @@ PeersViewBase
 				handleEvent(
 						Event event)
 				{
-					String str = getMyPeerDetails( man );
+					String str = getMyPeerDetails( managers );
 					
 					if ( str.isEmpty()){
 						
@@ -1144,11 +1219,20 @@ PeersViewBase
 				}
 			});	
 		
-		if ( man != null && !TorrentUtils.isReallyPrivate(man.getTorrent())){
-
-			PEPeerManager pm = man.getPeerManager();
-
-			if ( pm != null ){
+		List<DownloadManager> publicdms = new ArrayList<>();
+		
+		for ( DownloadManager dm: managers ){
+			
+			if ( !TorrentUtils.isReallyPrivate(dm.getTorrent())){
+				
+				if ( dm.getPeerManager() != null ){
+				
+					publicdms.add( dm );
+				}
+			}
+		}
+		
+		if ( !publicdms.isEmpty()){
 		
 			MenuItem copy_all_peers= new MenuItem( menu, SWT.PUSH );
 	
@@ -1161,27 +1245,36 @@ PeersViewBase
 					@Override
 					public void
 					handleEvent(
-							Event event)
+						Event event)
 					{
-						List<PEPeer> peers = pm.getPeers();
-						
-						String str = getMyPeerDetails( man );
-						
-						for ( PEPeer peer: peers ){
+						String str = getMyPeerDetails( managers );
+
+						for ( DownloadManager dm: publicdms ){
 							
-							int port = peer.getTCPListenPort();
+							PEPeerManager pm = dm.getPeerManager();
 							
-							if ( port > 0 ){
+							if ( pm == null ){
 								
-								String address = peer.getIp() + ":" + port;
-								
-								str += (str.isEmpty()?"":",") + address;
+								continue;
 							}
-						}
-						
-						if ( str.isEmpty()){
 							
-							str = "<no usable peers>";
+							for ( PEPeer peer: pm.getPeers()){
+								
+								int port = peer.getTCPListenPort();
+								
+								if ( port > 0 ){
+									
+									String address = peer.getIp() + ":" + port;
+									
+									str += (str.isEmpty()?"":",") + address;
+								}
+							}
+							
+							if ( str.isEmpty()){
+								
+								str = "<no usable peers>";
+							}
+							
 						}
 						
 						ClipboardCopy.copyToClipBoard( str );
@@ -1261,57 +1354,61 @@ PeersViewBase
 	
 											COConfigurationManager.setParameter( "add.peers.default", sReturn );
 	
-											PEPeerManager pm = man.getPeerManager();
-	
-											if ( pm == null ){
-	
-												return;
-											}
-	
-											Utils.getOffOfSWTThread(
-												new AERunnable(){
+											for ( DownloadManager dm: publicdms ){
+												
+												PEPeerManager pm = dm.getPeerManager();
+												
+												if ( pm == null ){
 													
-													@Override
-													public void runSupport()
-													{
-														String[] bits = sReturn.replace(';', ',' ).split( "," );
-				
-														for  ( String bit: bits ){
-				
-															bit = bit.trim();
-				
-															if ( bit.isEmpty()){
-																
-																continue;
-															}
-															
-															int	pos = bit.lastIndexOf( ':' );
-				
-															if ( pos != -1 ){
-				
-																String host = bit.substring( 0, pos ).trim();
-																String port = bit.substring( pos+1 ).trim();
-				
-																try{
-																	int	i_port = Integer.parseInt( port );
-				
-																	pm.addPeer( host, i_port, 0, NetworkManager.getCryptoRequired( NetworkManager.CRYPTO_OVERRIDE_NONE ), null );
-				
-																}catch( Throwable e ){
-				
+													continue;
+												}
+	
+												Utils.getOffOfSWTThread(
+													new AERunnable(){
+														
+														@Override
+														public void runSupport()
+														{
+															String[] bits = sReturn.replace(';', ',' ).split( "," );
+					
+															for  ( String bit: bits ){
+					
+																bit = bit.trim();
+					
+																if ( bit.isEmpty()){
+																	
+																	continue;
 																}
-															}else{
-				
-																pm.addPeer( bit, 6881, 0, NetworkManager.getCryptoRequired( NetworkManager.CRYPTO_OVERRIDE_NONE ), null );
+																
+																int	pos = bit.lastIndexOf( ':' );
+	
+																try{
+	
+																	if ( pos != -1 ){
+					
+																		String host = bit.substring( 0, pos ).trim();
+																		String port = bit.substring( pos+1 ).trim();
+					
+																		int	i_port = Integer.parseInt( port );
+					
+																		pm.addPeer( host, i_port, 0, NetworkManager.getCryptoRequired( NetworkManager.CRYPTO_OVERRIDE_NONE ), null );
+					
+																	}else{
+					
+																		pm.addPeer( bit, 6881, 0, NetworkManager.getCryptoRequired( NetworkManager.CRYPTO_OVERRIDE_NONE ), null );
+																	}
+																}catch( Throwable e ){
+																
+																	Debug.out( e );
+																}
 															}
 														}
-													}
-												});
+													});
+											}
 										}
 									});
 						}
 					});
-			}
 		}
 		
 		addPeerSetMenu( menu, peers );
@@ -1425,7 +1522,7 @@ PeersViewBase
 		String 		sColumnName,
 		Menu 		menu )
 	{
-		fillMenu( menu, tv, shell, null );
+		fillMenu( menu, tv, shell, Collections.emptyList());
 		
 		new MenuItem (menu, SWT.SEPARATOR);
 	}
@@ -1436,7 +1533,7 @@ PeersViewBase
 		String 	sColumnName, 
 		Menu 	menuThisColumn)
 	{
-		if ( addPeersMenu( null, sColumnName, menuThisColumn, new PEPeer[0] )){
+		if ( addPeersMenu( new ArrayList<>(), sColumnName, menuThisColumn, new PEPeer[0] )){
 
 			new MenuItem( menuThisColumn, SWT.SEPARATOR );
 		}
@@ -1460,7 +1557,25 @@ PeersViewBase
 	}
 	
 	@Override
-	public void defaultSelected(TableRowCore[] rows, int stateMask){
+	public void 
+	defaultSelected(
+		TableRowCore[] rows, int stateMask)
+	{
+		if ( rows.length == 1 ){
+			
+			PEPeer peer = (PEPeer)rows[0].getDataSource( true );
+			
+			DownloadManager dm = peer.getManager().getDiskManager().getDownload();
+						
+			UIFunctions uiFunctions = UIFunctionsManager.getUIFunctions();
+			
+			if ( uiFunctions != null ){
+				
+				uiFunctions.getMDI().showEntryByID(
+						MultipleDocumentInterface.SIDEBAR_SECTION_TORRENT_DETAILS,
+						dm);
+			}
+		}
 	}
 	
 	@Override

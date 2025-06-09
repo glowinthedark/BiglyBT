@@ -198,6 +198,7 @@ public class TableColumnManager {
   public void addColumns(TableColumnCore[] itemsToAdd) {
 		try {
 			items_mon.enter();
+			Map<String,Map> configCache = new HashMap<>();
 			for (int i = 0; i < itemsToAdd.length; i++) {
 				TableColumnCore item = itemsToAdd[i];
 				if (item == null || item.isRemoved()){
@@ -213,7 +214,11 @@ public class TableColumnManager {
 				}
 				if (!mTypes.containsKey(name)) {
 					mTypes.put(name, item);
-					Map mapColumnConfig = getTableConfigMap(sTableID);
+					Map mapColumnConfig = configCache.get( sTableID );
+					if (mapColumnConfig == null ){
+						mapColumnConfig = getTableConfigMap(sTableID);
+						configCache.put(sTableID, mapColumnConfig);
+					}
 					item.loadSettings(mapColumnConfig);
 				}
 			}
@@ -739,7 +744,13 @@ public class TableColumnManager {
 		  Map mapTablesConfig = getTablesConfigMap();
 
 		  Map mapTableConfig = (Map) mapTablesConfig.get(key);
+		  
 		  if (mapTableConfig == null) {
+			  mapTableConfig = getTableConfigDefaultMap( sTableID );
+		  }
+		  
+		  if (mapTableConfig == null) {
+			  
 			  mapTableConfig = new HashMap();
 			  mapTablesConfig.put(key, mapTableConfig);
 		  } else {
@@ -767,8 +778,74 @@ public class TableColumnManager {
 		  Map mapTablesConfig = getTablesConfigMap();
 
 		  mapTablesConfig.put(key, mapTableConfig);
-			markDirty();
+		
+		  markDirty();
 	  }
+  }
+
+  public static String
+  createSubViewID(
+		  String		base,
+		  String		sub )
+  {
+	  return( base + "::" + sub );
+  }
+	
+  public static String
+  getBaseViewID(
+	  String		id )
+  {
+	  int	pos = id.lastIndexOf( "::" );
+
+	  if ( pos == -1 ){
+
+		  return( id );
+
+	  }else{
+
+		  return( id.substring( 0, pos ));
+	  }
+  }
+	
+  private Map 
+  getTableConfigDefaultMap(
+	  String sTableID) 
+  {
+	  sTableID = getBaseViewID( sTableID );
+	  synchronized (this) {
+		  String key = "TableDefault." + sTableID;
+
+		  Map mapTablesConfig = getTablesConfigMap();
+
+		  return( BEncoder.cloneMap((Map)mapTablesConfig.get(key)));
+	  }
+  }
+
+  private void 
+  setTableConfigDefaultMap(
+	 String sTableID, 
+	 Map mapTableConfigDefault ) 
+  {
+	  mapTableConfigDefault =  BEncoder.cloneMap( mapTableConfigDefault);
+	  
+	  sTableID = getBaseViewID( sTableID );
+	  synchronized (this) {
+		  String key = "TableDefault." + sTableID;
+
+		  Map mapTablesConfig = getTablesConfigMap();
+
+		  mapTablesConfig.put(key, mapTableConfigDefault );
+		
+		  markDirty();
+	  }
+  }
+  
+  public void
+  setTableConfigDefault(
+	String	sTableID, 
+	Map		mapTableConfig )
+  {
+	  setTableConfigDefaultMap( sTableID, mapTableConfig );
   }
   
   public void setAutoHideOrder(String sTableID, String[] autoHideOrderColumnIDs) {
@@ -857,8 +934,7 @@ public class TableColumnManager {
 		}
 	}
 
-	public void unregisterColumn(Class forDataSourceType, String columnID,
-			TableColumnCreationListener listener) {
+	public void unregisterColumn(Class forDataSourceType, String columnID ){
 		try {
 			items_mon.enter();
 
@@ -895,7 +971,7 @@ public class TableColumnManager {
 		return columnInfo;
 	}
 
-	private void
+	public void
 	resetAllTables()
 	{
 		for ( String tableID: new ArrayList<>(mapTableDefaultColumns.keySet())){
@@ -910,82 +986,54 @@ public class TableColumnManager {
   			}
 			}
 		}
-	}
-
-	public Object getColumnData(String columnID, String key) {
-		Map mapTablesConfig = getTablesConfigMap();
-		Map mapColumns = MapUtils.getMapMap(mapTablesConfig, "Columns", null);
-		if (mapColumns != null) {
-			Map mapConfig = MapUtils.getMapMap(mapColumns, columnID, null);
-			if (mapConfig != null) {
-				return mapConfig.get(key);
-			}
-		}
-		return null;
-	}
-
-	public void setColumnData(String columnID, String key, Object value) {
-		synchronized (tablesConfig) {
-			Map mapTablesConfig = getTablesConfigMap();
-			Map mapColumns = MapUtils.getMapMap(mapTablesConfig, "Columns", null);
-			if (mapColumns == null) {
-				mapColumns = new LightHashMap(2);
-				mapTablesConfig.put("Columns", mapColumns);
-			}
-
-			Map mapConfig = MapUtils.getMapMap(mapColumns, columnID, null);
-			if (mapConfig == null) {
-				mapConfig = new LightHashMap(2);
-				mapColumns.put(columnID, mapConfig);
-			}
-
-			mapConfig.put(key, value);
-			markDirty();
+		
+		synchronized( this ){
+			
+			tablesConfig = new HashMap<>();
+		
+			saveTableConfigs();
 		}
 	}
 
-	public void removeColumnData(String columnID, String key) {
-		synchronized (tablesConfig) {
-			Map mapTablesConfig = getTablesConfigMap();
-  		Map mapColumns = MapUtils.getMapMap(mapTablesConfig, "Columns", null);
-  		if (mapColumns != null) {
-  			Map mapConfig = MapUtils.getMapMap(mapColumns, columnID, null);
-  			if (mapConfig != null) {
-  				mapConfig.remove(key);
-  				if (mapConfig.size() < 1) {
-  					mapColumns.remove(columnID);
-  				}
-					markDirty();
-  			}
-  		}
-		}
-	}
-
-	public void resetColumns(Class dataSourceType, String tableID) {
-		TableColumnCore[] allTableColumns = getAllTableColumnCoreAsArray(
-				dataSourceType, tableID);
-		if (allTableColumns != null) {
-			for (TableColumnCore column : allTableColumns) {
-				if (column != null) {
-					column.setVisible(false);
-					column.reset();
+	public void 
+	resetColumns(
+		Class dataSourceType, String tableID)
+	{
+		Map defaults = getTableConfigDefaultMap(tableID);
+		
+		if ( defaults == null ){
+			TableColumnCore[] allTableColumns = getAllTableColumnCoreAsArray(
+					dataSourceType, tableID);
+			if (allTableColumns != null) {
+				for (TableColumnCore column : allTableColumns) {
+					if (column != null) {
+						column.setVisible(false);
+						column.reset();
+					}
 				}
 			}
-		}
-		String[] defaultColumnNames = getDefaultColumnNames(tableID);
-		if (defaultColumnNames != null) {
-			int i = 0;
-			for (String name : defaultColumnNames) {
-				TableColumnCore column = getTableColumnCore(tableID, name);
-				if (column != null) {
-					column.setVisible(true);
-					column.setPositionNoShift(i++);
+			String[] defaultColumnNames = getDefaultColumnNames(tableID);
+			if (defaultColumnNames != null) {
+				int i = 0;
+				for (String name : defaultColumnNames) {
+					TableColumnCore column = getTableColumnCore(tableID, name);
+					if (column != null) {
+						column.setVisible(true);
+						column.setPositionNoShift(i++);
+					}
 				}
 			}
+			
+			saveTableColumns(dataSourceType, tableID);
+			
+		}else{
+						
+			setTableConfigMap(tableID, defaults );
+			
+			loadTableColumnSettings( dataSourceType, tableID );
 		}
-		saveTableColumns(dataSourceType, tableID);
-		TableStructureEventDispatcher.getInstance(tableID).tableStructureChanged(
-				true, dataSourceType);
+		
+		TableStructureEventDispatcher.getInstance(tableID).tableStructureChanged(true, dataSourceType);
 	}
 
 	private void markDirty() {

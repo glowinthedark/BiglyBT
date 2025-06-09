@@ -22,8 +22,11 @@ package com.biglybt.ui.swt.views.skin;
 import java.util.*;
 
 import com.biglybt.core.CoreFactory;
+import com.biglybt.ui.UIFunctions;
+import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.common.ToolBarItem;
 import com.biglybt.ui.common.table.TableView;
+import com.biglybt.ui.mdi.MultipleDocumentInterface;
 import com.biglybt.ui.selectedcontent.ISelectedContent;
 import com.biglybt.ui.selectedcontent.ISelectedVuzeFileContent;
 import com.biglybt.ui.selectedcontent.SelectedContentListener;
@@ -35,11 +38,14 @@ import com.biglybt.ui.swt.skin.SWTSkinObject;
 import com.biglybt.ui.swt.skin.SWTSkinObjectContainer;
 import com.biglybt.ui.swt.skin.SWTSkinObjectText;
 import com.biglybt.ui.swt.utils.SWTRunnable;
+import com.biglybt.ui.swt.views.configsections.ConfigSectionInterfaceDisplaySWT;
+
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
+import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 
 import com.biglybt.core.config.COConfigurationManager;
@@ -48,6 +54,7 @@ import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerListener;
 import com.biglybt.core.global.GlobalManager;
+import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.AERunnableBoolean;
 import com.biglybt.core.util.Debug;
@@ -67,8 +74,12 @@ import com.biglybt.ui.swt.mdi.MultipleDocumentInterfaceSWT;
 import com.biglybt.ui.swt.skin.SWTSkinButtonUtility.ButtonListenerAdapter;
 import com.biglybt.ui.swt.toolbar.ToolBarItemSO;
 import com.biglybt.util.DLReferals;
+import com.biglybt.util.JSONUtils;
 import com.biglybt.util.PlayUtils;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
+import org.json.simple.JSONObject;
 
 /**
  * @author TuxPaper
@@ -100,7 +111,8 @@ public class ToolBarView
 
 	private boolean firstTimeEver = true;
 
-	private Set<String>	visible_items = new HashSet<>();
+	private Set<String>		visible_items	= new HashSet<>();
+	private List<String>	item_listeners	= new ArrayList<>();
 	
 	public ToolBarView() {
 		tbm = (UIToolBarManagerCore) UIToolBarManagerImpl.getInstance();
@@ -114,10 +126,10 @@ public class ToolBarView
 		return base;
 	}
 
-	// @see SkinView#showSupport(SWTSkinObject, java.lang.Object)
 	@Override
-	public Object skinObjectInitialShow(SWTSkinObject skinObject, Object params) {
-		
+	public Object 
+	skinObjectInitialShow(SWTSkinObject skinObject, Object params) {
+			
 		boolean uiClassic = COConfigurationManager.getStringParameter("ui").equals( "az2");
 
 		if (uiClassic && !"global-toolbar".equals(skinObject.getViewID())) {
@@ -181,8 +193,8 @@ public class ToolBarView
 		
 		visible_items.clear();
 		
-		COConfigurationManager.addParameterListener( "IconBar.start.stop.separate", this );
-		
+		addItemListener( "IconBar.start.stop.separate" );
+				
 		boolean start_top_sep = COConfigurationManager.getBooleanParameter( "IconBar.start.stop.separate", false );
 		
 		for ( UIToolBarItem item: items ){
@@ -190,9 +202,9 @@ public class ToolBarView
 			String id = item.getID();
 		
 			String key = "IconBar.visible." + id;
-			
-			COConfigurationManager.addParameterListener( key , this );
-			
+						
+			addItemListener( key );
+
 			if ( COConfigurationManager.getBooleanParameter( key, true )){
 			
 				if ( start_top_sep && ( id.equals( "startstop" ))){
@@ -306,7 +318,11 @@ public class ToolBarView
 					skin.constructionEnd();
 				}
 				
-				Utils.relayout( soMain.getControl());
+				Composite comp = (Composite)soMain.getControl();
+				
+				addMenus( comp );
+				
+				Utils.relayout( comp );
 				
 					// record built state
 				
@@ -327,6 +343,50 @@ public class ToolBarView
 					}
 				}
 			});
+	}
+	private void
+	addMenus(
+		Composite comp )
+	{
+		for ( Control kid: comp.getChildren()){
+			
+			Menu menu = kid.getMenu();
+			
+			if ( menu != null ){
+				
+				menu.dispose();
+			}
+			
+			menu = new Menu( kid );
+					
+			kid.setMenu( menu );
+			
+			MenuItem mi = new MenuItem( menu, SWT.PUSH );
+			
+			mi.setText( MessageText.getString( "menu.toolbar.options"));
+			
+			mi.addListener( SWT.Selection, (ev)->{
+				UIFunctions uif = UIFunctionsManager.getUIFunctions();
+
+				if ( uif != null ){
+
+					JSONObject args = new JSONObject();
+
+					args.put( "select", ConfigSectionInterfaceDisplaySWT.REFID_SECTION_TOOLBAR);
+					
+					String args_str = JSONUtils.encodeToJSON( args );
+					
+					uif.getMDI().showEntryByID(
+							MultipleDocumentInterface.SIDEBAR_SECTION_CONFIG,
+							ConfigSectionInterfaceDisplaySWT.SECTION_ID + args_str );
+				}
+			});
+			
+			if ( kid instanceof Composite ){
+				
+				addMenus((Composite)kid);
+			}
+		}
 	}
 	
 	private void setupToolBarItems(boolean uiClassic) {
@@ -565,7 +625,7 @@ public class ToolBarView
 			public void toolBarItemActivated_OffSWT(ToolBarItem item,
 					long activationType, Object datasource) {
 				ISelectedContent[] selected = SelectedContentManager.getCurrentlySelectedContent();
-				TorrentUtil.queueDataSources(selected,true,activationType == ACTIVATIONTYPE_HELD);
+				TorrentUtil.queueDataSources(selected,activationType == ACTIVATIONTYPE_HELD);
 			}
 		});
 		
@@ -634,7 +694,8 @@ public class ToolBarView
 	}
 	
 	@Override
-	public void currentlySelectedContentChanged(
+	public void 
+	currentlySelectedContentChanged(
 			ISelectedContent[] currentContent, String viewID) {
 		//System.err.println("currentlySelectedContentChanged " + viewID + ";" + currentContent + ";" + getMainSkinObject() + this + " via " + Debug.getCompressedStackTrace());
 		refreshCoreToolBarItems();
@@ -644,60 +705,87 @@ public class ToolBarView
 		}
 	}
 
-	// @see SkinView#skinObjectShown(SWTSkinObject, java.lang.Object)
 	@Override
-	public Object skinObjectShown(SWTSkinObject skinObject, Object params) {
+	public Object 
+	skinObjectShown(SWTSkinObject skinObject, Object params) {
 
 		if (showCalled) {
 			return null;
 		}
+				
 		showCalled = true;
 
 		Object object = super.skinObjectShown(skinObject, params);
 
-  	ToolBarItem[] allToolBarItems = tbm.getAllSWTToolBarItems();
-  	for (int i = 0; i < allToolBarItems.length; i++) {
-  		ToolBarItem toolBarItem = allToolBarItems[i];
-  		toolBarItem.addToolBarItemListener(this);
-  		uiFieldChanged(toolBarItem);
-  	}
-
-
-		SelectedContentManager.addCurrentlySelectedContentListener(this);
+		addActiveListeners();
+		
 		return object;
 	}
 
-	// @see SkinView#skinObjectHidden(SWTSkinObject, java.lang.Object)
 	@Override
-	public Object skinObjectHidden(SWTSkinObject skinObject, Object params) {
+	public Object 
+	skinObjectHidden(SWTSkinObject skinObject, Object params) {
 		showCalled = false;
-		SelectedContentManager.removeCurrentlySelectedContentListener(this);
 
-  	ToolBarItem[] allToolBarItems = tbm.getAllSWTToolBarItems();
-  	for (int i = 0; i < allToolBarItems.length; i++) {
-  		ToolBarItem toolBarItem = allToolBarItems[i];
-  		toolBarItem.removeToolBarItemListener(this);
-  	}
+		removeActiveListeners();
 
 		return super.skinObjectHidden(skinObject, params);
 	}
 
 	private void
-	removeItemListeners()
+	addActiveListeners()
 	{
-		for ( String id: visible_items ){
-			COConfigurationManager.removeParameterListener( "IconBar.visible." + id , this );
+		ToolBarItem[] allToolBarItems = tbm.getAllSWTToolBarItems();
+		for (int i = 0; i < allToolBarItems.length; i++) {
+			ToolBarItem toolBarItem = allToolBarItems[i];
+			toolBarItem.addToolBarItemListener(this);
+			uiFieldChanged(toolBarItem);
 		}
-		
-		COConfigurationManager.removeParameterListener( "IconBar.start.stop.separate", this );
+
+		SelectedContentManager.addCurrentlySelectedContentListener(this);
 	}
 	
-	// @see SkinView#skinObjectDestroyed(SWTSkinObject, java.lang.Object)
+	private void
+	removeActiveListeners()
+	{
+		SelectedContentManager.removeCurrentlySelectedContentListener(this);
+
+		ToolBarItem[] allToolBarItems = tbm.getAllSWTToolBarItems();
+		for (int i = 0; i < allToolBarItems.length; i++) {
+			ToolBarItem toolBarItem = allToolBarItems[i];
+			toolBarItem.removeToolBarItemListener(this);
+		}
+	}
+	
+	private void
+	addItemListener(
+		String		key )
+	{
+		item_listeners.add( key );
+		
+		COConfigurationManager.addParameterListener( key, this );
+
+	}
+	private void
+	removeItemListeners()
+	{
+		for ( String key: item_listeners ){
+			
+			COConfigurationManager.removeParameterListener( key, this );
+		}
+		
+		item_listeners.clear();
+	}
+	
 	@Override
-	public Object skinObjectDestroyed(SWTSkinObject skinObject, Object params) {
+	public Object 
+	skinObjectDestroyed(SWTSkinObject skinObject, Object params) {
+				
 		tbm.removeListener(this);
 
 		removeItemListeners();
+		
+		removeActiveListeners();
 		
 		COConfigurationManager.removeParameterListener( "IconBar.enabled", this );
 		
@@ -825,7 +913,7 @@ public class ToolBarView
 
 		if (mdi != null) {
 			UIToolBarItem[] allToolBarItems = tbm.getAllToolBarItems();
-			MdiEntrySWT entry = mdi.getCurrentEntry();
+			MdiEntrySWT entry = mdi.getSelectedEntry();
 			Map<String, Long> mapStates = new HashMap<>();
 			if (entry != null) {
 				UIToolBarEnablerBase[] enablers = entry.getToolbarEnablers();
@@ -843,6 +931,8 @@ public class ToolBarView
 			ISelectedContent[] currentContent = SelectedContentManager.getCurrentlySelectedContent();
 			//System.out.println("_refreshCoreToolBarItems(" + currentContent.length + ", " + entry + " via " + Debug.getCompressedStackTrace());
 
+			boolean allFiles = currentContent.length > 0;
+			
 			synchronized (dm_listener_map) {
 
 				Map<DownloadManager, DownloadManagerListener> copy = new IdentityHashMap<>(
@@ -854,6 +944,10 @@ public class ToolBarView
 
 					if (dm != null) {
 
+						if ( content.getFileIndex() == -1 ){
+							allFiles = false;
+						}
+						
 						copy.remove(dm);
 
 						// so in files view we can have multiple selections that map onto the SAME download manager
@@ -965,6 +1059,18 @@ public class ToolBarView
 				}
 			}
 
+			UIToolBarItem startItem = tbm.getToolBarItem("start");
+			
+			if ( startItem != null ){
+				startItem.setTextID( allFiles? "iconBar.startFiles" : "iconBar.start" );
+			}
+			
+			UIToolBarItem stopItem = tbm.getToolBarItem("stop");
+			
+			if ( stopItem != null ){
+				stopItem.setTextID( allFiles? "iconBar.stopFiles" : "iconBar.stop" );
+			}
+		
 			UIToolBarItem ssItem = tbm.getToolBarItem("startstop");
 			if (ssItem != null){
 
@@ -1011,9 +1117,14 @@ public class ToolBarView
 					}
 				}
 
-				ssItem.setTextID(shouldStopGroup ? "iconBar.stop" : "iconBar.start");
-				ssItem.setImageID("image.toolbar.startstop."
-						+ (shouldStopGroup ? "stop" : "start"));
+				if ( allFiles ){
+					ssItem.setTextID(shouldStopGroup ? "iconBar.stopFiles" : "iconBar.startFiles");
+
+				}else{
+					ssItem.setTextID(shouldStopGroup ? "iconBar.stop" : "iconBar.start");
+				}
+				
+				ssItem.setImageID("image.toolbar.startstop." + (shouldStopGroup ? "stop" : "start"));
 
 				// fallback to handle start/stop settings when no explicit selected content (e.g. for devices transcode view)
 
@@ -1083,7 +1194,7 @@ public class ToolBarView
 		}
 		MultipleDocumentInterfaceSWT mdi = UIFunctionsManagerSWT.getUIFunctionsSWT().getMDISWT();
 		if (mdi != null) {
-			MdiEntrySWT entry = mdi.getCurrentEntry();
+			MdiEntrySWT entry = mdi.getSelectedEntry();
 			if ( entry != null ){
 				UIToolBarEnablerBase[] enablers = entry.getToolbarEnablers();
 				for (UIToolBarEnablerBase enabler : enablers) {
@@ -1335,7 +1446,10 @@ public class ToolBarView
 	{
 		@Override
 		public void pressed(SWTSkinButtonUtility buttonUtility,
-		                    SWTSkinObject skinObject, int stateMask) {
+		                    SWTSkinObject skinObject, int button, int stateMask) {
+			if ( button != 1 ){
+				return;
+			}
 			ToolBarItem item = (ToolBarItem) buttonUtility.getSkinObject().getData(
 					"toolbaritem");
 			boolean rightClick = (stateMask & (SWT.BUTTON3 | SWT.MOD4)) > 0;

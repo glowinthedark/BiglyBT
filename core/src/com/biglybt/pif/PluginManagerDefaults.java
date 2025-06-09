@@ -50,6 +50,8 @@ PluginManagerDefaults
 	public static final String	PID_NET_STATUS				= "Network Status";
 	public static final String	PID_BUDDY					= "Buddy";
 	public static final String	PID_RSS						= "RSS";
+	public static final String	PID_SIMPLE_API				= "Simple API";
+	public static final String	PID_NET_TEST				= "Net Test";
 
 	public static final String[] PLUGIN_IDS = {
 
@@ -73,6 +75,8 @@ PluginManagerDefaults
 			PID_NET_STATUS,
 			PID_BUDDY,
 			PID_RSS,
+			PID_SIMPLE_API,
+			PID_NET_TEST
 		};
 
 	public String[]

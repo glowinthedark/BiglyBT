@@ -21,12 +21,15 @@ import java.io.File;
 import java.util.*;
 
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagFeature;
 import com.biglybt.core.tag.TagFeatureFileLocation;
 import com.biglybt.core.tag.TagManagerFactory;
+import com.biglybt.core.tag.TagUtils;
+import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.FileUtil;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.savelocation.DefaultSaveLocationManager;
@@ -36,6 +39,11 @@ import com.biglybt.pifimpl.local.download.DownloadImpl;
 
 public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils {
 
+	private static final int REASON_DEFAULTS	= 0;
+	private static final int REASON_INIT		= 1;
+	private static final int REASON_COMPLETE	= 2;
+	private static final int REASON_REMOVE		= 3;
+	
 	public final static DefaultSaveLocationManager DEFAULT_HANDLER = new DefaultSaveLocationManager() {
 		@Override
 		public SaveLocationChange onInitialization(Download d, boolean for_move, boolean on_event) {
@@ -49,28 +57,23 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 			if (on_event) {return null;}
 
 			DownloadManager dm = ((DownloadImpl)d).getDownload();
-			return determinePaths(dm, UPDATE_FOR_MOVE_DETAILS[1], for_move, false); // 1 - incomplete downloads
+			return determinePaths(dm, UPDATE_FOR_MOVE_DETAILS[1], for_move, REASON_INIT); // 1 - incomplete downloads
 		}
 		@Override
 		public SaveLocationChange onCompletion(Download d, boolean for_move, boolean on_event) {
 			DownloadManager dm = ((DownloadImpl)d).getDownload();
 			MovementInformation mi = getDownloadOrTagCompletionMovementInformation( dm, COMPLETION_DETAILS );
-			return determinePaths(dm, mi, for_move, false);
-		}
-		@Override
-		public SaveLocationChange testOnCompletion(Download d, boolean for_move, boolean on_event) {
-			DownloadManager dm = ((DownloadImpl)d).getDownload();
-			MovementInformation mi = getDownloadOrTagCompletionMovementInformation( dm, COMPLETION_DETAILS );
-			return determinePaths(dm, mi, for_move, true );
+			return determinePaths(dm, mi, for_move, REASON_COMPLETE);
 		}
 		@Override
 		public SaveLocationChange onRemoval(Download d, boolean for_move, boolean on_event) {
 			DownloadManager dm = ((DownloadImpl)d).getDownload();
 			MovementInformation mi = getDownloadOrTagRemovalMovementInformation( dm, REMOVAL_DETAILS );
-			return determinePaths(dm, mi, for_move, false );
+			return determinePaths(dm, mi, for_move, REASON_REMOVE );
 		}
 		@Override
 		public boolean isInDefaultSaveDir(Download d) {
+			Debug.out( "Thought this wasn't used..." );
 			DownloadManager dm = ((DownloadImpl)d).getDownload();
 			return DownloadManagerDefaultPaths.isInDefaultDownloadDir(dm);
 		}
@@ -205,7 +208,7 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
     		
     		File move_to = FileUtil.newFile( explicit_target );
     		
-    		if ( !move_to.exists()){
+    		if ( !FileUtil.exists( move_to )){
 
 				move_to.mkdirs();
 			}
@@ -226,84 +229,24 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
     	
     	if ( move_to_target == null ){
     		
-	    	List<Tag> dm_tags = TagManagerFactory.getTagManager().getTagsForTaggable( dm );
+    		List<Tag>	applicable_tags = 
+    			TagUtils.getActiveMoveOnCompleteTags( dm, false,(str)->logInfo( str, dm ));
+			
+    		if ( !applicable_tags.isEmpty()){
+    			
+		    	Tag tag_target = applicable_tags.get(0);
+		
+				TagFeatureFileLocation fl = (TagFeatureFileLocation)tag_target;
+		
+				move_to_target = fl.getTagMoveOnCompleteFolder();
+				
+				long	options = fl.getTagMoveOnCompleteOptions();
 	
-	    	if ( dm_tags != null ){
-	
-		    	List<Tag>	applicable_tags = new ArrayList<>();
-		
-		    	for ( Tag tag: dm_tags ){
-		
-		    		if ( tag.getTagType().hasTagTypeFeature( TagFeature.TF_FILE_LOCATION )){
-		
-		    			TagFeatureFileLocation fl = (TagFeatureFileLocation)tag;
-		
-		    			if ( fl.supportsTagMoveOnComplete()){
-		
-			    			File move_to = fl.getTagMoveOnCompleteFolder();
-		
-			    			if ( move_to != null ){
-		
-			    				if ( !move_to.exists()){
-		
-			    					move_to.mkdirs();
-			    				}
-		
-			    				if ( move_to.isDirectory() && move_to.canWrite()){
-		
-			    					applicable_tags.add( tag );
-		
-			    				}else{
-		
-			    					logInfo( "Ignoring invalid tag move-to location: " + move_to, dm );
-			    				}
-			    			}
-		    			}
-		    		}
-		    	}	    	
-	
-		    	if ( !applicable_tags.isEmpty()){
-		
-			    	if ( applicable_tags.size() > 1 ){
-			
-			    		Collections.sort(
-			    			applicable_tags,
-			    			new Comparator<Tag>()
-			    			{
-			    				@Override
-							    public int
-			    				compare(
-			    					Tag o1,
-			    					Tag o2)
-			    				{
-			    					return( o1.getTagID() - o2.getTagID());
-			    				}
-			    			});
-			
-			    		String str = "";
-			
-			    		for ( Tag tag: applicable_tags ){
-			
-			    			str += (str.length()==0?"":", ") + tag.getTagName( true );
-			    		}
-			
-			    		logInfo( "Multiple applicable tags found: " + str + " - selecting first", dm );
-			    	}
-			
-			    	Tag tag_target = applicable_tags.get(0);
-			
-					TagFeatureFileLocation fl = (TagFeatureFileLocation)tag_target;
-			
-					move_to_target = fl.getTagMoveOnCompleteFolder();
-					
-					long	options = fl.getTagMoveOnCompleteOptions();
-		
-					move_data 		= ( options&TagFeatureFileLocation.FL_DATA ) != 0;
-					move_torrent 	= ( options&TagFeatureFileLocation.FL_TORRENT ) != 0;
-					
-					context_str = "Tag '" + tag_target.getTagName( true ) + "' move-on-complete directory";
-					mi_str		= "Tag Move on Completion";
-		    	}
+				move_data 		= ( options&TagFeatureFileLocation.FL_DATA ) != 0;
+				move_torrent 	= ( options&TagFeatureFileLocation.FL_TORRENT ) != 0;
+				
+				context_str = "Tag '" + tag_target.getTagName( true ) + "' move-on-complete directory";
+				mi_str		= "Tag Move on Completion";
 	    	}
     	}   	
 
@@ -407,7 +350,7 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 	
 		    			if ( move_to != null ){
 	
-		    				if ( !move_to.exists()){
+		    				if ( !FileUtil.exists( move_to )){
 	
 		    					move_to.mkdirs();
 		    				}
@@ -593,7 +536,7 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 		TargetSpecification ts = null;
 		for (int i=0; i<DEFAULT_DIRS.length; i++) {
 			ts = DEFAULT_DIRS[i];
-			File[] targets = ts.getTargets(null, ts);
+			File[] targets = ts.getTargets(null, ts, REASON_DEFAULTS);
 			if (targets[0] != null) {
 				results.add(targets[0]);
 			}
@@ -606,22 +549,22 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
     /**
      * This does the guts of determining appropriate file paths.
      */
-    static SaveLocationChange determinePaths(DownloadManager dm, MovementInformation mi, boolean check_source, boolean is_test) {
-		boolean proceed = !check_source || mi.source.matchesDownload(dm, mi, is_test );
+    static SaveLocationChange determinePaths(DownloadManager dm, MovementInformation mi, boolean check_source, int reason ) {
+		boolean proceed = !check_source || mi.source.matchesDownload(dm, mi);
 		if (!proceed) {
 			logInfo("Cannot consider " + describe(dm, mi) +
 			    " - does not match source criteria.", dm);
 			return null;
 		}
 
-		File[] target_paths = mi.target.getTargets(dm, mi);
+		File[] target_paths = mi.target.getTargets(dm, mi, reason);
 		if (target_paths[0] == null && target_paths[1] == null) {
 			logInfo("Unable to determine an appropriate target for " +
 			    describe(dm, mi) + ".", dm);
 			return null;
 		}
 
-        logInfo("Determined path for " + describe(dm, mi) + ".", dm);
+        logInfo("Determined path for " + describe(dm, mi) + " - " + target_paths[0] + ";" + target_paths[1] + ", reason=" + reason + ".", dm );
 		return mi.transfer.getTransferDetails(dm, mi, target_paths);
 	}
 
@@ -695,7 +638,7 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 
     private static class SourceSpecification extends ParameterHelper {
 
-		public boolean matchesDownload(DownloadManager dm, ContextDescriptor context, boolean ignore_completeness ) {
+		public boolean matchesDownload(DownloadManager dm, ContextDescriptor context ) {
 			if (this.getBoolean("default dir", false)) {
 				logInfo("Checking if " + describe(dm, context) + " is inside default dirs.", dm);
 				File[] default_dirs = getDefaultDirs();
@@ -722,7 +665,7 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 
 			// Does it work for incomplete downloads?
   			if (!dm.isDownloadComplete(false)) {
-  				boolean can_move = ignore_completeness || this.getBoolean("incomplete dl", false);
+  				boolean can_move = this.getBoolean("incomplete dl", false);
   				String log_message = describe(dm, context) + " is incomplete which is " +
   			    	((can_move) ? "" : "not ") + "an appropriate state.";
   				if (!can_move) {
@@ -735,7 +678,7 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 		}
 
 		public boolean checkDefaultDir(File location, File[] default_dirs) {
-			location = FileUtil.canonise(location);
+			location = FileUtil.getCanonicalFile(location);
 			boolean subdir = this.getBoolean("default subdir", false);
 			for (int i=0; i<default_dirs.length; i++) {
 				if (subdir) {
@@ -752,7 +695,49 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 
 	private static class TargetSpecification extends ParameterHelper {
 
-		public File[] getTargets(DownloadManager dm, ContextDescriptor cd) {
+		public File[] 
+		getTargets(
+			DownloadManager 	dm, 
+			ContextDescriptor 	cd,
+			int					reason ) 
+		{
+			File[] targets = getTargetsSupport(dm, cd);
+			
+			if ( dm != null && ( reason == REASON_COMPLETE || reason == REASON_REMOVE )){
+				
+				if ( COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_FILE_MOVE_ADD_SUB_FOLDER )){
+
+					String name = dm.getDisplayName();
+					
+					name = FileUtil.convertOSSpecificChars( name, true );
+					
+					if ( !name.isEmpty()){
+						
+						File	data_dir 	= targets[0];
+						
+						if ( data_dir != null ){
+							
+							targets[0] = new File( data_dir, name );
+						
+							File	torrent_dir	= targets[1];
+	
+							if ( torrent_dir != null && torrent_dir.equals( data_dir )){
+								
+								targets[1] = new File( torrent_dir, name );
+							}	
+						}
+					}
+				}
+			}
+			
+			return( targets );
+		}
+		
+		public File[] 
+		getTargetsSupport(
+			DownloadManager 	dm, 
+			ContextDescriptor 	cd ) 
+		{
 
 			File	data_target;
 			File	torrent_target;
@@ -800,7 +785,8 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 
 			if ( !torrent_enabled ){
 
-				logInfo("Torrent target for " + describe(dm, cd) + " is not enabled.", dm);
+				// not interesting
+				// logInfo("Torrent target for " + describe(dm, cd) + " is not enabled.", dm);
 
 				torrent_target = null;
 
@@ -825,7 +811,7 @@ public class DownloadManagerDefaultPaths extends DownloadManagerMoveHandlerUtils
 
 						torrent_target = temp;
 
-					}else if ( !temp.exists()){
+					}else if ( !FileUtil.exists( temp )){
 
 						if ( temp.mkdirs()){
 

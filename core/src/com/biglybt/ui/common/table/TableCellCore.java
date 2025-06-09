@@ -22,6 +22,7 @@
 package com.biglybt.ui.common.table;
 
 import com.biglybt.pif.ui.tables.TableCell;
+import com.biglybt.pif.ui.tables.TableCellMenuEvent;
 import com.biglybt.pif.ui.tables.TableCellMouseEvent;
 import com.biglybt.pif.ui.tables.TableCellVisibilityListener;
 
@@ -113,6 +114,8 @@ public interface TableCellCore extends TableCell, Comparable
 	 */
 	public void invokeMouseListeners(TableCellMouseEvent event);
 
+	public void invokeMenuListeners(TableCellMenuEvent event);
+
 	/**
 	 * Trigger all the visibility listeners that have been added to this cell.<BR>
 	 *
@@ -193,8 +196,4 @@ public interface TableCellCore extends TableCell, Comparable
 	public void setDefaultToolTip(Object tt);
 
 	public Object getDefaultToolTip();
-	
-	public void setData( Object key, Object data );
-	
-	public Object getData( Object key );
 }

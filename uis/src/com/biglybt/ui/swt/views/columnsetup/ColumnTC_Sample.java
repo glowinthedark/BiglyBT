@@ -23,10 +23,13 @@ package com.biglybt.ui.swt.views.columnsetup;
 import com.biglybt.ui.common.table.TableCellCore;
 import com.biglybt.ui.common.table.TableColumnCore;
 import com.biglybt.ui.common.table.TableRowCore;
+
+import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 
+import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.Debug;
 import com.biglybt.pif.ui.tables.*;
@@ -53,30 +56,33 @@ public class ColumnTC_Sample
 		setPosition(POSITION_INVISIBLE);
 		setRefreshInterval(INTERVAL_LIVE);
 		setWidth(120);
+		
+		if ( tableID.equals( TableColumnSetupWindow.TABLEID_ROW_DETAILS )){
+			String existing = getNameOverride();
+			if ( existing == null || existing.isEmpty()){
+				setNameOverride(MessageText.getString( "label.value" ));
+			}
+		}
 	}
 
 	// @see com.biglybt.pif.ui.tables.TableCellAddedListener#cellAdded(com.biglybt.pif.ui.tables.TableCell)
 	@Override
 	public void cellAdded(final TableCell cell) {
-		Utils.execSWTThread(new AERunnable() {
-			@Override
-			public void runSupport() {
-				if (cell.isDisposed()) {
-					return;
-				}
-				TableColumnCore column = (TableColumnCore) cell.getDataSource();
-				TableViewSWT<?> tv = (TableViewSWT<?>) ((TableCellCore) cell).getTableRowCore().getView();
-				TableColumnSetupWindow tvs = (TableColumnSetupWindow) tv.getParentDataSource();
-				TableRowCore sampleRow = (TableRowCore) tvs.getSampleRow();
+		TableColumnCore column = (TableColumnCore) cell.getDataSource();
+		TableViewSWT<?> tv = (TableViewSWT<?>) ((TableCellCore) cell).getTableRowCore().getView();
+		TableColumnSetupWindow tvs = (TableColumnSetupWindow) tv.getParentDataSource();
+		TableRowCore sampleRow = (TableRowCore) tvs.getSampleRow();
 
-				cell.addListeners(new Cell(cell, column, tv.getTableComposite(), sampleRow));
-			}
-		});
+		Cell c = new Cell(cell, column, tv.getTableComposite(), sampleRow);
+		
+		cell.addListeners(c);
+		
+		cell.setData("Cell", c );
 	}
 
 	private static class Cell
 		implements TableCellRefreshListener, TableCellSWTPaintListener,
-		TableCellVisibilityListener, TableCellDisposeListener
+		TableCellVisibilityListener, TableCellDisposeListener, TableCellClipboardListener
 	{
 		private final TableColumnCore column;
 		private FakeTableCell sampleCell;
@@ -87,13 +93,14 @@ public class ColumnTC_Sample
 				return;
 			}
 			Object ds = sampleRow.getDataSource(true);
-			Object pds = sampleRow.getDataSource(false);
-			if (column.handlesDataSourceType(pds.getClass())) {
-  			sampleCell = new FakeTableCell(column, ds);
 
-  			Rectangle bounds = ((TableCellSWT)parentCell).getBounds();
-  			sampleCell.setControl(c, bounds, false);
-			}
+			sampleCell = new FakeTableCell(column, ds);
+			
+			sampleCell.setOrentation(SWT.LEFT);
+						
+			Rectangle bounds = ((TableCellSWT)parentCell).getBounds();
+			
+			sampleCell.setControl(c, bounds, false);
 		}
 
 		@Override
@@ -111,6 +118,8 @@ public class ColumnTC_Sample
 				return;
 			}
 			Rectangle bounds = cell.getBounds();
+			bounds.x += 2;
+			bounds.width -=4;
 			sampleCell.setCellArea(bounds);
 			try {
 				sampleCell.refresh();
@@ -136,6 +145,16 @@ public class ColumnTC_Sample
 			}
 		}
 
+		@Override
+		public String getClipboardText(TableCell cell){
+			FakeTableCell sampleCell = this.sampleCell;
+
+			if (sampleCell == null) {
+				return( null );
+			}
+			return( sampleCell.getClipboardText());
+		}
+		
 		// @see com.biglybt.pif.ui.tables.TableCellRefreshListener#refresh(com.biglybt.pif.ui.tables.TableCell)
 		@Override
 		public void refresh(TableCell cell) {
@@ -157,5 +176,117 @@ public class ColumnTC_Sample
 			//cell.setText(sampleCell.getText());
 		}
 
+	}
+	
+	@Override
+	public int 
+	compare(
+		TableRowCore row1, 
+		TableRowCore row2)
+	{		
+		final String IS_GRAPHIC = "GRAPHIC";
+		
+		TableCell cell1 = row1.getTableCell( this );
+		TableCell cell2 = row2.getTableCell( this );
+				
+		Cell c1 = (Cell)cell1.getData( "Cell" );
+		Cell c2 = (Cell)cell2.getData( "Cell" );
+		
+		String str1 = null;
+		String str2 = null;
+		
+		if ( c1 != null ){
+
+			FakeTableCell fc1 = c1.sampleCell;
+					
+			str1 = fc1.getText();
+			
+			if ( str1 == null ){
+				
+				str1 = fc1.getTextEquivalent();
+			}
+			
+			if ( str1 == null ){
+				
+				str1 = fc1.getClipboardText();
+			}
+			
+			if ( str1 == null || str1.isEmpty()){
+				
+				if ( fc1.getIcon() != null || fc1.getGraphic() != null ){
+					
+					str1 = IS_GRAPHIC;
+				}else{
+					
+					str1 = "";
+				}
+			}
+			
+			//System.out.println( fc1.getTableColumn().getName() + " -> " + str1 );
+		}else{
+			
+			//System.out.println( "c1 is null" );
+		}
+		
+		if ( c2 != null ){
+
+			FakeTableCell fc2 = c2.sampleCell;
+			
+			str2 = fc2.getText();
+			
+			if ( str2 == null ){
+				
+				str2 = fc2.getTextEquivalent();
+			}
+			
+			if ( str2 == null || str2.isEmpty()){
+				
+				str2 = fc2.getClipboardText();
+			}
+			
+			if ( str2 == null || str2.isEmpty()){
+				
+				if ( fc2.getIcon() != null || fc2.getGraphic() != null ){
+					
+					str2 = IS_GRAPHIC;
+				}else{
+					
+					str2 = "";
+				}
+			}
+			
+			//System.out.println( fc2.getTableColumn().getName() + " -> " + str2 );
+		}else{
+			
+			//System.out.println( "c2 is null" );
+		}
+
+		if ( str1 == null ){
+			
+			str1 = cell1.getClipboardText();
+		}
+		
+		if ( str2 == null ){
+			
+			str2 = cell2.getClipboardText();
+		}
+		
+		int res = 0;
+		
+		if ( str1 == IS_GRAPHIC && str2 == IS_GRAPHIC ){
+			
+		}else if ( str1 == IS_GRAPHIC ){
+			
+			res = 1;
+			
+		}else if ( str2 == IS_GRAPHIC ){
+			
+			res = -1;
+		}else{
+			
+			res = str1.compareTo(str2 );
+					
+		}
+		return((isSortAscending()?1:-1)*res );
 	}
 }

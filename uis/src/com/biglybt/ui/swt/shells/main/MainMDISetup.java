@@ -50,10 +50,10 @@ import com.biglybt.core.tracker.host.TRHostListener;
 import com.biglybt.core.tracker.host.TRHostTorrent;
 import com.biglybt.core.util.*;
 import com.biglybt.pifimpl.local.PluginInitializer;
+import com.biglybt.plugin.net.buddy.BuddyPlugin;
 import com.biglybt.plugin.net.buddy.BuddyPluginBeta;
 import com.biglybt.plugin.net.buddy.BuddyPluginBeta.ChatInstance;
 import com.biglybt.plugin.net.buddy.BuddyPluginUtils;
-import com.biglybt.plugin.net.buddy.swt.SBC_ChatOverview;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
@@ -62,10 +62,13 @@ import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfoManager;
 import com.biglybt.ui.mdi.*;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.devices.DeviceManagerUI;
+import com.biglybt.ui.swt.mainwindow.IMenuConstants;
 import com.biglybt.ui.swt.mdi.MdiEntrySWT;
 import com.biglybt.ui.swt.mdi.MultipleDocumentInterfaceSWT;
 import com.biglybt.ui.swt.pif.UISWTViewEventListener;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
+import com.biglybt.ui.swt.plugin.net.buddy.swt.FriendsView;
+import com.biglybt.ui.swt.plugin.net.buddy.swt.SBC_ChatOverview;
 import com.biglybt.ui.swt.shells.MessageBoxShell;
 import com.biglybt.ui.swt.views.*;
 import com.biglybt.ui.swt.views.clientstats.ClientStatsView;
@@ -167,6 +170,8 @@ public class MainMDISetup
 		COConfigurationManager.addAndFireParameterListener(
 				"Beta Programme Enabled", configBetaEnabledListener);
 		
+		PluginInterface pi = PluginInitializer.getDefaultInterface();
+
 		// Note: We don't use ViewManagerSWT because it adds a menu item, and we
 		//       manually do that for StatsView and others
 		//		ViewManagerSWT vi = ViewManagerSWT.getInstance();
@@ -182,6 +187,25 @@ public class MainMDISetup
 						new UISWTViewBuilderCore(id, null, StatsView.class).setParentEntryID(
 						MultipleDocumentInterface.SIDEBAR_HEADER_PLUGINS),
 					true);
+				
+				ViewTitleInfo title_info =
+						new ViewTitleInfo()
+						{
+							@Override
+							public Object
+							getTitleInfoProperty(
+								int propertyID)
+							{
+								if ( propertyID == TITLE_TEXT_ID ){
+									
+									return( "Stats.title.full" );
+								}
+								
+								return( null );
+							}
+						};
+						
+				entry.setViewTitleInfo( title_info );
 				
 				entry.setImageLeftID("image.sidebar.stats2");
 				
@@ -378,6 +402,92 @@ public class MainMDISetup
 					return( entry );
 				});
 		
+		mdi.registerEntry(
+				SIDEBAR_SECTION_ALLBLOCKS,
+				id -> {
+					UISWTViewBuilderCore builder = new UISWTViewBuilderCore(id, null, PieceBlocksView.class);
+					
+					builder.setParentEntryID(SIDEBAR_HEADER_TRANSFERS);
+					
+					builder.setPreferredAfterID( SB_Transfers.getSectionPosition(mdi, SIDEBAR_SECTION_ALLBLOCKS));
+					
+					builder.setInitialDatasource( "" );	// signifies all-blocks view rather than dm specific
+					
+					MdiEntrySWT entry = mdi.createEntry(builder, true);
+
+					PeerControlScheduler scheduler = PeerControlSchedulerFactory.getSingleton(0);
+
+					ViewTitleInfo title_info =
+							new ViewTitleInfo()
+							{
+								@Override
+								public Object
+								getTitleInfoProperty(
+									int propertyID)
+								{
+									if ( propertyID == TITLE_TEXT ){
+										
+										return( MessageText.getString( "MainWindow.menu.view.allblocks" ));
+										
+									}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+										
+										int[] counts = scheduler.getPieceCount();
+										
+										return( "" + counts[0] );
+									}
+									
+									return( null );
+								}
+							};
+							
+					entry.setViewTitleInfo( title_info );
+
+					entry.setImageLeftID("image.sidebar.allblocks");
+
+					final TimerEventPeriodic	timer =
+							SimpleTimer.addPeriodicEvent(
+									"sb:allblocks",
+									1*1000,
+									new TimerEventPerformer()
+									{
+										private int last_count1 = -1;
+										
+										@Override
+										public void
+										perform(
+											TimerEvent event)
+										{
+											int[] counts = scheduler.getPieceCount();
+											
+											int c1 = counts[0];
+											
+											if ( c1 != last_count1 ){
+											
+												last_count1 = c1;
+														
+												entry.redraw();
+
+												ViewTitleInfoManager.refreshTitleInfo( title_info );
+												
+												entry.redraw();
+											}
+										}
+									});
+
+					entry.addListener(
+						new MdiCloseListener() {
+
+							@Override
+							public void
+							mdiEntryClosed(
+								MdiEntry entry, boolean userClosed)
+							{
+								timer.cancel();
+							}
+						});
+					return( entry );
+				});
+		
 		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_LOGGER,
 				id -> {
 					UISWTViewBuilderCore builder = new UISWTViewBuilderCore(id, null,
@@ -509,7 +619,9 @@ public class MainMDISetup
 					}
 				});
 
-		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_CHAT,
+		if ( BuddyPluginUtils.isBetaChatEnabled()){
+			
+			mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_CHAT,
 				new MdiEntryCreationListener() {
 					@Override
 					public MdiEntry createMDiEntry(String id) {
@@ -529,7 +641,15 @@ public class MainMDISetup
 											return( null );
 										}
 
-										if ( propertyID == TITLE_INDICATOR_TEXT ){
+										if ( propertyID == TITLE_TEXT ){
+											
+											return( MessageText.getString( "mdi.entry.chatsoverview" ));
+											
+										}else if ( propertyID == TITLE_TEXT_ID ){
+											
+											return( "mdi.entry.chatsoverview" );
+											
+										}else if ( propertyID == TITLE_INDICATOR_TEXT ){
 
 											int	num = 0;
 
@@ -575,6 +695,29 @@ public class MainMDISetup
 
 						mdi_entry.setImageLeftID("image.sidebar.chat-overview");
 
+						String parentID = "sidebar." + MultipleDocumentInterface.SIDEBAR_SECTION_CHAT;
+
+						MenuManager menu_manager = pi.getUIManager().getMenuManager();
+						
+						MenuItem mi = menu_manager.addMenuItem( parentID, "MainWindow.menu.view.configuration" );
+						mi.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+
+						mi.addListener(
+							new MenuItemListener()
+							{
+								@Override
+								public void
+								selected(
+									MenuItem menu, Object target )
+								{
+							      	 UIFunctions uif = UIFunctionsManager.getUIFunctions();
+
+							      	 if ( uif != null ){
+							      		 
+							      		 uif.getMDI().loadEntryByID( BuddyPlugin.VIEW_ID, true, false, FriendsView.DS_SELECT_CHAT_TAB );
+							      	 }
+								}
+							});
 								
 						final TimerEventPeriodic	timer =
 							SimpleTimer.addPeriodicEvent(
@@ -615,19 +758,66 @@ public class MainMDISetup
 						mdi_entry.addListener(
 							new MdiCloseListener() {
 
+								boolean can_close = false;
+								
+								@Override
+								public boolean 
+								midEntryCanClose(
+									MdiEntry entry, boolean userClosed)
+								{
+									if ( can_close || !userClosed ){
+										
+										return( true );
+									}
+									
+									String title 	= MessageText.getString( "message.confirm.sb.close.title" );
+									String text 	= MessageText.getString( "message.confirm.sb.close.text" );
+
+									MessageBoxShell prompter =
+										new MessageBoxShell(
+											title, text,
+											new String[]{
+												MessageText.getString("Button.cancel"),
+												MessageText.getString("Button.ok") }, 0 );
+
+									prompter.setAutoCloseInMS(0);
+
+									prompter.open((result)->{
+										
+										if ( result == 1 ){
+										
+											can_close = true;
+										
+											List<MdiEntry> kids = mdi.getChildrenOf( mdi_entry.getViewID());
+											
+											for ( MdiEntry k: kids ){
+												
+												mdi.closeEntry( k, false );
+											}
+											
+											mdi.closeEntry( mdi_entry, true );
+										}
+									});
+									
+									return false;
+								}
+								
 								@Override
 								public void
 								mdiEntryClosed(
 									MdiEntry entry, boolean userClosed)
 								{
 									timer.cancel();
+									
+									mi.remove();
 								}
 							});
 
 						return mdi_entry;
 					}
 				});
-
+		}
+		
 		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_ARCHIVED_DOWNLOADS,
 				new MdiEntryCreationListener() {
 					@Override
@@ -1128,7 +1318,7 @@ public class MainMDISetup
 												section);
 						MdiEntry entry = mdi.createEntry(builder, true);
 
-						entry.setImageLeftID("image.sidebar.config");
+						entry.setImageLeftID("image.sidebar.cog");
 
 						return entry;
 					}
@@ -1137,7 +1327,6 @@ public class MainMDISetup
 					return null;
 				});
 
-		PluginInterface pi = PluginInitializer.getDefaultInterface();
 		try {
 			if ( !COConfigurationManager.getBooleanParameter( "my.shares.view.auto.open.done", false )){
 				
@@ -1250,17 +1439,19 @@ public class MainMDISetup
 				}
 			});
 
-			menuItem = uim.getMenuManager().addMenuItem(
-					MenuManager.MENU_MENUBAR, "chats.view.heading");
-			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-			menuItem.addListener(new MenuItemListener() {
-				@Override
-				public void selected(MenuItem menu, Object target) {
-					UIFunctionsManager.getUIFunctions().getMDI().showEntryByID(
-							MultipleDocumentInterface.SIDEBAR_SECTION_CHAT);
-				}
-			});
-
+			if ( BuddyPluginUtils.isBetaChatEnabled()){
+				menuItem = uim.getMenuManager().addMenuItem(
+						MenuManager.MENU_MENUBAR, "chats.view.heading");
+				menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+				menuItem.addListener(new MenuItemListener() {
+					@Override
+					public void selected(MenuItem menu, Object target) {
+						UIFunctionsManager.getUIFunctions().getMDI().showEntryByID(
+								MultipleDocumentInterface.SIDEBAR_SECTION_CHAT);
+					}
+				});
+			}
+			
 			menuItem = uim.getMenuManager().addMenuItem(
 					MenuManager.MENU_MENUBAR, "archivedlsview.view.heading");
 			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
@@ -1306,13 +1497,24 @@ public class MainMDISetup
 			});
 			
 			menuItem = uim.getMenuManager().addMenuItem(
-					MenuManager.MENU_MENUBAR, "MainWindow.menu.view.allpieces");
+					MenuManager.MENU_MENUBAR, IMenuConstants.MENU_ID_ALL_PIECES);
 			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
 			menuItem.addListener(new MenuItemListener() {
 				@Override
 				public void selected(MenuItem menu, Object target) {
 					UIFunctionsManager.getUIFunctions().getMDI().showEntryByID(
 							MultipleDocumentInterface.SIDEBAR_SECTION_ALLPIECES );
+				}
+			});
+			
+			menuItem = uim.getMenuManager().addMenuItem(
+					MenuManager.MENU_MENUBAR, IMenuConstants.MENU_ID_ALL_BLOCKS);
+			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+			menuItem.addListener(new MenuItemListener() {
+				@Override
+				public void selected(MenuItem menu, Object target) {
+					UIFunctionsManager.getUIFunctions().getMDI().showEntryByID(
+							MultipleDocumentInterface.SIDEBAR_SECTION_ALLBLOCKS );
 				}
 			});
 			
@@ -1360,6 +1562,8 @@ public class MainMDISetup
 		
 		sb_transfers = new SB_Transfers(mdi, false);
 		
+		sb_dashboard = new SB_Dashboard(mdi, false);
+		
 		SBC_ActivityTableView.setupSidebarEntry(mdi);
 
 		mdi.showEntryByID(MultipleDocumentInterface.SIDEBAR_SECTION_LIBRARY);
@@ -1371,7 +1575,7 @@ public class MainMDISetup
 
 		setupCatsTags( mdi );
 		
-		sb_dashboard = new SB_Dashboard(mdi);
+		sb_dashboard = new SB_Dashboard(mdi, true);
 		
 		for (int i = 0; i < preferredOrder.length; i++) {
 			String id = preferredOrder[i];
@@ -1394,6 +1598,32 @@ public class MainMDISetup
 							return( null );
 						}
 	
+						ViewTitleInfo title_info =
+							new ViewTitleInfo()
+							{
+								@Override
+								public Object
+								getTitleInfoProperty(
+									int propertyID)
+								{
+										// without this we get crap where the title is overwritten
+										// from the auto-open map title in wrong locale
+									
+									if ( propertyID == TITLE_TEXT_ID ){
+										
+										return( "sidebar." + id );
+										
+									}else  if ( propertyID == TITLE_TEXT ){
+										
+										return( MessageText.getString( "sidebar." + id ));
+									}
+									
+									return( null );
+								}
+							};
+								
+						entry.setViewTitleInfo(title_info);
+						
 						entry.setDefaultExpanded(true);
 	
 						if (id.equals(SIDEBAR_HEADER_PLUGINS)) {

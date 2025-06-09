@@ -30,6 +30,7 @@ import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.CoreRunningListener;
 import com.biglybt.core.util.*;
+import com.biglybt.core.versioncheck.VersionCheckClient;
 import com.biglybt.pifimpl.local.PluginInitializer;
 import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.UserPrompterResultListener;
@@ -42,6 +43,7 @@ import com.biglybt.ui.selectedcontent.SelectedContent;
 import com.biglybt.ui.selectedcontent.SelectedContentManager;
 import com.biglybt.ui.swt.columns.search.ColumnSearchResultSite;
 import com.biglybt.ui.swt.columns.searchsubs.*;
+import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.search.SearchResultsTabArea.SearchQuery;
 import com.biglybt.ui.swt.utils.SearchSubsUtils;
 import com.biglybt.ui.swt.views.skin.VuzeMessageBox;
@@ -76,7 +78,7 @@ import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.ui.swt.views.table.TableViewSWTMenuFillListener;
 import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
-
+import com.biglybt.ui.swt.views.table.utils.TableColumnFilterHelper;
 import com.biglybt.core.metasearch.Engine;
 import com.biglybt.core.metasearch.MetaSearchListener;
 import com.biglybt.core.metasearch.MetaSearchManager;
@@ -117,7 +119,8 @@ SBC_SearchResultsView
 
 	private SearchResultsTabArea		parent;
 
-	private TableViewSWT<SBC_SearchResult> tv_subs_results;
+	private TableViewSWT<SBC_SearchResult> 				tv_subs_results;
+	private TableColumnFilterHelper<SBC_SearchResult>	col_filter_helper;
 
 	private Composite			table_parent;
 
@@ -478,26 +481,18 @@ SBC_SearchResultsView
 
 			button.setSelection( !deselected_engines.contains( engine.getUID()));
 
-			Image image =
-				getIcon(
-					engine,
-					new ImageLoadListener() {
+			getIcon(
+				engine,
+				new ImageLoadListener() {
 
-						@Override
-						public void imageLoaded(Image image) {
-							button.setImage( image );
-						}
-					});
-
-			if ( image != null ){
-
-				try{
-					button.setImage( image );
-					
-				}catch( Throwable e ){
-					
-				}
-			}
+					@Override
+					public void 
+					imageLoaded(
+						Image image) 
+					{
+						button.setImage( image );
+					}
+				});
 
 			button.addSelectionListener(
 				new SelectionAdapter() {
@@ -654,9 +649,33 @@ SBC_SearchResultsView
 		btnAddEdit.addSelectionListener(new SelectionListener() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
+				
 				UIFunctions functions = UIFunctionsManager.getUIFunctions();
-				if (functions != null) {
-					functions.viewURL(Constants.URL_SEARCH_ADDEDIT, null, "");
+				
+				if ( functions != null ){
+					
+					String server = Constants.URL_SEARCH_ADDEDIT;
+					
+					try{
+						Map vc_data = VersionCheckClient.getSingleton().getMostRecentVersionCheckData();
+						
+						if ( vc_data != null ){
+							
+							byte[] b_ss = (byte[])vc_data.get( "search_server" );
+						
+							if ( b_ss != null ){
+										
+								String ss = new String( b_ss, "UTF-8" );
+											
+								server = ss;
+							}
+						}
+					}catch( Throwable f ){
+					}
+					
+					// server = "http://127.0.0.1:9899/xsearch/engineselector.php?azid=anonymous&azv=5.7.5.0&locale=en_US&os.name=Windows%207&vzemb=1";
+					
+					functions.viewURL(server, null, "");
 				}
 			}
 
@@ -1009,6 +1028,39 @@ SBC_SearchResultsView
 
 		tableManager.registerColumn(
 			SBC_SearchResult.class,
+			ColumnSearchSubResultSeeds.COLUMN_ID,
+				new TableColumnCreationListener() {
+
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnSearchSubResultSeeds(column);
+					}
+				});
+
+		tableManager.registerColumn(
+			SBC_SearchResult.class,
+			ColumnSearchSubResultPeers.COLUMN_ID,
+				new TableColumnCreationListener() {
+
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnSearchSubResultPeers(column);
+					}
+				});
+
+		tableManager.registerColumn(
+			SBC_SearchResult.class,
+			ColumnSearchSubResultGrabbed.COLUMN_ID,
+				new TableColumnCreationListener() {
+
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnSearchSubResultGrabbed(column);
+					}
+				});
+		
+		tableManager.registerColumn(
+			SBC_SearchResult.class,
 			ColumnSearchSubResultRatings.COLUMN_ID,
 				new TableColumnCreationListener() {
 
@@ -1125,6 +1177,8 @@ SBC_SearchResultsView
 			}
 		}
 
+		col_filter_helper = null;
+		
 		MetaSearchManagerFactory.getSingleton().getMetaSearch().removeListener( this );
 
 		Utils.disposeSWTObjects(new Object[] {
@@ -1215,18 +1269,20 @@ SBC_SearchResultsView
 
 		SWTSkinObjectTextbox soFilterBox = (SWTSkinObjectTextbox) getSkinObject("filterbox");
 		if (soFilterBox != null) {
-			tv_subs_results.enableFilterCheck(soFilterBox.getBubbleTextBox(), this);
+			BubbleTextBox bubbleTextBox = soFilterBox.getBubbleTextBox();
+
+			tv_subs_results.enableFilterCheck(bubbleTextBox, this);
+						
+			String tooltip = MessageText.getString("filter.tt.start");
+			tooltip += MessageText.getString("column.filter.tt.line1");
+			tooltip += MessageText.getString("column.filter.tt.line2");
+
+			bubbleTextBox.setTooltip( tooltip );
+						
+			bubbleTextBox.setMessage( MessageText.getString( "Button.search2" ) );
 		}
 
 		tv_subs_results.setRowDefaultHeight(COConfigurationManager.getIntParameter( "Search Subs Row Height" ));
-
-		SWTSkinObject soSizeSlider = getSkinObject("table-size-slider");
-		if (soSizeSlider instanceof SWTSkinObjectContainer) {
-			SWTSkinObjectContainer so = (SWTSkinObjectContainer) soSizeSlider;
-			if (!tv_subs_results.enableSizeSlider(so.getComposite(), 16, 100)) {
-				so.setVisible(false);
-			}
-		}
 
 		table_parent = new Composite(control, SWT.NONE);
 		table_parent.setLayoutData(Utils.getFilledFormData());
@@ -1339,11 +1395,16 @@ SBC_SearchResultsView
 
 							for ( SBC_SearchResult result: results ){
 
-								if ( buffer.length() > 0 ){
-									buffer.append( "\r\n" );
-								}
+								byte[] hash = result.getHash();
 
-								buffer.append( getDownloadURI( result ));
+								if ( hash != null && hash.length > 0 ){
+								
+									if ( buffer.length() > 0 ){
+										buffer.append( "\r\n" );
+									}
+	
+									buffer.append( getDownloadURI( result ));
+								}
 							}
 							ClipboardCopy.copyToClipBoard( buffer.toString());
 						}
@@ -1351,7 +1412,7 @@ SBC_SearchResultsView
 
 					item.setEnabled( results.length > 0 );
 
-					SearchSubsUtils.addMenu( results, menu );
+					SearchSubsUtils.addMenu( null, results, menu );
 
 					new MenuItem(menu, SWT.SEPARATOR );
 
@@ -1371,6 +1432,8 @@ SBC_SearchResultsView
 				{
 				}
 			});
+
+		col_filter_helper = new TableColumnFilterHelper<>( tv_subs_results, "srv:search" );
 
 		tv_subs_results.initialize( table_parent );
 
@@ -1394,14 +1457,15 @@ SBC_SearchResultsView
 	filterCheck(
 		SBC_SearchResult 	ds,
 		String 				filter,
-		boolean 			regex)
+		boolean 			regex,
+		boolean				confusable )
 	{
 		if (!isOurContent(ds)){
 
 			return false;
 		}
 
-		return( SearchSubsUtils.filterCheck( ds, filter, regex ));
+		return( SearchSubsUtils.filterCheck( col_filter_helper, ds, filter, regex, confusable ));
 	}
 
 	@Override
@@ -1453,42 +1517,26 @@ SBC_SearchResultsView
 		return( uri );
 	}
 
-	public Image
-	getIcon(
-		final SBC_SearchResult		result )
-	{
-		return( getIcon( result.getEngine(), result ));
-	}
-
-	public Image
+	public void
 	getIcon(
 		Engine					engine,
-		ImageLoadListener		result )
-	{
-		return getIconSupport( engine, result );
-	}
-	
-	private Image
-	getIconSupport(
-		Engine					engine,
-		ImageLoadListener		result )
+		ImageLoadListener		listener )
 	{
 		String icon = engine.getIcon();
+		
 		if ( icon == null ){
-			return null;
+			
+			listener.imageLoaded( null );
 		}
 
-		return ImageLoader.getInstance().getUrlImage(
+		ImageLoader.getInstance().getUrlImage(
 			icon,
 			new Point(0, 16),
-			(image, key, returnedImmediately) -> {
+			(image, key, returnedImmediately)->{
+				
 				loadedImageIDs.add(key);
-
-				if (returnedImmediately) {
-					return;
-				}
-
-				result.imageLoaded( image );
+				
+				listener.imageLoaded( image );
 			});
 	}
 
@@ -1852,6 +1900,11 @@ SBC_SearchResultsView
 	{
 		String link = entry.getTorrentLink();
 
+		if ( link == null ){
+			
+			return;
+		}
+		
 		if ( link.startsWith( "chat:" )){
 
 			Utils.launch( link );

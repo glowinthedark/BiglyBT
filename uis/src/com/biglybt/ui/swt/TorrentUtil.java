@@ -19,7 +19,6 @@ package com.biglybt.ui.swt;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -31,7 +30,6 @@ import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.CoreOperation;
 import com.biglybt.core.CoreOperationTask;
-import com.biglybt.core.CoreOperationTask.ProgressCallback;
 import com.biglybt.core.tag.Tag;
 import com.biglybt.ui.UIFunctions.TagReturner;
 import com.biglybt.ui.selectedcontent.ISelectedContent;
@@ -55,6 +53,7 @@ import org.eclipse.swt.widgets.*;
 import com.biglybt.core.category.Category;
 import com.biglybt.core.category.CategoryManager;
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.disk.DiskManagerFileInfoSet;
@@ -124,15 +123,28 @@ import com.biglybt.ui.swt.mdi.MultipleDocumentInterfaceSWT;
 public class TorrentUtil
 {
 	private static final String TU_GROUP			= "tu.group";
+	private static final String BF_GROUP			= "bf.group";
 	
+	public static final String	TU_ITEM_PAUSE			= "tui.pause";
 	public static final String	TU_ITEM_RECHECK			= "tui.recheck";
 	public static final String	TU_ITEM_CHECK_FILES		= "tui.checkfiles";
+	public static final String	TU_ITEM_ALLOCATE		= "tui.allocate";
+	public static final String	TU_ITEM_ARCHIVE			= "tui.archive";
 	public static final String	TU_ITEM_SHOW_SIDEBAR	= "tui.showsidebar";
 	
-	private static final String[] TU_ITEMS = {
+	public static final String	BF_ITEM_BACK	= "bfi.back";
+	public static final String	BF_ITEM_FORWARD	= "bfi.forward";
+	
+	private static final String[] TB_ITEMS = {
+			TU_ITEM_PAUSE,
 			TU_ITEM_RECHECK,
 			TU_ITEM_CHECK_FILES,
+			TU_ITEM_ALLOCATE,
+			TU_ITEM_ARCHIVE,
 			TU_ITEM_SHOW_SIDEBAR,
+			
+			BF_ITEM_BACK,
+			BF_ITEM_FORWARD,
 	};
 	
 	private static boolean	initialised;
@@ -147,7 +159,7 @@ public class TorrentUtil
 		
 		initialised = true;
 		
-		for ( String id: TU_ITEMS ){
+		for ( String id: TB_ITEMS ){
 		
 			String key = "IconBar.visible." + id;
 		
@@ -179,6 +191,100 @@ public class TorrentUtil
 							
 							if ( tbm != null ){
 								
+									// back							
+								
+								UIToolBarItem back_item = tbm.createToolBarItem( BF_ITEM_BACK );
+							
+								back_item.setGroupID( BF_GROUP );
+								
+								back_item.setImageID( "back" );
+								
+								back_item.setToolTipID( "label.back" );
+								
+								back_item.setDefaultActivationListener(new UIToolBarActivationListener() {
+									@Override
+									public boolean 
+									toolBarItemActivated(
+										ToolBarItem 	item, 
+										long 			activationType,
+									    Object 			datasource) 
+									{	
+										TableView tv = SelectedContentManager.getCurrentlySelectedTableView();
+
+										if ( tv != null ){
+										
+											tv.moveBack();
+										}
+										
+										return( true );
+									}});
+								
+								addItem( tbm, back_item );
+								
+								
+									// forward							
+								
+								UIToolBarItem forward_item = tbm.createToolBarItem( BF_ITEM_FORWARD );
+							
+								forward_item.setGroupID( BF_GROUP );
+								
+								forward_item.setImageID( "forward" );
+								
+								forward_item.setToolTipID( "label.forward" );
+								
+								forward_item.setDefaultActivationListener(new UIToolBarActivationListener() {
+									@Override
+									public boolean 
+									toolBarItemActivated(
+										ToolBarItem 	item, 
+										long 			activationType,
+									    Object 			datasource) 
+									{	
+										TableView tv = SelectedContentManager.getCurrentlySelectedTableView();
+	
+										if ( tv != null ){
+										
+											tv.moveForward();
+										}
+										
+										return( true );
+									}});
+								
+								addItem( tbm, forward_item );
+
+								UIToolBarItem pause_item = tbm.createToolBarItem( TU_ITEM_PAUSE );
+								
+								pause_item.setGroupID( TU_GROUP );
+								
+								pause_item.setImageID( "pause" );
+								
+								pause_item.setToolTipID( "v3.MainWindow.button.pause" );
+								
+								pause_item.setDefaultActivationListener(new UIToolBarActivationListener() {
+									@Override
+									public boolean 
+									toolBarItemActivated(
+										ToolBarItem 	item, 
+										long 			activationType,
+									    Object 			datasource) 
+									{	
+										List<DownloadManager>	dms = getDMs( datasource );
+										
+										for ( DownloadManager dm: dms ){
+											
+											if ( !dm.isPaused()){
+												
+												dm.pause( false );
+											}
+										}
+										
+										return( true );
+									}});
+								
+								addItem( tbm, pause_item );
+								
+									// refresh
+								
 								UIToolBarItem refresh_item = tbm.createToolBarItem( TU_ITEM_RECHECK );
 							
 								refresh_item.setGroupID( TU_GROUP );
@@ -199,9 +305,9 @@ public class TorrentUtil
 										
 										for ( DownloadManager dm: dms ){
 											
-											if ( dm.canForceRecheck()){
+											if ( ManagerUtils.canForceRecheck( dm )){
 												
-												dm.forceRecheck();
+												ManagerUtils.forceRecheck( dm );
 											}
 										}
 										
@@ -232,14 +338,83 @@ public class TorrentUtil
 										
 										for ( DownloadManager dm: dms ){
 											
-											dm.filesExist( true );
+											dm.filesExist( true, false );
 										}
 										
 										return( true );
 									}});
 								
-								addItem( tbm, cfe_item );
+								addItem( tbm, cfe_item );							
 								
+									// allocate
+							
+								UIToolBarItem alloc_item = tbm.createToolBarItem( TU_ITEM_ALLOCATE );
+								
+								alloc_item.setGroupID( TU_GROUP );
+								
+								alloc_item.setImageID( "allocate" );
+								
+								alloc_item.setToolTipID( "label.allocate" );
+								
+								alloc_item.setDefaultActivationListener(new UIToolBarActivationListener() {
+									@Override
+									public boolean 
+									toolBarItemActivated(
+										ToolBarItem 	item, 
+										long 			activationType,
+									    Object 			datasource) 
+									{	
+										List<DownloadManager>	dms = getDMs( datasource );
+										
+										ManagerUtils.allocate( dms.toArray( new DownloadManager[dms.size()]));
+										
+										return( true );
+									}});
+								
+								addItem( tbm, alloc_item );															
+								
+									// archive
+									
+								UIToolBarItem archive_item = tbm.createToolBarItem( TU_ITEM_ARCHIVE );
+								
+								archive_item.setGroupID( TU_GROUP );
+								
+								archive_item.setImageID( "archive" );
+								
+								archive_item.setToolTipID( "MyTorrentsView.menu.archive" );
+								
+								archive_item.setDefaultActivationListener(new UIToolBarActivationListener() {
+									@Override
+									public boolean 
+									toolBarItemActivated(
+										ToolBarItem 	item, 
+										long 			activationType,
+									    Object 			datasource) 
+									{	
+										List<DownloadManager>	dms = getDMs( datasource );
+										
+										final List<Download>	ar_dms = new ArrayList<>();
+
+										for ( DownloadManager dm: dms ){
+
+											Download stub = PluginCoreUtils.wrap(dm);
+
+											if ( stub.canStubbify()){
+
+												ar_dms.add( stub );
+											}
+										}
+										
+										if ( !ar_dms.isEmpty()){
+											
+											ManagerUtils.moveToArchive(ar_dms, null);
+										}
+										
+										return( true );
+									}});
+								
+							addItem( tbm, archive_item );				
+							
 									// show sidebar 
 								
 								UIToolBarItem ssb_item = tbm.createToolBarItem( TU_ITEM_SHOW_SIDEBAR);
@@ -419,12 +594,17 @@ public class TorrentUtil
 		boolean allScanSelected = true;
 		boolean allScanNotSelected = true;
 
-		boolean allStopped			 = true;
+		boolean allStopped			= true;
+		boolean allAllocatable		= true;
 		boolean	allResumeIncomplete	 = true;
 
 		boolean	hasClearableLinks = false;
 		boolean	hasRevertableFiles = false;
 
+		boolean globalMask = COConfigurationManager.getBooleanParameter( ConfigKeys.Transfer.BCFG_PEERCONTROL_HIDE_PIECE );
+
+		boolean allMaskDC 			= true;
+		
 		if (hasSelection) {
 			for (int i = 0; i < dms.length; i++) {
 				DownloadManager dm = (DownloadManager) dms[i];
@@ -469,22 +649,24 @@ public class TorrentUtil
 				}
 				stop = stop || ManagerUtils.isStopable(dm);
 
-				start = start || ManagerUtils.isStartable(dm);
+				start = start || ManagerUtils.isStartable(dm, true );
 
 				pause = pause || ManagerUtils.isPauseable(dm);
 						
-				recheck = recheck || dm.canForceRecheck();
+				recheck = recheck || ManagerUtils.canForceRecheck( dm );
 
 				lrrecheck = lrrecheck || ManagerUtils.canLowResourceRecheck( dm );
 						
 				forceStartEnabled = forceStartEnabled
-						|| ManagerUtils.isForceStartable(dm);
+						|| ManagerUtils.isForceStartable(dm, true);
 
 				forceStart = forceStart || dm.isForceStart();
 
 				boolean stopped = ManagerUtils.isStopped(dm);
 
 				allStopped &= stopped;
+
+				allAllocatable &= ManagerUtils.canAllocate( dm );		
 
 				fileMove = fileMove && dm.canMoveDataFiles();
 				
@@ -513,7 +695,7 @@ public class TorrentUtil
 					bChangeDir = dm.isDataAlreadyAllocated();
 					if (bChangeDir && state == DownloadManager.STATE_ERROR) {
 						// filesExist is way too slow!
-						bChangeDir = !dm.filesExist(true);
+						bChangeDir = !dm.filesExist(true,true);
 					} else {
 						bChangeDir = false;
 					}
@@ -564,8 +746,12 @@ public class TorrentUtil
 				}
 
 				if ( stopped && !hasClearableLinks ){
-					if ( dm.getDiskManagerFileInfoSet().nbFiles() > 1 ){
-						if ( dm_state.getFileLinks().hasLinks()){
+					
+					TOTorrent torrent = dm.getTorrent();
+					
+					if ( torrent != null && !torrent.isSimpleTorrent()){
+						
+						if ( dm_state.getFileLinks().size() > 0){
 
 							hasClearableLinks = true;
 						}
@@ -576,6 +762,12 @@ public class TorrentUtil
 
 					hasRevertableFiles = true;
 				}
+				
+				Boolean dmmask = dm_state.getOptionalBooleanAttribute( DownloadManagerState.AT_MASK_DL_COMP_OPTIONAL );
+				
+				boolean mask = dmmask==null?globalMask:dmmask;
+				
+				allMaskDC = allMaskDC && mask;
 			}
 
 			fileRescan = allScanSelected || allScanNotSelected;
@@ -596,6 +788,7 @@ public class TorrentUtil
 			changeUrl = false;
 			recheck = false;
 			manualUpdate = false;
+			allMaskDC = false;
 		}
 
 		// === Root Menu ===
@@ -662,6 +855,9 @@ public class TorrentUtil
 			}
 		});
 		itemOpen.setEnabled(hasSelection);
+
+		MenuItem itemOpenWith = MenuBuildUtils.addOpenWithMenu( menu, false, dms, false );
+		itemOpenWith.setEnabled(hasSelection&& MenuBuildUtils.hasOpenWithMenu( dms, false ));
 
 		// Explore (or open containing folder)
 		final boolean use_open_containing_folder = COConfigurationManager.getBooleanParameter("MyTorrentsView.menu.show_parent_folder_enabled");
@@ -754,10 +950,14 @@ public class TorrentUtil
 		long maxUpload = COConfigurationManager.getIntParameter(
 				"Max Upload Speed KBs", 0) * kInB;
 
+		Map<String,Object> menu_properties = new HashMap<>();
+		menu_properties.put( ViewUtils.SM_PROP_PERMIT_UPLOAD_DISABLE, true );
+		menu_properties.put( ViewUtils.SM_PROP_PERMIT_DOWNLOAD_DISABLE, true );
+		
 		ViewUtils.addSpeedMenu(menu_shell, menuAdvanced, true, true, true,
 				hasSelection, downSpeedDisabled, downSpeedUnlimited, totalDownSpeed,
 				downSpeedSetMax, maxDownload, upSpeedDisabled, upSpeedUnlimited,
-				totalUpSpeed, upSpeedSetMax, maxUpload, dms.length, null,
+				totalUpSpeed, upSpeedSetMax, maxUpload, dms.length, menu_properties,
 				new ViewUtils.SpeedAdapter() {
 					@Override
 					public void setDownSpeed(final int speed) {
@@ -821,11 +1021,22 @@ public class TorrentUtil
 		itemFileMoveData.addListener(SWT.Selection, new ListenerDMTask(dms) {
 			@Override
 			public void run(DownloadManager[] dms) {
-				moveDataFiles(shell, dms);
+				moveDataFiles(shell, dms,false);
 			}
 		});
 		itemFileMoveData.setEnabled(fileMove);
 		
+		if ( userMode > 0 ){
+			final MenuItem itemFileMoveDataBatch = new MenuItem(menuFiles, SWT.PUSH);
+			Messages.setLanguageText(itemFileMoveDataBatch, "MyTorrentsView.menu.movedata.batch");
+			itemFileMoveDataBatch.addListener(SWT.Selection, new ListenerDMTask(dms) {
+				@Override
+				public void run(DownloadManager[] dms) {
+					moveDataFiles(shell, dms,true);
+				}
+			});
+			itemFileMoveDataBatch.setEnabled(fileMove);
+		}
 		final MenuItem itemFileMoveTorrent = new MenuItem(menuFiles, SWT.PUSH);
 		Messages.setLanguageText(itemFileMoveTorrent,
 				"MyTorrentsView.menu.movetorrent");
@@ -847,6 +1058,23 @@ public class TorrentUtil
 
 		moc_item.setMenu( moc_menu );
 
+			// existing
+		
+		String existing_moc = TorrentUtil.getMOC( dms );
+		
+		if ( existing_moc != null ){
+			
+			MenuItem existing_item = new MenuItem( moc_menu, SWT.PUSH );
+			
+			existing_item.setText( "[" + existing_moc + "]" );
+			
+			existing_item.setEnabled( false );
+			
+			new MenuItem( moc_menu, SWT.SEPARATOR );
+		}
+		
+			// clear
+		
 		MenuItem clear_item = new MenuItem( moc_menu, SWT.PUSH);
 
 		Messages.setLanguageText( clear_item, "Button.clear" );
@@ -860,6 +1088,15 @@ public class TorrentUtil
 
 		clear_item.setEnabled( canClearMOC );
 		
+			// set 
+		
+		Consumer<String> moc_setter = (path)->{
+			
+			MenuBuildUtils.addToMOCHistory( path );
+			
+			TorrentUtil.setMOC( dms, path );
+		};
+		
 		MenuItem set_item = new MenuItem( moc_menu, SWT.PUSH);
 
 		Messages.setLanguageText( set_item, "label.set" );
@@ -867,11 +1104,16 @@ public class TorrentUtil
 		set_item.addListener(SWT.Selection, new ListenerDMTask(dms) {
 			@Override
 			public void run(DownloadManager[] dms) {
-				setMOC(shell, dms);
+				selectMOC( shell, dms, moc_setter );
 			}
 		});
 		
 		set_item.setEnabled( canSetMOC );
+		
+		if ( canSetMOC ){
+			
+			MenuBuildUtils.addMOCHistory( moc_menu, moc_setter );
+		}
 		
 		moc_item.setEnabled( canClearMOC || canSetMOC );
 		
@@ -894,7 +1136,7 @@ public class TorrentUtil
 		itemCheckFilesExist.addListener(SWT.Selection, new ListenerDMTask(dms) {
 			@Override
 			public void run(DownloadManager dm) {
-				dm.filesExist(true);
+				dm.filesExist(true,false);
 			}
 		});
 
@@ -951,6 +1193,20 @@ public class TorrentUtil
 
 		itemRevertFiles.setEnabled(hasRevertableFiles);
 		
+			// view links
+		
+		final MenuItem itemViewLinks = new MenuItem(menu, SWT.PUSH);
+		Messages.setLanguageText(itemViewLinks, "menu.view.links");
+		itemViewLinks.addListener(SWT.Selection, new ListenerDMTask(dms) {
+			@Override
+			public void 
+			run(
+				DownloadManager[] dms)
+			{
+				ManagerUtils.viewLinks( dms );
+			}
+		});
+		
 			// clear links
 
 		final MenuItem itemClearLinks = new MenuItem(menuFiles, SWT.PUSH);
@@ -959,11 +1215,13 @@ public class TorrentUtil
 			@Override
 			public void run(DownloadManager dm)
 			{
-				if ( ManagerUtils.isStopped(dm) && dm.getDownloadState().getFileLinks().hasLinks()){
+				if ( ManagerUtils.isStopped(dm) && dm.getDownloadState().getFileLinks().size()>0){
 
 					DiskManagerFileInfoSet fis = dm.getDiskManagerFileInfoSet();
 
-					if ( fis.nbFiles() > 1 ){
+					TOTorrent torrent = dm.getTorrent();
+					
+					if ( torrent != null && !torrent.isSimpleTorrent()){
 
 						DiskManagerFileInfo[] files = fis.getFiles();
 
@@ -974,7 +1232,7 @@ public class TorrentUtil
 
 							if ( !file_nolink.getAbsolutePath().equals( file_link.getAbsolutePath())){
 
-								file_info.setLink( null );
+								file_info.setLink( null, true );
 							}
 						}
 					}
@@ -984,6 +1242,21 @@ public class TorrentUtil
 
 		itemClearLinks.setEnabled(hasClearableLinks);
 
+		// allocate
+
+		MenuItem itemFileAlloc = new MenuItem(menuFiles, SWT.PUSH);
+		Messages.setLanguageText(itemFileAlloc,
+				"label.allocate");
+		itemFileAlloc.addListener(SWT.Selection, new ListenerDMTask(
+				dms) {
+			@Override
+			public void run(DownloadManager[] dms) {
+				ManagerUtils.allocate( dms );
+			}
+		});
+
+		itemFileAlloc.setEnabled(allAllocatable);
+		
 			// clear allocation
 
 		MenuItem itemFileClearAlloc = new MenuItem(menuFiles, SWT.PUSH);
@@ -1024,6 +1297,92 @@ public class TorrentUtil
 		});
 		itemFileSetResumeComplete.setEnabled(allStopped&&allResumeIncomplete);
 
+		// restore resume
+		
+		final Menu restore_menu = new Menu( menuFiles.getShell(), SWT.DROP_DOWN);
+		
+		MenuItem itemRestoreResume = new MenuItem(menuFiles, SWT.CASCADE);
+		Messages.setLanguageText(itemRestoreResume,	"MyTorrentsView.menu.restore.resume.data");
+		
+		itemRestoreResume.setMenu( restore_menu );
+		
+		boolean restoreEnabled = false;
+		
+		if ( dms.length==1 && allStopped ){
+			DownloadManagerState dmState = dms[0].getDownloadState();
+			
+			List<DownloadManagerState.ResumeHistory> history = dmState.getResumeDataHistory();
+			
+			if ( !history.isEmpty()){
+				restoreEnabled = true;
+			
+				for ( DownloadManagerState.ResumeHistory h: history ){
+					MenuItem itemHistory = new MenuItem(restore_menu, SWT.PUSH);
+					itemHistory.setText( DisplayFormatters.formatDateYMDHM(h.getDate()));
+					
+					itemHistory.addListener(SWT.Selection,(ev)->{
+						dmState.restoreResumeData( h );;
+					});
+				}
+			}
+		}
+		
+		itemRestoreResume.setEnabled( restoreEnabled);
+		
+			// mask dl comp
+				
+		MenuItem itemMaskDLComp = new MenuItem(menuFiles, SWT.CHECK);
+		
+		if ( dms.length> 0 ){
+			itemMaskDLComp.setSelection( allMaskDC );
+		}
+		
+		Messages.setLanguageText(itemMaskDLComp,"ConfigView.label.hap");
+		itemMaskDLComp.addListener(SWT.Selection, new ListenerDMTask(dms) {
+			@Override
+			public void run(DownloadManager dm) {
+				dm.getDownloadState().setOptionalBooleanAttribute( DownloadManagerState.AT_MASK_DL_COMP_OPTIONAL, itemMaskDLComp.getSelection());
+			}
+		});
+
+		itemMaskDLComp.setEnabled( dms.length > 0 );
+		
+			// set file priority when pieces remaining
+		
+		MenuItem itemSetFilePriority = new MenuItem(menuFiles, SWT.PUSH);
+				
+		String sfp_text = MessageText.getString( "ConfigView.label.set.file.pri.pieces.rem" );
+		
+		int sfp_def;
+		
+		if ( dms.length == 1 ){
+			
+			sfp_def = dms[0].getDownloadState().getIntAttribute( DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PIECE );
+			
+			if ( sfp_def > 0 ){
+				
+				sfp_text += " (" + sfp_def + ")";
+			}
+		}else{
+			
+			sfp_def = -1;
+		}
+		
+		itemSetFilePriority.setText(sfp_text + "...");
+		
+		itemSetFilePriority.addListener(SWT.Selection, new ListenerDMTask(dms) {
+			@Override
+			public void run(DownloadManager[] dms) {
+				Utils.numberPrompt( "enter.number", "number.of.pieces", sfp_def>0?sfp_def:null, (num)->{
+					for ( DownloadManager dm: dms ){
+						dm.getDownloadState().setIntAttribute(DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PIECE, num);
+					}
+				});
+			}
+		});
+
+		itemSetFilePriority.setEnabled( dms.length > 0 );
+		
 			// Advanced -> archive
 
 		final List<Download>	ar_dms = new ArrayList<>();
@@ -1395,6 +1754,21 @@ public class TorrentUtil
 			}
 		});
 
+		
+		// view debug
+		
+		MenuItem itemViewDebug = new MenuItem(menuAdvanced, SWT.PUSH);
+		itemViewDebug.setText( MessageText.getString("StartStopRules.menu.viewDebug") + "..." );
+		itemViewDebug.addListener(SWT.Selection, new ListenerDMTask(dms) {
+			@Override
+			public void 
+			run(
+				DownloadManager[] dms)
+			{
+				ManagerUtils.viewDebug( dms );
+			}
+		});
+		
 		// back to main menu
 		if (userMode > 0 && isTrackerOn) {
 			// Host
@@ -1465,15 +1839,16 @@ public class TorrentUtil
 
 					Map<String, String> properties = new HashMap<>();
 
-					Utils.setPeronalShare( properties );;
+					if ( Utils.setPeronalShare( properties )){
 
-					if (file.isFile()) {
-
-						ShareUtils.shareFile(file.getAbsolutePath(), properties);
-
-					} else if (file.isDirectory()) {
-
-						ShareUtils.shareDir(file.getAbsolutePath(), properties);
+						if (file.isFile()) {
+	
+							ShareUtils.shareFile(file.getAbsolutePath(), properties);
+	
+						} else if (file.isDirectory()) {
+	
+							ShareUtils.shareDir(file.getAbsolutePath(), properties);
+						}
 					}
 				}
 			});
@@ -1485,7 +1860,7 @@ public class TorrentUtil
 
 				File file = dm.getSaveLocation();
 
-				if ( !file.exists()){
+				if ( !Utils.fileExistsWithTimeout( file )){
 					
 					can_share_pers = false;
 					
@@ -1509,7 +1884,7 @@ public class TorrentUtil
 				Utils.getOffOfSWTThread(new AERunnable() {
 					@Override
 					public void runSupport() {
-						queueDataSources(dms, true);
+						queueDataSources(dms, false);
 					}
 				});
 			}
@@ -1525,7 +1900,7 @@ public class TorrentUtil
 			itemForceStart.addListener(SWT.Selection, new ListenerDMTask(dms) {
 				@Override
 				public void run(DownloadManager dm) {
-					if (ManagerUtils.isForceStartable(dm)) {
+					if (ManagerUtils.isForceStartable(dm, true)) {
 						dm.setForceStart(itemForceStart.getSelection());
 					}
 				}
@@ -1577,8 +1952,8 @@ public class TorrentUtil
 		itemRecheck.addListener(SWT.Selection, new ListenerDMTask(dms) {
 			@Override
 			public void run(DownloadManager dm) {
-				if (dm.canForceRecheck()) {
-					dm.forceRecheck();
+				if (ManagerUtils.canForceRecheck( dm )) {
+					ManagerUtils.forceRecheck( dm );
 				}
 			}
 		});
@@ -1789,9 +2164,13 @@ public class TorrentUtil
 
 		int i = 0;
 		try {
+			boolean applyToAll = false;
+			int		applyToAllDecision = SWT.NO;
+			
 			for (; i < dms.length; i++) {
 				File target = destinations[i];
-				if (target.exists()) {
+				if ( target.exists()){
+					/*
 					MessageBox mb = new MessageBox(parentShell, SWT.ICON_QUESTION
 							| SWT.YES | SWT.NO);
 					mb.setText(MessageText.getString("exportTorrentWizard.process.outputfileexists.title"));
@@ -1802,7 +2181,42 @@ public class TorrentUtil
 					if (result == SWT.NO) {
 						return;
 					}
-
+					*/
+					
+					int result;
+					
+					if ( applyToAll ){
+						
+						result = applyToAllDecision;
+						
+					}else{
+						MessageBoxShell mb = new MessageBoxShell( SWT.YES | SWT.NO,
+								MessageText.getString("exportTorrentWizard.process.outputfileexists.title"),
+								dms[i].getDisplayName() + "\n\n" + 
+								MessageText.getString("exportTorrentWizard.process.outputfileexists.message" ));
+						
+						if ( dms.length > 1 ){
+							
+							mb.setApplyToAllEnabled();
+						}
+						
+						mb.open( null );
+						
+						result = mb.waitUntilClosed();
+						
+						applyToAll = mb.getApplyToAll();
+							
+						if ( applyToAll ){
+						
+							applyToAllDecision = result;
+						}
+					}
+					
+					if ( result == SWT.NO ){
+						
+						continue;
+					}
+					
 					if (!target.delete()) {
 						throw (new Exception("Failed to delete file"));
 					}
@@ -1824,6 +2238,129 @@ public class TorrentUtil
 		}
 	}
 
+	public static void 
+	exportTorrent(
+		String		torrent_name,
+		TOTorrent 	torrent, 
+		Shell 		parentShell) 
+	{
+		FileDialog fd = new FileDialog(parentShell, SWT.SAVE);
+		
+		fd.setFileName( torrent_name );
+		
+		String path = fd.open();
+		
+		if ( path == null ){
+			
+			return;
+		}
+		
+		File target = new File(path);
+		
+		try{
+
+			if ( target.exists()){
+				
+				MessageBoxShell mb = 
+					new MessageBoxShell( 
+						SWT.YES | SWT.NO,
+						MessageText.getString("exportTorrentWizard.process.outputfileexists.title"),
+						torrent_name + "\n\n" + 
+						MessageText.getString("exportTorrentWizard.process.outputfileexists.message" ));
+	
+				mb.open( null );
+				
+				int result = mb.waitUntilClosed();
+	
+				if ( result == SWT.NO ){
+					
+					return;
+				}
+				
+				if (!target.delete()) {
+					
+					throw (new Exception("Failed to delete file"));
+				}
+			}
+
+			Map map = torrent.serialiseToMap();
+			
+			TOTorrent dest = TOTorrentFactory.deserialiseFromMap(map);
+			
+			dest.removeAdditionalProperties();
+			
+			dest.serialiseToBEncodedFile(target);
+			
+		}catch (Throwable e) {
+			Logger.log(new LogAlert(torrent_name, LogAlert.UNREPEATABLE,
+					"Torrent export failed", e));
+		}
+	}
+	
+	public static void 
+	exportTorrents(
+		String[]		torrent_names,
+		TOTorrent[] 	torrents, 
+		Shell 			parentShell) 
+	{
+		DirectoryDialog fd = new DirectoryDialog( parentShell, SWT.SAVE );
+				
+		String path = fd.open();
+		
+		if ( path == null ){
+			
+			return;
+		}
+		
+		File dir = new File(path);
+		
+		for ( int i=0;i<torrents.length;i++){
+			
+			String torrent_name = torrent_names[i];
+			
+			File target = new File( dir, torrent_name );
+			
+			try{
+	
+				if ( target.exists()){
+					
+					MessageBoxShell mb = 
+						new MessageBoxShell( 
+							SWT.YES | SWT.NO,
+							MessageText.getString("exportTorrentWizard.process.outputfileexists.title"),
+							torrent_name + "\n\n" + 
+							MessageText.getString("exportTorrentWizard.process.outputfileexists.message" ));
+		
+					mb.open( null );
+					
+					int result = mb.waitUntilClosed();
+		
+					if ( result == SWT.NO ){
+						
+						continue;
+					}
+					
+					if (!target.delete()) {
+						
+						throw (new Exception("Failed to delete file"));
+					}
+				}
+	
+				Map map = torrents[i].serialiseToMap();
+				
+				TOTorrent dest = TOTorrentFactory.deserialiseFromMap(map);
+				
+				dest.removeAdditionalProperties();
+				
+				dest.serialiseToBEncodedFile(target);
+				
+			}catch (Throwable e) {
+				Logger.log(new LogAlert(torrent_name, LogAlert.UNREPEATABLE,
+						"Torrent export failed", e));
+			}
+		}
+	}
+	
 	protected static void pauseDownloadsFor(DownloadManager[] dms) {
 
 		final List<DownloadManager> dms_to_pause = new ArrayList<>();
@@ -2031,6 +2568,107 @@ public class TorrentUtil
 		}
 	}
 
+	public static void
+	addEditWebseeds(
+		Menu				menu,
+		DownloadManager[]	dms )
+	{
+		final MenuItem itemEditWebSeeds = new MenuItem(menu, SWT.PUSH);
+		Messages.setLanguageText(itemEditWebSeeds,
+				"MyTorrentsView.menu.editWebSeeds");
+		itemEditWebSeeds.addListener(SWT.Selection, new ListenerDMTask(dms) {
+			@Override
+			public void run(final DownloadManager[] dms) {
+				final TOTorrent torrent = dms[0].getTorrent();
+
+				if (torrent == null) {
+
+					return;
+				}
+
+				List getright = getURLList(torrent, "url-list");
+				List webseeds = getURLList(torrent, "httpseeds");
+
+				Map ws = new HashMap();
+
+				ws.put("getright", getright);
+				ws.put("webseeds", webseeds);
+
+				ws = BDecoder.decodeStrings(ws);
+
+				new WebSeedsEditor(null, ws, new WebSeedsEditorListener() {
+					@Override
+					public void webSeedsChanged(String oldName, String newName, Map ws) {
+						try {
+							// String -> byte[]
+
+							ws = BDecoder.decode(BEncoder.encode(ws));
+
+							List getright = (List) ws.get("getright");
+
+							if (getright == null || getright.size() == 0) {
+
+								torrent.removeAdditionalProperty("url-list");
+
+							} else {
+
+								torrent.setAdditionalListProperty("url-list", getright);
+							}
+
+							List webseeds = (List) ws.get("webseeds");
+
+							if (webseeds == null || webseeds.size() == 0) {
+
+								torrent.removeAdditionalProperty("httpseeds");
+
+							} else {
+
+								torrent.setAdditionalListProperty("httpseeds", webseeds);
+							}
+
+							PluginInterface pi = CoreFactory.getSingleton().getPluginManager().getPluginInterfaceByClass(
+									ExternalSeedPlugin.class);
+
+							if (pi != null) {
+
+								ExternalSeedPlugin ext_seed_plugin = (ExternalSeedPlugin) pi.getPlugin();
+
+								ext_seed_plugin.downloadChanged(PluginCoreUtils.wrap(dms[0]));
+							}
+
+						} catch (Throwable e) {
+
+							Debug.printStackTrace(e);
+						}
+					}
+				}, true);
+
+			}
+
+			protected List getURLList(TOTorrent torrent, String key) {
+				Object obj = torrent.getAdditionalProperty(key);
+
+				if (obj instanceof byte[]) {
+
+					List l = new ArrayList();
+
+					l.add(obj);
+
+					return (l);
+
+				} else if (obj instanceof List) {
+
+					return ((List) obj);
+
+				} else {
+
+					return (new ArrayList());
+				}
+			}
+		});
+
+		itemEditWebSeeds.setEnabled(dms.length == 1);
+	}
 	protected static void addTrackerTorrentMenu(final Menu menuTracker,
 			final DownloadManager[] dms, boolean changeUrl, boolean manualUpdate,
 			boolean allStopped, final boolean use_open_containing_folder, boolean canMove) {
@@ -2143,52 +2781,7 @@ public class TorrentUtil
 			@Override
 			public void run(final DownloadManager[] dms) {
 
-				final List<List<String>>	merged_trackers = new ArrayList<>();
-
-				Set<String>	added = new HashSet<>();
-
-				for (DownloadManager dm : dms) {
-
-					TOTorrent torrent = dm.getTorrent();
-
-					if (torrent == null) {
-
-						continue;
-					}
-
-					List<List<String>> group = TorrentUtils.announceGroupsToList(torrent);
-
-					for ( List<String> set: group ){
-
-						List<String>	rem = new ArrayList<>();
-
-						for ( String url_str: set ){
-
-							try{
-								URL url = new URL( url_str );
-
-								if ( TorrentUtils.isDecentralised( url )){
-
-									continue;
-								}
-
-								if ( !added.contains( url_str )){
-
-									added.add( url_str );
-
-									rem.add( url_str );
-								}
-							}catch( Throwable e ){
-
-							}
-						}
-
-						if ( rem.size() > 0 ){
-
-							merged_trackers.add( rem );
-						}
-					}
-				}
+				final List<List<String>>	merged_trackers = TorrentUtils.getMergedTrackers( dms );
 
 				new MultiTrackerEditor(null, null, merged_trackers,
 					new TrackerEditorListener() {
@@ -2221,103 +2814,9 @@ public class TorrentUtil
 
 		itemEditTrackerMerged.setEnabled(dms.length > 1);
 
-		// edit webseeds
+			// edit webseeds
 
-		final MenuItem itemEditWebSeeds = new MenuItem(menuTracker, SWT.PUSH);
-		Messages.setLanguageText(itemEditWebSeeds,
-				"MyTorrentsView.menu.editWebSeeds");
-		itemEditWebSeeds.addListener(SWT.Selection, new ListenerDMTask(dms) {
-			@Override
-			public void run(final DownloadManager[] dms) {
-				final TOTorrent torrent = dms[0].getTorrent();
-
-				if (torrent == null) {
-
-					return;
-				}
-
-				List getright = getURLList(torrent, "url-list");
-				List webseeds = getURLList(torrent, "httpseeds");
-
-				Map ws = new HashMap();
-
-				ws.put("getright", getright);
-				ws.put("webseeds", webseeds);
-
-				ws = BDecoder.decodeStrings(ws);
-
-				new WebSeedsEditor(null, ws, new WebSeedsEditorListener() {
-					@Override
-					public void webSeedsChanged(String oldName, String newName, Map ws) {
-						try {
-							// String -> byte[]
-
-							ws = BDecoder.decode(BEncoder.encode(ws));
-
-							List getright = (List) ws.get("getright");
-
-							if (getright == null || getright.size() == 0) {
-
-								torrent.removeAdditionalProperty("url-list");
-
-							} else {
-
-								torrent.setAdditionalListProperty("url-list", getright);
-							}
-
-							List webseeds = (List) ws.get("webseeds");
-
-							if (webseeds == null || webseeds.size() == 0) {
-
-								torrent.removeAdditionalProperty("httpseeds");
-
-							} else {
-
-								torrent.setAdditionalListProperty("httpseeds", webseeds);
-							}
-
-							PluginInterface pi = CoreFactory.getSingleton().getPluginManager().getPluginInterfaceByClass(
-									ExternalSeedPlugin.class);
-
-							if (pi != null) {
-
-								ExternalSeedPlugin ext_seed_plugin = (ExternalSeedPlugin) pi.getPlugin();
-
-								ext_seed_plugin.downloadChanged(PluginCoreUtils.wrap(dms[0]));
-							}
-
-						} catch (Throwable e) {
-
-							Debug.printStackTrace(e);
-						}
-					}
-				}, true);
-
-			}
-
-			protected List getURLList(TOTorrent torrent, String key) {
-				Object obj = torrent.getAdditionalProperty(key);
-
-				if (obj instanceof byte[]) {
-
-					List l = new ArrayList();
-
-					l.add(obj);
-
-					return (l);
-
-				} else if (obj instanceof List) {
-
-					return ((List) obj);
-
-				} else {
-
-					return (new ArrayList());
-				}
-			}
-		});
-
-		itemEditWebSeeds.setEnabled(dms.length == 1);
+		addEditWebseeds( menuTracker, dms );
 
 		// manual update
 
@@ -2338,6 +2837,7 @@ public class TorrentUtil
 		boolean scrape_stopped = COConfigurationManager.getBooleanParameter("Tracker Client Scrape Stopped Enable");
 
 		boolean manualScrape;
+		boolean clearPeerCache = false;
 		
 		if ( !scrape_enabled ){
 			
@@ -2352,9 +2852,32 @@ public class TorrentUtil
 			manualScrape = allStopped;
 		}
 
+		for ( DownloadManager dm: dms ){
+		
+			if ( !dm.getDownloadState().getTrackerResponseCache().isEmpty()){
+				
+				clearPeerCache = true;
+				
+				break;
+				
+			}else{
+				
+				TRTrackerAnnouncer tc = dm.getTrackerClient();
+				
+				if ( tc != null ){
+					
+					if ( !tc.getTrackerResponseCache().isEmpty()){
+						
+						clearPeerCache = true;
+						
+						break;
+					}
+				}
+			}
+		}
+		
 		final MenuItem itemManualScrape = new MenuItem(menuTracker, SWT.PUSH);
-		Messages.setLanguageText(itemManualScrape,
-				"GeneralView.label.trackerscrapeupdate");
+		Messages.setLanguageText(itemManualScrape,	"GeneralView.label.trackerscrapeupdate");
 		
 		itemManualScrape.addListener(SWT.Selection, new ListenerDMTask(dms, true, true) {
 			@Override
@@ -2364,9 +2887,21 @@ public class TorrentUtil
 		});
 		itemManualScrape.setEnabled(manualScrape);
 
+		final MenuItem itemClearPeerCache = new MenuItem(menuTracker, SWT.PUSH);
+		Messages.setLanguageText(itemClearPeerCache, "GeneralView.label.clearpeercache");
+		
+		itemClearPeerCache.addListener(SWT.Selection, new ListenerDMTask(dms, true, true) {
+			@Override
+			public void run(DownloadManager dm) {
+				dm.getDownloadState().clearTrackerResponseCache();
+			}
+		});
+		itemClearPeerCache.setEnabled(clearPeerCache);
+		
 			// enable hybrid v2 swarm, create hybrid/v2
 		
 		List<DownloadManager>	can_v2_from_hybrid 	= new ArrayList<>();
+		List<DownloadManager>	can_v1_from_hybrid 	= new ArrayList<>();
 		List<DownloadManager>	can_create_from_v1 	= new ArrayList<>();
 		
 		for ( DownloadManager dm: dms ){
@@ -2404,20 +2939,22 @@ public class TorrentUtil
 					}
 				}else if ( tt == TOTorrent.TT_V1_V2 ){
 					
+					int ett = torrent.getEffectiveTorrentType();
+					
 					try{
-						byte[] truncated_v2_hash = torrent.getTruncatedHash( TOTorrent.TT_V2 );
+						byte[] truncated_v_other_hash = torrent.getTruncatedHash( ett==TOTorrent.TT_V1?TOTorrent.TT_V2:TOTorrent.TT_V1 );
 											
-						if ( dm.getGlobalManager().getDownloadManager( new HashWrapper( truncated_v2_hash )) == null ){
+						if ( dm.getGlobalManager().getDownloadManager( new HashWrapper( truncated_v_other_hash )) == null ){
 							
 							boolean compatible = true;
 							
 							DiskManagerFileInfo[] files = dm.getDiskManagerFileInfoSet().getFiles();
 							
-							for ( DiskManagerFileInfo file: files ){
+							for ( DiskManagerFileInfo dm_file: files ){
 								
-								if ( file.getTorrentFile().isPadFile()){
+								if ( dm_file.getTorrentFile().isPadFile()){
 									
-								}else if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR || file.getLink() != null ){
+								}else if ( dm_file.getStorageType() != DiskManagerFileInfo.ST_LINEAR || dm_file.isLinked()){
 									
 									compatible = false;
 									
@@ -2427,7 +2964,14 @@ public class TorrentUtil
 							
 							if ( compatible ){
 							
-								can_v2_from_hybrid.add( dm );
+								if ( ett==TOTorrent.TT_V1 ){
+								
+									can_v2_from_hybrid.add( dm );
+									
+								}else{
+									
+									can_v1_from_hybrid.add( dm );
+								}
 							}
 						}
 					}catch( Throwable e ){
@@ -2437,92 +2981,112 @@ public class TorrentUtil
 				}
 			}
 		}
-		
-		final MenuItem itemHybridV2 = new MenuItem(menuTracker, SWT.PUSH);
-		Messages.setLanguageText( itemHybridV2,	"GeneralView.label.run.hybrid.v2");
-		
-		itemHybridV2.addListener(SWT.Selection, new ListenerDMTask(can_v2_from_hybrid.toArray(new DownloadManager[0]), true, true) {
-			@Override
-			public void run(DownloadManager old_manager ) {
 				
-				TOTorrent torrent = old_manager.getTorrent();
-				
-				try{
-					TOTorrent other = torrent.selectHybridHashType( TOTorrent.TT_V2 );
-					
-					File temp_file = AETemporaryFileHandler.createTempFile();
-
-					TorrentUtils.writeToFile( other, temp_file, false );
-												
-					File save_loc = old_manager.getSaveLocation();
-						
-					String	save_parent = save_loc.getParentFile().getAbsolutePath();
-					String	save_file	= save_loc.getName();
-					
-					old_manager.getGlobalManager().addDownloadManager( 
-							temp_file.getAbsolutePath(),
-							other.getHash(),
-							save_parent,
-							save_file,
-							DownloadManager.STATE_WAITING,
-							true,
-							old_manager.getAssumedComplete(),
-							new DownloadManagerInitialisationAdapter(){
-								
-								@Override
-								public void 
-								initialised(
-									DownloadManager new_manager, 
-									boolean 		for_seeding)
-								{
-									DiskManagerFileInfoSet old_file_info_set = old_manager.getDiskManagerFileInfoSet();
-									DiskManagerFileInfoSet new_file_info_set = new_manager.getDiskManagerFileInfoSet();
-
-									DiskManagerFileInfo[] old_file_infos = old_file_info_set.getFiles();
-									
-									DownloadManagerState new_dms = new_manager.getDownloadState();
-
-									new_dms.setDisplayName( old_manager.getDisplayName() + " ("+ MessageText.getString( "label.hybrid" ).toLowerCase() + ") (v2)");
-									
-									try {
-										new_dms.suppressStateSave(true);
-									
-										boolean[] to_skip = new boolean[old_file_infos.length];
-										
-										for ( int i=0; i < old_file_infos.length; i++ ){
-											
-											if ( old_file_infos[i].isSkipped()){
-												
-												to_skip[i] = true;
-											}
-										}
-
-										new_file_info_set.setSkipped(to_skip, true);
-	
-									} finally {
-	
-										new_dms.suppressStateSave(false);
-									}
-								}
-								
-								@Override
-								public int 
-								getActions()
-								{
-									return 0;
-								}
-							});
-							
-					
-				}catch( Throwable e ){
-					
-					Debug.out( e );
-				}
+		for ( int i=0;i<2;i++){
+			
+			List<DownloadManager>	canHybrid;
+			int						canHybridTo;
+			
+			if ( i ==0 ){
+				canHybrid		= can_v1_from_hybrid;
+				canHybridTo		= TOTorrent.TT_V1;
+			}else{
+				canHybrid		= can_v2_from_hybrid;
+				canHybridTo		= TOTorrent.TT_V2;
 			}
-		});
+			
+			if ( canHybrid.isEmpty()){
+				
+				continue;
+			}
+			
+			MenuItem itemHybridVn = new MenuItem(menuTracker, SWT.PUSH);
+			Messages.setLanguageText( itemHybridVn,	i==0?"GeneralView.label.run.hybrid.v1":"GeneralView.label.run.hybrid.v2");
+
+			itemHybridVn.addListener(SWT.Selection, new ListenerDMTask(canHybrid.toArray(new DownloadManager[0]), true, true) {
+				@Override
+				public void run(DownloadManager old_manager ) {
+					
+					TOTorrent torrent = old_manager.getTorrent();
+					
+					try{
+						TOTorrent other = torrent.selectHybridHashType( canHybridTo );
+						
+						File temp_file = AETemporaryFileHandler.createTempFile();
+	
+						TorrentUtils.writeToFile( other, temp_file, false );
+													
+						File save_loc = old_manager.getSaveLocation();
+							
+						String	save_parent = save_loc.getParentFile().getAbsolutePath();
+						String	save_file	= save_loc.getName();
+						
+						old_manager.getGlobalManager().addDownloadManager( 
+								temp_file.getAbsolutePath(),
+								other.getHash(),
+								save_parent,
+								save_file,
+								DownloadManager.STATE_WAITING,
+								true,
+								old_manager.getAssumedComplete(),
+								new DownloadManagerInitialisationAdapter(){
+									
+									@Override
+									public void 
+									initialised(
+										DownloadManager new_manager, 
+										boolean 		for_seeding)
+									{
+										DiskManagerFileInfoSet old_file_info_set = old_manager.getDiskManagerFileInfoSet();
+										DiskManagerFileInfoSet new_file_info_set = new_manager.getDiskManagerFileInfoSet();
+	
+										DiskManagerFileInfo[] old_file_infos = old_file_info_set.getFiles();
+										
+										DownloadManagerState new_dms = new_manager.getDownloadState();
+	
+										new_dms.setDisplayName( 
+											old_manager.getDisplayName() + 
+											" ("+ MessageText.getString( "label.hybrid" ).toLowerCase() + 
+											") (v" + (canHybridTo==TOTorrent.TT_V1?1:2)+ ")");
+										
+										try {
+											new_dms.suppressStateSave(true);
+										
+											boolean[] to_skip = new boolean[old_file_infos.length];
+											
+											for ( int i=0; i < old_file_infos.length; i++ ){
+												
+												if ( old_file_infos[i].isSkipped()){
+													
+													to_skip[i] = true;
+												}
+											}
+	
+											new_file_info_set.setSkipped(to_skip, true);
 		
-		itemHybridV2.setEnabled( !can_v2_from_hybrid.isEmpty());
+										} finally {
 		
+											new_dms.suppressStateSave(false);
+										}
+									}
+									
+									@Override
+									public int 
+									getActions()
+									{
+										return 0;
+									}
+								});
+								
+						
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+			});
+		}
+						
 		final MenuItem itemV1Hybrid = new MenuItem(menuTracker, SWT.PUSH);
 		Messages.setLanguageText( itemV1Hybrid,	"menu.create.hybrid.from.v1");
 		
@@ -2614,8 +3178,8 @@ public class TorrentUtil
 									}
 
 									@Override
-									public void 
-									run(
+									public boolean 
+									runOperation(
 										CoreOperation operation ) 
 									{
 										try {
@@ -2666,6 +3230,8 @@ public class TorrentUtil
 	
 											Debug.printStackTrace(e);
 										}
+										
+										return( true );
 									}
 	
 									@Override
@@ -2971,6 +3537,11 @@ public class TorrentUtil
 
 		itemTorrentThumb.setEnabled(hasSelection);
 
+			// open with
+		
+		MenuItem itemOpenWith = MenuBuildUtils.addOpenWithMenu( menuTracker, false, dms, true );
+		itemOpenWith.setEnabled(hasSelection&& MenuBuildUtils.hasOpenWithMenu( dms, true ));
+		
 		// explore torrent file
 
 		final MenuItem itemTorrentExplore = new MenuItem(menuTracker, SWT.PUSH);
@@ -3024,53 +3595,244 @@ public class TorrentUtil
 		}
 	}
 
-	protected static void moveDataFiles(Shell shell, DownloadManager[] dms) {
+		// used to submit multiple moves so they are done in order
+	
+	private static final AsyncDispatcher move_disp = new AsyncDispatcher();
+
+	public static void 
+	moveDataFiles(
+		Shell 				shell, 
+		DownloadManager[] 	dms,
+		boolean				batch ) 
+	{
 		if (dms != null && dms.length > 0) {
 
-			DirectoryDialog dd = new DirectoryDialog(shell);
-
-			String filter_path = TorrentOpener.getFilterPathData();
-
-			// If we don't have a decent path, default to the path of the first
-			// torrent.
-			if (filter_path == null || filter_path.trim().length() == 0) {
-				filter_path = new File(dms[0].getTorrentFileName()).getParent();
-			}
-
-			dd.setFilterPath(filter_path);
-
-			dd.setText(MessageText.getString("MyTorrentsView.menu.movedata.dialog"));
-
-			String path = dd.open();
-
-			if (path != null) {
-
-				TorrentOpener.setFilterPathData(path);
-
-				File target = new File(path);
-
-					// we can do this in parallel as the core manages queueing of move ops now
+			if ( batch ){
 				
-				for (int i = 0; i < dms.length; i++) {
-
-					DownloadManager dm = dms[i];
+				Map<String,DownloadManager>		dm_name_map = new HashMap<>();
+				
+				StringBuilder details = new StringBuilder( 32*1024 );
+				
+				for ( DownloadManager dm: dms ){
+										
+					dm_name_map.put( dm.getInternalName(), dm );	
 					
-					AEThread2.createAndStartDaemon( "File Mover" , ()->{
+					details.append( "# " + dm.getInternalName() + " - " );
+					details.append( dm.getDisplayName());
+					details.append( "\n\n" );
+					
+					details.append( "    " );
+					details.append( dm.getSaveLocation().getParentFile().getAbsolutePath());
+					details.append( "\n\n" );
+				}
+				
+				TextViewerWindow viewer =
+						new TextViewerWindow(
+		        			  Utils.findAnyShell(),
+		        			  "batch.move.title",
+		        			  "batch.move.text",
+		        			  details.toString(), true, true );
+
+				viewer.setEditable( true );
+				
+				viewer.setNonProportionalFont();
 								
-							// get back onto SWT thread to cause progress dialog window to be shown
-						
-						Utils.execSWTThread(()->{
+				viewer.addListener(
+					new TextViewerWindow.TextViewerWindowListener() {
+
+						@Override
+						public void closed(){
+							if ( !viewer.getOKPressed()){
+								return;
+							}
+								
+							String text = viewer.getText();
 							
-							try{
+							if ( text.equals( details.toString())){
 								
-								dm.moveDataFilesLive(target);
-
-							}catch( Throwable e ){
-
-								Logger.log(new LogAlert(dm, LogAlert.REPEATABLE,
-										"Download data move operation failed", e));
-							}});
+								return;
+							}
+							
+							String[] lines = text.split( "\n" );
+							
+							StringBuilder result = new StringBuilder( 23*1024 );
+							
+							List<Object[]> actions = new ArrayList<>();
+									
+							DownloadManager current_dm = null;
+							
+							for ( String line: lines ){
+								
+								line = line.trim();
+								
+								if ( line.isEmpty()){
+									
+									continue;
+								}
+								
+								if ( line.startsWith( "#" )){
+									
+									try{
+										String[] bits = line.split(  "\\s+", 3 );	
+									
+										current_dm = dm_name_map.get( bits[1].trim());
+											
+										if ( current_dm == null ){
+											
+											result.append( "Invalid line: " + line + ": download not found\n" );
+										}
+									}catch( Throwable e ){
+										
+										result.append( "Invalid line: " + line + "\n" );
+									}
+								}else{
+																		
+									try{										
+										String path = line.trim();
+										
+										if ( !current_dm.getSaveLocation().getParentFile().getAbsolutePath().equals( path )){
+										
+											actions.add( new Object[]{ current_dm, path } );
+										}
+									}catch( Throwable e ){
+										
+										result.append( "Invalid line: " + line + "\n" );
+									}
+								}
+							}
+							
+							if ( result.length() > 0 ){
+								
+								Utils.execSWTThreadLater(
+									1, 
+									new Runnable()
+									{
+										public void
+										run()
+										{
+											TextViewerWindow viewer =
+													new TextViewerWindow(
+									        			  Utils.findAnyShell(),
+									        			  "batch.move.title",
+									        			  "batch.retarget.error.text",
+									        			  result.toString(), true, true );
+											
+											viewer.setNonProportionalFont();
+											
+											viewer.goModal();
+										}
+									});
+								
+							}else if ( !actions.isEmpty()){
+								
+								for ( Object[] action: actions ){
+									
+									DownloadManager dm = (DownloadManager)action[0];
+									
+									String	path 	= (String)action[1];																
+										
+									result.append( "# " + dm.getInternalName() + " - " );
+									result.append( dm.getDisplayName());
+									result.append( "\n\n" );
+									
+									result.append( "    " + dm.getSaveLocation().getParentFile().getAbsolutePath() +  " -> " + path + "\n\n" );
+									
+									move_disp.dispatch(()->{
+										
+												// get back onto SWT thread to cause progress dialog window to be shown
+											
+											Utils.execSWTThread(()->{
+												
+												try{
+													
+													dm.moveDataFilesLive( new File( path) );
+					
+												}catch( Throwable e ){
+					
+													Logger.log(new LogAlert(dm, LogAlert.REPEATABLE,
+															"Download data move operation failed", e));
+												}});
+										});
+								}
+								
+								if ( result.length() > 0 ){
+									
+									result.append( MessageText.getString( "batch.move.progress" ));
+									
+									Utils.execSWTThreadLater(
+										1, 
+										new Runnable()
+										{
+											public void
+											run()
+											{
+												TextViewerWindow viewer =
+														new TextViewerWindow(
+										        			  Utils.findAnyShell(),
+										        			  "batch.move.title",
+										        			  "batch.retarget.result.text",
+										        			  result.toString(), true, true );
+												
+												viewer.setNonProportionalFont();
+												
+												viewer.goModal();
+											}
+										});
+								}
+							}
+						}
 					});
+				
+				viewer.goModal();
+				
+				
+			}else{
+				
+				DirectoryDialog dd = new DirectoryDialog(shell);
+	
+				String filter_path = TorrentOpener.getFilterPathData();
+	
+				// If we don't have a decent path, default to the path of the first
+				// torrent.
+				if (filter_path == null || filter_path.trim().length() == 0) {
+					filter_path = new File(dms[0].getTorrentFileName()).getParent();
+				}
+	
+				dd.setFilterPath(filter_path);
+	
+				dd.setText(MessageText.getString("MyTorrentsView.menu.movedata.dialog"));
+	
+				String path = dd.open();
+	
+				if (path != null) {
+	
+					TorrentOpener.setFilterPathData(path);
+	
+					File target = new File(path);
+	
+						// we can do this in parallel as the core manages queueing of move ops now
+					
+					for (int i = 0; i < dms.length; i++) {
+	
+						DownloadManager dm = dms[i];
+						
+						move_disp.dispatch(()->{
+									
+								// get back onto SWT thread to cause progress dialog window to be shown
+							
+							Utils.execSWTThread(()->{
+								
+								try{
+									
+									dm.moveDataFilesLive(target);
+	
+								}catch( Throwable e ){
+	
+									Logger.log(new LogAlert(dm, LogAlert.REPEATABLE,
+											"Download data move operation failed", e));
+								}});
+						});
+					}
 				}
 			}
 		}
@@ -3086,7 +3848,44 @@ public class TorrentUtil
 		}
 	}
 	
-	protected static void setMOC(Shell shell, DownloadManager[] dms) {
+	protected static String getMOC(DownloadManager[] dms) {
+		String existing_moc = null;
+		
+		if (dms != null && dms.length > 0) {
+
+			for (int i = 0; i < dms.length; i++) {
+	
+				String moc_str = dms[i].getDownloadState().getAttribute( DownloadManagerState.AT_MOVE_ON_COMPLETE_DIR );
+				
+				if ( existing_moc == null || existing_moc.equals( moc_str )){
+					
+					existing_moc = moc_str;
+					
+				}else{
+					
+					existing_moc = null;
+					
+					break;
+				}
+			}
+		}
+		
+		return( existing_moc );
+	}
+	
+	protected static void setMOC( DownloadManager[] dms, String path ) {
+		if (dms != null && dms.length > 0) {
+			
+			path = new File( path ).getAbsolutePath();
+			
+			for (int i = 0; i < dms.length; i++) {
+
+				dms[i].getDownloadState().setAttribute( DownloadManagerState.AT_MOVE_ON_COMPLETE_DIR, path );
+			}
+		}
+	}
+		
+	protected static void selectMOC(Shell shell, DownloadManager[] dms, Consumer<String> moc_setter ) {
 		if (dms != null && dms.length > 0) {
 
 			DirectoryDialog dd = new DirectoryDialog(shell);
@@ -3106,15 +3905,10 @@ public class TorrentUtil
 			String path = dd.open();
 
 			if ( path != null ){
-
-				TorrentOpener.setFilterPathData(path);
-
-				File target = new File(path);
-
-				for (int i = 0; i < dms.length; i++) {
-
-					dms[i].getDownloadState().setAttribute( DownloadManagerState.AT_MOVE_ON_COMPLETE_DIR, target.getAbsolutePath());
-				}
+				
+				TorrentOpener.setFilterPathData( path );
+				
+				moc_setter.accept( path );
 			}
 		}
 	}
@@ -3146,14 +3940,19 @@ public class TorrentUtil
 
 				for (int i = 0; i < dms.length; i++) {
 
-					try {
-						dms[i].exportDownload(target);
+					int f_i = i;
+					
+					AEThread2.createAndStartDaemon(
+						"Exporter",
+						()->{
+							try{
+								dms[f_i].exportDownload(target);
+							} catch (Throwable e) {
 
-					} catch (Throwable e) {
-
-						Logger.log(new LogAlert(dms[i], LogAlert.REPEATABLE,
-								"Download export operation failed", e));
-					}
+								Logger.log(new LogAlert(dms[f_i], LogAlert.REPEATABLE,
+										"Download export operation failed", e));
+							}
+						});
 				}
 			}
 		}
@@ -3439,7 +4238,8 @@ public class TorrentUtil
 				DownloadManager dm = dms[i];
 
 				int state = dm.getState();
-				if (state != DownloadManager.STATE_ERROR) {
+				
+				if ( state != DownloadManager.STATE_ERROR ){
 					
 						// if download is stopped and not allocated then use the 'move' operation to avoid the subsequent recheck
 						
@@ -3474,33 +4274,33 @@ public class TorrentUtil
 						}
 					}
 					
-					if ( !dm.filesExist(true)){
+					if ( !dm.filesExist(true, true )){
 						
 						state = DownloadManager.STATE_ERROR;
 					}
 				}
 
-				if (state == DownloadManager.STATE_ERROR) {
+				if ( state == DownloadManager.STATE_ERROR ){
 
 					dm.setTorrentSaveDir(FileUtil.newFile(sSavePath), false);
 
-					boolean found = dm.filesExist(true);
+					boolean found = dm.filesExist(true, true);
 					if (!found && dm.getTorrent() != null
 							&& !dm.getTorrent().isSimpleTorrent()) {
 						String parentPath = fSavePath.getParent();
 						if (parentPath != null) {
 							dm.setTorrentSaveDir(FileUtil.newFile(parentPath), false);
-							found = dm.filesExist(true);
+							found = dm.filesExist(true, true);
 							if (!found) {
 								dm.setTorrentSaveDir(FileUtil.newFile(parentPath,
 									fSavePath.getName()), true);
 
-								found = dm.filesExist(true);
+								found = dm.filesExist(true, true);
 								if (!found) {
 									dm.setTorrentSaveDir(FileUtil.newFile(sSavePath,
 										dm.getDisplayName()), true);
 
-									found = dm.filesExist(true);
+									found = dm.filesExist(true, true);
 									if (!found) {
 										dm.setTorrentSaveDir(FileUtil.newFile(sSavePath), false);
 									}
@@ -3509,10 +4309,20 @@ public class TorrentUtil
 						}
 					}
 
-					if (found) {
+					if ( found ){
+						
+							// unfortunately we need to do this to kick it into a reasonable state (otherwise an "error" download
+							// will stay marked as such)
+						
 						dm.stopIt(DownloadManager.STATE_STOPPED, false, false);
-
-						ManagerUtils.queue(dm, shell);
+						
+						ManagerUtils.queue(dm);
+	
+					}else{
+						
+							// kick into error state to make things clear
+						
+						dm.filesExist( true, false );
 					}
 				}
 			}
@@ -3608,12 +4418,8 @@ public class TorrentUtil
 		}
 		return false;
 	}
-
-	public static void stopOrStartDataSources(Object[] datasources) {
-		stopOrStartDataSources(datasources,false);
-	}
 	
-	public static void stopOrStartDataSources(Object[] datasources,boolean force_or_pause) {
+	public static void stopOrStartDataSources(Object[] datasources, boolean extendedAction ) {
 		DownloadManager[] dms = toDMS(datasources);
 		DiskManagerFileInfo[] dmfi = toDMFI(datasources);
 		if (dms.length == 0 && dmfi.length == 0) {
@@ -3624,9 +4430,9 @@ public class TorrentUtil
 			doStop = true;
 		}
 		if (doStop) {
-			stopDataSources(datasources, force_or_pause);
+			stopDataSources(datasources, extendedAction);
 		} else {
-			queueDataSources(datasources, true, force_or_pause);
+			queueDataSources(datasources, extendedAction);
 		}
 	}
 
@@ -3656,19 +4462,18 @@ public class TorrentUtil
 		}
 	}
 
-	public static void queueDataSources(Object[] datasources,
-			boolean startStoppedParents) {
-		queueDataSources( datasources, startStoppedParents, false );
-	}
 	
-	public static void queueDataSources(Object[] datasources,
-			boolean startStoppedParents, boolean force) {
+	public static void 
+	queueDataSources(
+		Object[] datasources,
+		boolean extendedAction ) 
+	{
 		DownloadManager[] dms = toDMS(datasources);
 		for (DownloadManager dm : dms) {
-			if ( force ){
+			if ( extendedAction ){
 				dm.setForceStart( true );
 			}else{
-				ManagerUtils.queue(dm, null);
+				ManagerUtils.queue(dm);
 			}
 		}
 		DiskManagerFileInfo[] fileInfos = toDMFI(datasources);
@@ -3676,14 +4481,10 @@ public class TorrentUtil
 			FilesViewMenuUtil.changePriority(FilesViewMenuUtil.PRIORITY_NORMAL,
 					Arrays.asList(fileInfos));
 
-			if (startStoppedParents) {
+			if (extendedAction) {
 				for (DiskManagerFileInfo fileInfo : fileInfos) {
 					if (fileInfo.getDownloadManager().getState() == DownloadManager.STATE_STOPPED) {
-						if ( force ){
-							fileInfo.getDownloadManager().setForceStart( true );
-						}else{
-							ManagerUtils.queue(fileInfo.getDownloadManager(), null);
-						}
+						ManagerUtils.queue(fileInfo.getDownloadManager());
 					}
 				}
 			}
@@ -3743,10 +4544,12 @@ public class TorrentUtil
 		text_entry.setMessage(msg_key_prefix + "message");
 		text_entry.setPreenteredText(text, false);
 		text_entry.setWidthHint( 500 );
-		text_entry.setLineHeight( 10 );
+		text_entry.setHeightHint( 200 );
+		//text_entry.setLineHeight( 10 );
 		text_entry.setMultiLine(true);
 		text_entry.setResizeable( true );
 		text_entry.setDetectURLs( true );
+		text_entry.setRememberLocationSize("ui.torrent.comment");
 		
 		text_entry.prompt(new UIInputReceiverListener() {
 			@Override
@@ -3786,7 +4589,9 @@ public class TorrentUtil
 		text_entry.setMultiLine(true);
 		text_entry.setResizeable( true );
 		text_entry.setWidthHint( 500 );
-		text_entry.setLineHeight( 16 );
+		text_entry.setHeightHint( 200 );
+		//text_entry.setLineHeight( 16 );
+		text_entry.setRememberLocationSize( "ui.torrent.description" );
 		text_entry.prompt(new UIInputReceiverListener() {
 			@Override
 			public void UIInputReceiverClosed(UIInputReceiver text_entry) {
@@ -3892,7 +4697,11 @@ public class TorrentUtil
 
 			String retry_url = UrlUtils.parseTextForMagnets(torrentName);
 			if (retry_url == null) {
-				retry_url = UrlUtils.parseTextForMagnets(sFirstChunk);
+				
+					// to many html files these days have non-torrent related raw hashes in them
+					// so don't look for these
+				
+				retry_url = UrlUtils.parseTextForMagnets(sFirstChunk,false);
 			}
 
 			if (retry_url != null) {
@@ -4067,7 +4876,7 @@ public class TorrentUtil
 		if (!hasRealDM) {
 			MultipleDocumentInterfaceSWT mdi = UIFunctionsManagerSWT.getUIFunctionsSWT().getMDISWT();
 			if (mdi != null) {
-				MdiEntrySWT entry = mdi.getCurrentEntry();
+				MdiEntrySWT entry = mdi.getSelectedEntry();
 				if (entry != null) {
 					if (entry.getDataSource() instanceof DownloadManager) {
 						hasRealDM = true;
@@ -4087,7 +4896,10 @@ public class TorrentUtil
 		
 		boolean hasDM = false;
 
+		boolean canPause = false;
 		boolean canRecheck = false;
+		boolean canAllocate = false;
+		Boolean canArchive = null;	// all must be archiveable for this to be true
 		
 		if (currentContent.length > 0 && hasRealDM) {
 
@@ -4097,9 +4909,7 @@ public class TorrentUtil
 			boolean canMoveUp = false;
 			boolean canMoveDown = false;
 			boolean canDownload = false;
-			
-			canCheckExist = true;
-			
+						
 			GlobalManager gm = null;
 			for (int i = 0; i < currentContent.length; i++) {
 				ISelectedContent content = currentContent[i];
@@ -4112,6 +4922,8 @@ public class TorrentUtil
 				}
 				if ( gm == null ){
 					gm = dm.getGlobalManager();
+					
+					canCheckExist = true;	// first time through with a dm, setup var
 				}
 
 				int state = dm.getState();
@@ -4159,13 +4971,28 @@ public class TorrentUtil
 						if (!canRunFileInfo
 								&& fileInfo.getAccessMode() == DiskManagerFileInfo.READ
 								&& fileInfo.getDownloaded() == fileInfo.getLength()
-								&& fileInfo.getFile(true).exists()) {
+								&& Utils.fileExistsWithTimeout( fileInfo.getFile(true))) {
 							canRunFileInfo = true;
 						}
 					}
 				}
 				
-				canRecheck = canRecheck || dm.canForceRecheck();
+				canPause = canPause || !dm.isPaused();
+				canRecheck = canRecheck || ManagerUtils.canForceRecheck( dm );
+				canAllocate = canAllocate || ManagerUtils.canAllocate( dm );
+				
+				Download stub = PluginCoreUtils.wrap(dm);
+
+				if ( stub != null && stub.canStubbify()){
+
+					if ( canArchive == null ){
+						
+						canArchive = true;
+					}
+				}else{
+					
+					canArchive = false;
+				}
 			}
 
 			boolean canRemove = hasDM || canRemoveFileInfo;
@@ -4259,12 +5086,18 @@ public class TorrentUtil
 			}
 		}
 
+		mapNewToolbarStates.put( TU_ITEM_PAUSE, canPause ? UIToolBarItem.STATE_ENABLED : 0);
 		mapNewToolbarStates.put( TU_ITEM_RECHECK, canRecheck ? UIToolBarItem.STATE_ENABLED : 0);
 		mapNewToolbarStates.put( TU_ITEM_CHECK_FILES, canCheckExist ? UIToolBarItem.STATE_ENABLED : 0);
+		mapNewToolbarStates.put( TU_ITEM_ALLOCATE, canAllocate ? UIToolBarItem.STATE_ENABLED : 0);
+		mapNewToolbarStates.put( TU_ITEM_ARCHIVE, canArchive!=null&&canArchive ? UIToolBarItem.STATE_ENABLED : 0);
 		
 		boolean ss = COConfigurationManager.getBooleanParameter( "Show Side Bar" );
 		
 		mapNewToolbarStates.put( TU_ITEM_SHOW_SIDEBAR, UIToolBarItem.STATE_ENABLED | (ss?UIToolBarItem.STATE_DOWN:0));
+
+		mapNewToolbarStates.put( BF_ITEM_BACK, tv!=null&&tv.canMoveBack() ? UIToolBarItem.STATE_ENABLED : 0);
+		mapNewToolbarStates.put( BF_ITEM_FORWARD, tv!=null&&tv.canMoveForward() ? UIToolBarItem.STATE_ENABLED : 0);
 
 		return mapNewToolbarStates;
 	}
@@ -4312,7 +5145,9 @@ public class TorrentUtil
 			if (dm == null) {
 				continue;
 			}
-			if ( PluginCoreUtils.wrap( dm ).canStubbify()){
+			Download dl = PluginCoreUtils.wrap( dm );
+			
+			if ( dl != null && dl.canStubbify()){
 				can_archive = true;
 			}
 		}
@@ -4322,7 +5157,7 @@ public class TorrentUtil
 				continue;
 			}
 
-			boolean deleteTorrent = COConfigurationManager.getBooleanParameter("def.deletetorrent");
+			boolean deleteTorrent = COConfigurationManager.getBooleanParameter(ConfigKeys.File.BCFG_DEF_DELETETORRENT);
 
 			int confirm = COConfigurationManager.getIntParameter("tb.confirm.delete.content");
 			boolean doPrompt = confirm == 0 | forcePrompt;
@@ -4359,11 +5194,16 @@ public class TorrentUtil
 						defaultButtonPos);
 				int numLeft = (dms.length - i);
 				if (numLeft > 1) {
-					mb.setRemember("na", false, MessageText.getString(
-							"v3.deleteContent.applyToAll", new String[] {
-								"" + numLeft
+					mb.setRemember(
+							"na", 
+							COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_DEF_DELETEALLSELECTED), 
+							MessageText.getString(
+								"v3.deleteContent.applyToAll", new String[] {
+									"" + numLeft
 							}));
-					// never store remember state
+					
+						// never store remember state
+					
 					mb.setRememberOnlyIfButton(-3);
 				}
 				mb.setRelatedObject(dm);
@@ -4498,7 +5338,7 @@ public class TorrentUtil
 
 			DownloadStubEx dm = dms[i];
 
-			boolean deleteTorrent = COConfigurationManager.getBooleanParameter("def.deletetorrent");
+			boolean deleteTorrent = COConfigurationManager.getBooleanParameter(ConfigKeys.File.BCFG_DEF_DELETETORRENT);
 
 			int confirm = COConfigurationManager.getIntParameter("tb.confirm.delete.content");
 			boolean doPrompt = confirm == 0 | forcePrompt;
@@ -4531,7 +5371,10 @@ public class TorrentUtil
 						defaultButtonPos);
 				int numLeft = (dms.length - i);
 				if (numLeft > 1) {
-					mb.setRemember("na", false, MessageText.getString(
+					mb.setRemember(
+						"na", 
+						COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_DEF_DELETEALLSELECTED),
+						MessageText.getString(
 							"v3.deleteContent.applyToAll", new String[] {
 								"" + numLeft
 							}));

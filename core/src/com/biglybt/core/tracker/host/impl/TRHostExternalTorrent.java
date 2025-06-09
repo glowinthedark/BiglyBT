@@ -158,13 +158,6 @@ TRHostExternalTorrent
 
 	@Override
 	public boolean
-	isCreated()
-	{
-		return( false );
-	}
-
-	@Override
-	public boolean
 	isDecentralised()
 	{
 		return( TorrentUtils.isDecentralised( getAnnounceURL()));
@@ -213,29 +206,6 @@ TRHostExternalTorrent
                	setAnnounceURLSets(
                		TOTorrentAnnounceURLSet[]	sets )
 				{
-				}
-
-               	@Override
-                public TOTorrentAnnounceURLSet
-               	createAnnounceURLSet(
-               		URL[]	urls )
-				{
-					return( new TOTorrentAnnounceURLSet()
-							{
-								@Override
-								public URL[]
-						       	getAnnounceURLs()
-								{
-									return( new URL[0]);
-								}
-
-						       	@Override
-						        public void
-						       	setAnnounceURLs(
-						       		URL[]		urls )
-								{
-								}
-							});
 				}
 			});
 	}
@@ -351,6 +321,25 @@ TRHostExternalTorrent
 		throw( new TOTorrentException( "Not supported", TOTorrentException.RT_HASH_FAILS ));
 	}
 
+   	@Override
+	public TOTorrent
+	setSimpleTorrentDisabled(
+		boolean	disabled )
+	
+		throws TOTorrentException
+	{
+   		throw( new TOTorrentException( "Not supported", TOTorrentException.RT_CREATE_FAILED ));
+	}
+	
+	@Override
+	public boolean
+	isSimpleTorrentDisabled()
+	
+		throws TOTorrentException
+	{
+		throw( new TOTorrentException( "Not supported", TOTorrentException.RT_CREATE_FAILED ));
+	}
+	
 	@Override
 	public boolean
 	getPrivate()

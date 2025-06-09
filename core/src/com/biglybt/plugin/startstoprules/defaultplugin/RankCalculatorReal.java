@@ -21,6 +21,7 @@ package com.biglybt.plugin.startstoprules.defaultplugin;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 import com.biglybt.core.config.COConfigurationListener;
 import com.biglybt.core.config.COConfigurationManager;
@@ -33,10 +34,14 @@ import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagFeatureRateLimit;
 import com.biglybt.core.tag.TagType;
 import com.biglybt.core.util.AEMonitor;
+import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.DisplayFormatters;
+import com.biglybt.core.util.FileUtil;
+import com.biglybt.core.util.LightHashMap;
 import com.biglybt.core.util.SystemTime;
+import com.biglybt.core.util.ThreadPool;
 import com.biglybt.core.util.TimeFormatter;
 import com.biglybt.core.util.TorrentUtils;
 import com.biglybt.pif.PluginConfig;
@@ -58,7 +63,8 @@ public class
 RankCalculatorReal 
 	implements DefaultRankCalculator, DownloadManagerStateAttributeListener 
 {
-
+	private final static TagFeatureRateLimit[] NO_TAG_LIMITS = new TagFeatureRateLimit[0];
+			
 	/**
 	 * Force torrent to be "Actively Seeding/Downloading" for this many ms upon
 	 * start of torrent.
@@ -145,13 +151,35 @@ RankCalculatorReal
 	private static boolean bAutoStart0Peers;
 
 	private static int iTimed_MinSeedingTimeWithPeers;
-
+	private static int iTimed_MaxSeedingTimeWithPeers;
+	
 	// count x peers as a full copy, but..
 	private static int numPeersAsFullCopy;
 
 	// don't count x peers as a full copy if seeds below
 	private static int iFakeFullCopySeedStart;
 
+	private static void
+	checkConfigListener(
+		PluginConfig		config )
+	{
+		synchronized( RankCalculatorReal.class ){
+
+			if (configListener == null) {
+
+				configListener = new COConfigurationListener() {
+					@Override
+					public void configurationSaved() {
+						reloadConfigParams(config);
+					}
+				};
+
+				COConfigurationManager.addListener(configListener);
+				configListener.configurationSaved();
+			}
+		}
+	}
+	
 	//
 	// Class variables
 
@@ -196,6 +224,7 @@ RankCalculatorReal
 	private final StartStopRulesDefaultPlugin rules;
 
 	private TagFeatureRateLimit[] tagsWithDLLimits = {};
+	private TagFeatureRateLimit[] tagsWithCDLimits = {};
 
 	// state-caches for sorting
 
@@ -207,6 +236,11 @@ RankCalculatorReal
 	private RankCalculatorSlotReserver	reservedSlot;
 	private long	lastActivationAnnounce;
 	
+	private long timedRotationSeedingStart;
+	private long timedRotationSeedingStartMinSeeding;
+	
+	private Map<Object,Object> userData;
+
 	/**
 	 * Default Initializer
 	 *
@@ -253,24 +287,7 @@ RankCalculatorReal
 				
 		setupTagData();
 		
-		try {
-			downloadData_this_mon.enter();
-
-			if (configListener == null) {
-
-				configListener = new COConfigurationListener() {
-					@Override
-					public void configurationSaved() {
-						reloadConfigParams(rules.plugin_config);
-					}
-				};
-
-				COConfigurationManager.addListener(configListener);
-				configListener.configurationSaved();
-			}
-		} finally {
-			downloadData_this_mon.exit();
-		}
+		checkConfigListener( rules.plugin_config );
 	}
 
 	@Override
@@ -304,54 +321,40 @@ RankCalculatorReal
 	 * @param cfg
 	 */
 	public static void reloadConfigParams(PluginConfig cfg) {
-		final String PREFIX = "StartStopManager_";
+		iRankType = cfg.getUnsafeIntParameter("StartStopManager_iRankType");
 
-		iRankType = cfg.getUnsafeIntParameter(PREFIX + "iRankType");
+		minPeersToBoostNoSeeds = cfg.getUnsafeIntParameter("StartStopManager_iMinPeersToBoostNoSeeds");
+		minSpeedForActiveDL = cfg.getUnsafeIntParameter("StartStopManager_iMinSpeedForActiveDL");
+		minSpeedForActiveSeeding = cfg.getUnsafeIntParameter("StartStopManager_iMinSpeedForActiveSeeding");
 
-		minPeersToBoostNoSeeds = cfg.getUnsafeIntParameter(PREFIX
-				+ "iMinPeersToBoostNoSeeds");
-		minSpeedForActiveDL = cfg.getUnsafeIntParameter(PREFIX + "iMinSpeedForActiveDL");
-		minSpeedForActiveSeeding = cfg.getUnsafeIntParameter(PREFIX
-				+ "iMinSpeedForActiveSeeding");
-
-		iRankTypeSeedFallback = cfg.getUnsafeIntParameter(PREFIX
-				+ "iRankTypeSeedFallback");
-		bPreferLargerSwarms = cfg.getUnsafeBooleanParameter(PREFIX
-				+ "bPreferLargerSwarms");
-		minTimeAlive = cfg.getUnsafeIntParameter(PREFIX + "iMinSeedingTime") * 1000;
-		bAutoStart0Peers = cfg.getUnsafeBooleanParameter(PREFIX + "bAutoStart0Peers");
+		iRankTypeSeedFallback = cfg.getUnsafeIntParameter("StartStopManager_iRankTypeSeedFallback");
+		bPreferLargerSwarms = cfg.getUnsafeBooleanParameter("StartStopManager_bPreferLargerSwarms");
+		minTimeAlive = cfg.getUnsafeIntParameter("StartStopManager_iMinSeedingTime") * 1000;
+		bAutoStart0Peers = cfg.getUnsafeBooleanParameter("StartStopManager_bAutoStart0Peers");
 
 		// Ignore torrent if seed count is at least..
-		iIgnoreSeedCount = cfg.getUnsafeIntParameter(PREFIX + "iIgnoreSeedCount");
-		bIgnore0Peers = cfg.getUnsafeBooleanParameter(PREFIX + "bIgnore0Peers");
+		iIgnoreSeedCount = cfg.getUnsafeIntParameter("StartStopManager_iIgnoreSeedCount");
+		bIgnore0Peers = cfg.getUnsafeBooleanParameter("StartStopManager_bIgnore0Peers");
 		iIgnoreShareRatio = (int) (1000 * cfg.getUnsafeFloatParameter("Stop Ratio"));
-		iIgnoreShareRatio_SeedStart = cfg.getUnsafeIntParameter(PREFIX
-				+ "iIgnoreShareRatioSeedStart");
+		iIgnoreShareRatio_SeedStart = cfg.getUnsafeIntParameter("StartStopManager_iIgnoreShareRatioSeedStart");
 		iIgnoreRatioPeers = cfg.getUnsafeIntParameter("Stop Peers Ratio", 0);
-		iIgnoreRatioPeers_SeedStart = cfg.getUnsafeIntParameter(PREFIX
-				+ "iIgnoreRatioPeersSeedStart", 0);
+		iIgnoreRatioPeers_SeedStart = cfg.getUnsafeIntParameter("StartStopManager_iIgnoreRatioPeersSeedStart", 0);
 
 		numPeersAsFullCopy = cfg.getUnsafeIntParameter("StartStopManager_iNumPeersAsFullCopy");
 		iFakeFullCopySeedStart = cfg.getUnsafeIntParameter("StartStopManager_iFakeFullCopySeedStart");
 
-		minQueueingShareRatio = cfg.getUnsafeIntParameter(PREFIX
-				+ "iFirstPriority_ShareRatio");
-		iFirstPriorityType = cfg.getUnsafeIntParameter(PREFIX + "iFirstPriority_Type");
-		iFirstPrioritySeedingMinutes = cfg.getUnsafeIntParameter(PREFIX
-				+ "iFirstPriority_SeedingMinutes");
-		iFirstPriorityActiveMinutes = cfg.getUnsafeIntParameter(PREFIX
-				+ "iFirstPriority_DLMinutes");
+		minQueueingShareRatio = cfg.getUnsafeIntParameter("StartStopManager_iFirstPriority_ShareRatio");
+		iFirstPriorityType = cfg.getUnsafeIntParameter("StartStopManager_iFirstPriority_Type");
+		iFirstPrioritySeedingMinutes = cfg.getUnsafeIntParameter("StartStopManager_iFirstPriority_SeedingMinutes");
+		iFirstPriorityActiveMinutes = cfg.getUnsafeIntParameter("StartStopManager_iFirstPriority_DLMinutes");
 		// Ignore FP
-		iFirstPriorityIgnoreSPRatio = cfg.getUnsafeIntParameter(PREFIX
-				+ "iFirstPriority_ignoreSPRatio");
-		bFirstPriorityIgnore0Peer = cfg.getUnsafeBooleanParameter(PREFIX
-				+ "bFirstPriority_ignore0Peer");
+		iFirstPriorityIgnoreSPRatio = cfg.getUnsafeIntParameter("StartStopManager_iFirstPriority_ignoreSPRatio");
+		bFirstPriorityIgnore0Peer = cfg.getUnsafeBooleanParameter("StartStopManager_bFirstPriority_ignore0Peer");
 		
-		iFirstPriorityIgnoreIdleMinutes = cfg.getUnsafeIntParameter(PREFIX
-				+ "iFirstPriority_ignoreIdleMinutes");
+		iFirstPriorityIgnoreIdleMinutes = cfg.getUnsafeIntParameter("StartStopManager_iFirstPriority_ignoreIdleMinutes");
 		
-		iTimed_MinSeedingTimeWithPeers = cfg.getUnsafeIntParameter(PREFIX
-				+ "iTimed_MinSeedingTimeWithPeers") * 1000;
+		iTimed_MinSeedingTimeWithPeers = cfg.getUnsafeIntParameter("StartStopManager_iTimed_MinSeedingTimeWithPeers") * 1000;
+		iTimed_MaxSeedingTimeWithPeers = cfg.getUnsafeIntParameter("StartStopManager_iTimed_MaxSeedingTimeWithPeers") * 1000;
 	}
 
 	/** Sort first by SeedingRank Descending, then by Position Ascending.
@@ -359,6 +362,36 @@ RankCalculatorReal
 	@Override
 	public int 
 	compareTo(
+		DefaultRankCalculator obj) 
+	{
+		if ( !( obj instanceof RankCalculatorReal )){
+			
+			return( 1 );
+		}
+		
+		RankCalculatorReal dlData = (RankCalculatorReal)obj;
+		
+			// stopped/error always to bottom
+		
+		int state1 = dl.getState();
+		boolean stopped1 = state1 == Download.ST_STOPPED || state1 == Download.ST_ERROR;
+		int state2 = dlData.dl.getState();
+		boolean stopped2 = state2 == Download.ST_STOPPED || state2 == Download.ST_ERROR;
+		
+		if ( stopped1 && stopped2 ){
+			return( dl.getPosition() - dlData.dl.getPosition());
+		}else if ( stopped1 ){
+			return( 1 );
+		}else if ( stopped2 ){
+			return( -1 );
+		}
+		
+		return( compareToIgnoreStopped(obj));
+	}
+	
+	@Override
+	public int 
+	compareToIgnoreStopped(
 		DefaultRankCalculator obj) 
 	{
 		if ( !( obj instanceof RankCalculatorReal )){
@@ -511,7 +544,7 @@ RankCalculatorReal
 	public boolean
 	isMoving()
 	{
-		return( dl.isMoving());
+		return( dl.isMoving() || FileUtil.hasTask( core_dm ));
 	}
 	
 	public boolean
@@ -585,6 +618,19 @@ RankCalculatorReal
 	getSizeExcludingDND()
 	{
 		return( core_dm.getStats().getSizeExcludingDND());
+	}
+	
+	public long
+	getRemainingExcludingDND()
+	{
+		return( core_dm.getStats().getRemainingExcludingDND());
+	}
+	
+	@Override
+	public int[] 
+	getFilePriorityStats()
+	{
+		return( core_dm.getStats().getFilePriorityStats());
 	}
 	
 	public DownloadScrapeResult
@@ -908,25 +954,48 @@ RankCalculatorReal
 	private void
 	setupTagData()
 	{
-		if ( dl.isComplete() || !rules.hasTagDLLimits()){
-			tagsWithDLLimits = new TagFeatureRateLimit[0];
-		}else{
+		if ( rules.hasTagDLorCDLimits()){
+			
 			List<Tag> tags = rules.getTagManager().getTagsForTaggable( TagType.TT_DOWNLOAD_MANUAL, core_dm );
 
-			List<TagFeatureRateLimit> temp = new ArrayList<>();
-			
-			for ( Tag tag: tags ){
-				if ( tag instanceof TagFeatureRateLimit ){
-					TagFeatureRateLimit t = (TagFeatureRateLimit)tag;
+			if ( tags.isEmpty()){
 				
-					if ( t.getMaxActiveDownloads() > 0 ){
-						
-						temp.add( t );
+				tagsWithDLLimits = tagsWithCDLimits = NO_TAG_LIMITS;
+				
+			}else{
+				boolean comp = dl.isComplete();
+				
+				List<TagFeatureRateLimit> lims = new ArrayList<>();
+				
+				for ( Tag tag: tags ){
+					if ( tag instanceof TagFeatureRateLimit ){
+						TagFeatureRateLimit t = (TagFeatureRateLimit)tag;
+					
+						if ( comp ){
+							if ( t.getMaxActiveSeeds() > 0 ){
+							
+								lims.add( t );
+							}
+						}else{
+							if ( t.getMaxActiveDownloads() > 0 ){
+							
+								lims.add( t );
+							}
+						}
 					}
 				}
+				
+				if ( comp ){
+					tagsWithDLLimits = NO_TAG_LIMITS;
+					tagsWithCDLimits = lims.toArray( new TagFeatureRateLimit[lims.size()] );
+	
+				}else{
+					tagsWithDLLimits = lims.toArray( new TagFeatureRateLimit[lims.size()] );
+					tagsWithCDLimits = NO_TAG_LIMITS;
+				}
 			}
-			
-			tagsWithDLLimits = temp.toArray( new TagFeatureRateLimit[temp.size()] );
+		}else{
+			tagsWithDLLimits = tagsWithCDLimits = NO_TAG_LIMITS;
 		}
 	}
 	
@@ -934,6 +1003,12 @@ RankCalculatorReal
 	getTagsWithDLLimits()
 	{
 		return( tagsWithDLLimits );
+	}
+	
+	public TagFeatureRateLimit[]
+	getTagsWithCDLimits()
+	{
+		return( tagsWithCDLimits );
 	}
 	
 	public boolean
@@ -1198,16 +1273,71 @@ RankCalculatorReal
 					long lMsElapsed = 0;
 					long lMsTimeToSeedFor = minTimeAlive;
 					if (state == Download.ST_SEEDING && !dl.isForceStart()) {
-						lMsElapsed = (SystemTime.getCurrentTime() - stats
-								.getTimeStartedSeeding());
+						long seedingStart = stats.getTimeStartedSeeding();
+						lMsElapsed = (SystemTime.getCurrentTime() - seedingStart );
 						if (iTimed_MinSeedingTimeWithPeers > 0) {
-	  					PeerManager peerManager = dl.getPeerManager();
-	  					if (peerManager != null) {
-	  						int connectedLeechers = peerManager.getStats().getConnectedLeechers();
-	  						if (connectedLeechers > 0) {
-	  							lMsTimeToSeedFor = iTimed_MinSeedingTimeWithPeers;
-	  						}
-	  					}
+							
+								// THIS IS ALL IN TWO PLACES HERE
+							
+		  					PeerManager peerManager = dl.getPeerManager();
+		  					if (peerManager != null) {
+		  						int connectedLeechers = peerManager.getStats().getConnectedLeechers();
+		  						if (connectedLeechers > 0) {
+		  							lMsTimeToSeedFor = iTimed_MinSeedingTimeWithPeers;
+		  							
+		  							String trDebug = null;
+		  							
+		  							if (rules.bDebugLog){
+		  								trDebug = "  Timed Rotation: connected peers, min seeding set to " + (lMsTimeToSeedFor/1000);
+		  							}
+		  							
+		  							if ( iTimed_MaxSeedingTimeWithPeers > iTimed_MinSeedingTimeWithPeers && lastModifiedScrapeResultPeers > 0 ){
+		  							
+		  								if ( lastModifiedScrapeResultSeeds == 0 ){
+		  									
+		  									lMsTimeToSeedFor = iTimed_MaxSeedingTimeWithPeers;
+		  									
+		  									if (rules.bDebugLog){
+				  								trDebug = "  Timed Rotation: connected peers, max seeding set and no seeds, min seeding set to " + (lMsTimeToSeedFor/1000);
+				  							}
+		  								}else{
+		  									
+		  									float psRatio = (float)lastModifiedScrapeResultPeers/lastModifiedScrapeResultSeeds;
+		  										
+		  									long diff = iTimed_MaxSeedingTimeWithPeers -  iTimed_MinSeedingTimeWithPeers;
+		  									
+		  									lMsTimeToSeedFor += diff - ( diff / ( 1.0 + psRatio ));
+		  										
+		  									if (rules.bDebugLog){
+					  							trDebug = "  Timed Rotation: connected peers, max seeding set and SP ratio of " + psRatio + ", min seeding set to " + (lMsTimeToSeedFor/1000);
+		  									}
+		  								}
+		  							}
+		  							
+		  								// to preventing jumping around we only increase the seeding period
+		  							
+		  							if ( timedRotationSeedingStart == seedingStart ){
+		  							
+		  								long max = Math.max( lMsTimeToSeedFor, timedRotationSeedingStartMinSeeding );
+		  								
+		  								if ( max > lMsTimeToSeedFor ){
+		  									
+		  									trDebug += "; updated to existing max of " + ( max/1000);
+		  								}
+		  								
+		  								lMsTimeToSeedFor = max; 
+		  							}else{
+		  								
+		  								timedRotationSeedingStart = seedingStart;
+		  							}
+		  							
+		  							timedRotationSeedingStartMinSeeding = lMsTimeToSeedFor;
+		  							
+		  							if (rules.bDebugLog){
+		  								sExplainSR += trDebug + "\n";
+		  							}
+		  						}
+		  					}
 						}
 					}
 	
@@ -1390,16 +1520,43 @@ RankCalculatorReal
 	
 			DownloadManagerState dm_state = core_dm.getDownloadState();
 			
-			if ( 	( dm_state.getTransientFlags() & 
+			long tFlags = dm_state.getTransientFlags();
+			
+			if ( 	( tFlags & 
 						( 	DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP | 
 							DownloadManagerState.TRANSIENT_FLAG_TAG_FP )) != 0 ){
 				
-				if (rules.bDebugLog)
-					sExplainFP += "Is FP: Friend(s) have interest or Tag is FP\n";
+				if (rules.bDebugLog){
+					
+					boolean f_fp = ( tFlags & DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP ) != 0;
+					boolean t_fp = ( tFlags & DownloadManagerState.TRANSIENT_FLAG_TAG_FP ) != 0;
+					
+					String str = "";
+					
+					if ( f_fp ){
+						str = "Friend(s) have interest";
+						if ( t_fp ){
+							str += " and Tag(s) are FP";
+						}
+					}else{
+						str = "Tag(s) are FP";
+					}
+					
+					sExplainFP += "Is FP: " + str + "\n";
+				}
 				
 				return( true );
 			}
 			
+			if (( tFlags & DownloadManagerState.TRANSIENT_FLAG_TAG_NOT_FP ) != 0 ){
+
+				if (rules.bDebugLog){
+					sExplainFP += "Not FP: Tag is Not FP\n";
+				}
+				
+				return( false );
+			}
+				
 			if (!dl.isPersistent()) {
 				if (rules.bDebugLog)
 					sExplainFP += "Not FP: Download not persistent\n";
@@ -1804,9 +1961,12 @@ RankCalculatorReal
 		}
 	}
 	
+    private static final ThreadPool	activate_pool = new ThreadPool( "StartStopRules:activate", 32, true );
+
 	@Override
 	public boolean 
-	activationRequest()
+	activationRequest(
+		Runnable		to_do )
 	{
 		if ( dl.isComplete()){
 						
@@ -1821,9 +1981,20 @@ RankCalculatorReal
 					
 				if ( lastActivationAnnounce == 0 || now - lastActivationAnnounce > 5*60*1000 ){
 						
-					lastActivationAnnounce = now;
+					if ( !activate_pool.isFull()){
+					
+						lastActivationAnnounce = now;
 						
-					dl.requestTrackerAnnounce( true );
+							// we're on a core network thread here, no blocking
+
+						activate_pool.run( AERunnable.create(()->{
+							
+							dl.requestTrackerAnnounce( true );
+							
+							to_do.run();
+							
+						}));
+					}
 				}
 				
 				return( true );
@@ -1990,26 +2161,52 @@ RankCalculatorReal
 				if (iRankType == StartStopRulesDefaultPlugin.RANK_TIMED) {
 					//sText += "" + sr + " ";
 					if (sr > DefaultRankCalculator.SR_TIMED_QUEUED_ENDS_AT) {
-						long timeStarted = dl.getStats().getTimeStartedSeeding();
+						long seedingStart = dl.getStats().getTimeStartedSeeding();
 						long timeLeft;
 
 						long lMsTimeToSeedFor = minTimeAlive;
 						if (iTimed_MinSeedingTimeWithPeers > 0) {
-	  					PeerManager peerManager = dl.getPeerManager();
-	  					if (peerManager != null) {
-	  						int connectedLeechers = peerManager.getStats().getConnectedLeechers();
-	  						if (connectedLeechers > 0) {
-	  							lMsTimeToSeedFor = iTimed_MinSeedingTimeWithPeers;
-	  						}
-	  					}
+							
+		  					PeerManager peerManager = dl.getPeerManager();
+		  					
+		  					if (peerManager != null) {
+		  						
+		  						int connectedLeechers = peerManager.getStats().getConnectedLeechers();
+		  						
+		  						if (connectedLeechers > 0) {
+		  							
+		  							lMsTimeToSeedFor = iTimed_MinSeedingTimeWithPeers;
+		  							
+		  							if ( iTimed_MaxSeedingTimeWithPeers > iTimed_MinSeedingTimeWithPeers && lastModifiedScrapeResultPeers > 0 ){
+			  							
+		  								if ( lastModifiedScrapeResultSeeds == 0 ){
+		  									
+		  									lMsTimeToSeedFor = iTimed_MaxSeedingTimeWithPeers;
+		  									
+		  								}else{
+		  									
+		  									float psRatio = (float)lastModifiedScrapeResultPeers/lastModifiedScrapeResultSeeds;
+
+		  									long diff = iTimed_MaxSeedingTimeWithPeers -  iTimed_MinSeedingTimeWithPeers;
+		  									
+		  									lMsTimeToSeedFor += diff - ( diff / ( 1.0 + psRatio ));
+		  								}
+		  							}
+		  							
+		 							if ( timedRotationSeedingStart == seedingStart ){
+			  							
+		  								lMsTimeToSeedFor = Math.max( lMsTimeToSeedFor, timedRotationSeedingStartMinSeeding );
+		 							}
+		  						}
+		  					}
 						}
 
 						if (dl.isForceStart())
 							timeLeft = Constants.CRAPPY_INFINITY_AS_INT;
-						else if (timeStarted <= 0)
+						else if (seedingStart <= 0)
 							timeLeft = lMsTimeToSeedFor;
 						else
-							timeLeft = (lMsTimeToSeedFor - (SystemTime.getCurrentTime() - timeStarted));
+							timeLeft = (lMsTimeToSeedFor - (SystemTime.getCurrentTime() - seedingStart));
 
 						sText += TimeFormatter.format(timeLeft / 1000);
 					} else if (sr > 0) {
@@ -2083,6 +2280,39 @@ RankCalculatorReal
 			}
 			
 			return( new String[]{ sText, tt });
+		}
+	}
+	
+	@Override
+	public void 
+	setUserData(
+		Object key, 
+		Object value) 
+	{
+		synchronized( this ){
+			
+			if ( userData == null ){
+				
+				userData = new LightHashMap<>(2);
+			}
+			
+			userData.put( key,  value );
+		}
+	}
+	
+	@Override
+	public Object 
+	getUserData(
+		Object key)
+	{
+		synchronized( this ){
+			
+			if ( userData == null ){
+				
+				return( null );
+			}
+			
+			return( userData.get( key ));
 		}
 	}
 }

@@ -407,10 +407,16 @@ public class MessageText {
 		  while (matcher.find()) {
 			  String key = matcher.group(2);
 			  String expression = matcher.group(1);
-				String text = null;
+			  String text = null;
 
 			  try {
-				  text = getResourceBundleString(key);
+				  String	target_key = key + PLATFORM_SUFFIX;
+
+				  if ( !platform_specific_keys.contains( target_key )){
+
+					  target_key	= key;
+				  }
+				  text = getResourceBundleString(target_key);
 			  } catch (MissingResourceException ignore) {
 				  // no substitution for particular key
 			  }
@@ -682,7 +688,7 @@ public class MessageText {
         URL jarURL = new URL(sJar);
 
         // User dir overrides app dir which overrides jar file bundles
-        URL[] urls = {userBundleFile.toURL(), appBundleFile.toURL(), jarURL};
+        URL[] urls = {userBundleFile.toURI().toURL(), appBundleFile.toURI().toURL(), jarURL};
 
         /* This is debugging code, use it when things go wrong :) The line number
          * is approximate as the input stream is buffered by the reader...
@@ -876,7 +882,17 @@ public class MessageText {
 		} else {
 			localeBuilder.setRegion(savedLocaleStrings[1]);
 			if (savedLocaleStrings.length == 3) {
-				localeBuilder.setVariant(savedLocaleStrings[2]);
+				try{
+					// Java support for IETF BCP 47 causes this to throw exceptions if the variant doesn't follow
+					// certain restrictions. On OSX (at least) Locale.getDefault() returns zh_CN_Hans for simplified
+					// chinese OS locale, the "Hans" is malformed wrt BCP 47 and causes an init fail. Could be that
+					// the bug was seen when a Java 1.8 run set "locale" and then the JVM was updated to cause this error
+					
+					localeBuilder.setVariant(savedLocaleStrings[2]);
+					
+				}catch( Throwable e ){
+					
+				}
 			}
 		}
 

@@ -21,7 +21,9 @@
 package com.biglybt.ui.swt.views.tableitems;
 
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.biglybt.ui.swt.utils.FontUtils;
 import org.eclipse.swt.graphics.*;
@@ -35,7 +37,6 @@ import com.biglybt.pif.ui.menus.MenuItem;
 import com.biglybt.pif.ui.menus.MenuItemFillListener;
 import com.biglybt.pif.ui.menus.MenuItemListener;
 import com.biglybt.pif.ui.tables.*;
-import com.biglybt.ui.common.table.TableColumnCore;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.views.ViewUtils;
 import com.biglybt.ui.swt.views.table.CoreTableColumnSWT;
@@ -50,6 +51,53 @@ public abstract class ColumnDateSizer
 	implements TableCellRefreshListener, TableCellToolTipListener
 {
 	private static int PADDING = 10;
+	
+	static GC	gc_singleton;
+	
+	static final int[]	extent_max	= new int[64];
+	static final int[]	extent_hits	= new int[64];
+	
+	static int
+	stringExtent(
+		String	str )
+	{
+		if ( gc_singleton == null ){
+			
+			gc_singleton = new GC(Display.getDefault());
+			
+			gc_singleton.setFont(FontUtils.getAnyFontBold(gc_singleton));
+			
+			MessageText.addListener((l1,l2)->{
+			
+				Utils.execSWTThread(()->{
+					Arrays.fill( extent_max, 0 );
+					Arrays.fill( extent_hits, 0 );
+				});
+			});
+		}
+		
+		int len = str.length();
+		
+		if ( len >= extent_max.length ){
+			
+			return( gc_singleton.stringExtent(str).x );
+		}
+		
+		int hits = extent_hits[len];
+		
+		if ( hits >= 100 ){
+			
+			return( extent_max[ len ] );
+		}
+		
+		int result = gc_singleton.stringExtent(str).x;
+		
+		extent_max[ len ]	= Math.max( extent_max[ len ], result );
+		extent_hits[len]	= hits+1;
+		
+		return( result );
+	}
+	
 	private ParameterListener configDateFormatListener;
 	int curFormat = 0;
 
@@ -67,7 +115,8 @@ public abstract class ColumnDateSizer
 
 	private boolean sortInvalidToBottom	= false;
 		
-	private boolean recalculatingWidths;
+	private AtomicInteger	sortChanging		= new AtomicInteger();
+	private AtomicInteger	recalculatingWidths	= new AtomicInteger();
 	
 	public
 	ColumnDateSizer(
@@ -173,7 +222,11 @@ public abstract class ColumnDateSizer
 	// @see com.biglybt.pif.ui.tables.TableCellRefreshListener#refresh(com.biglybt.pif.ui.tables.TableCell)
 	@Override
 	public final void refresh(TableCell cell) {
-		refresh(cell, 0);
+		double last = cell.getNumeric();
+		
+		long ts = Double.isNaN(last)?0:(long)last;
+		
+		refresh(cell, ts);
 	}
 
 	// @see com.biglybt.pif.ui.tables.TableCellRefreshListener#refresh(com.biglybt.pif.ui.tables.TableCell)
@@ -186,6 +239,7 @@ public abstract class ColumnDateSizer
 	}
 
 	public void refresh(final TableCell cell, final long timestamp, long sort_order, final String prefix ) {
+		cell.setNumeric( timestamp <= 0 || timestamp == Long.MAX_VALUE?Double.NaN:timestamp );
 		if (!setSortValue(cell,sort_order) && cell.isValid()) {
 			return;
 		}
@@ -221,43 +275,62 @@ public abstract class ColumnDateSizer
 			}
 		}
 
-		Utils.execSWTThread(new AERunnable() {
-
-			@Override
-			public void runSupport() {
-				Date date = new Date(timestamp);
-
-				if (curFormat >= 0) {
-					if (multiline && cell.getHeight() < 20) {
-						multiline = false;
-					}
-					String suffix = showTime && !multiline ? " hh:mm a" : "";
-
-					int newWidth = calcWidth(date, TimeFormatter.DATEFORMATS_DESC[curFormat] + suffix, prefix );
-
-					//SimpleDateFormat temp2 = new SimpleDateFormat(TimeFormatter.DATEFORMATS_DESC[curFormat] + suffix + (showTime && multiline ? "\nh:mm a" : ""));
-					//System.out.println(curFormat + ":newWidth=" +  newWidth + ":max=" + maxWidthUsed[curFormat] + ":cell=" + cell.getWidth() + "::" + temp2.format(date));
-					if (newWidth > cell.getWidth() - PADDING) {
-						if (newWidth > maxWidthUsed[curFormat]) {
-							maxWidthUsed[curFormat] = newWidth;
-							maxWidthDate[curFormat] = date;
-						}
-						recalcWidth(date, prefix);
-					}
-
-					String s = TimeFormatter.DATEFORMATS_DESC[curFormat] + suffix;
-					SimpleDateFormat temp = new SimpleDateFormat(s
-							+ (showTime && multiline ? "\nh:mm a" : ""));
-					String date_str = temp.format(date);
-					if ( prefix != null ){
-						date_str = prefix + date_str;
-					}
-					cell.setText(date_str);
-				}
+		if ( curFormat >= 0 ){
+			
+			if ( Utils.isSWTThread()){
+				
+				refreshDynamic( cell, timestamp, prefix );
+				
+			}else{
+			
+				Utils.execSWTThread(()->refreshDynamic(cell, timestamp, prefix));
 			}
-		});
+		}
 	}
 
+	private void 
+	refreshDynamic(
+		TableCell	cell,
+		long		timestamp,
+		String		prefix )
+	{
+		Date date = new Date(timestamp);
+
+		if (multiline && cell.getHeight() < 20) {
+			multiline = false;
+		}
+		String suffix = showTime && !multiline ? " hh:mm a" : "";
+
+		if ( sortChanging.get() == 0 ){
+			// quite expensive to recalculate the width - if we are changing sort order this will affect all
+			// cells so as changing sort doesn't affect column width avoid a pointless cost
+
+			int newWidth = calcWidth(date, TimeFormatter.DATEFORMATS_DESC[curFormat] + suffix, prefix );
+
+			//SimpleDateFormat temp2 = new SimpleDateFormat(TimeFormatter.DATEFORMATS_DESC[curFormat] + suffix + (showTime && multiline ? "\nh:mm a" : ""));
+			//System.out.println(curFormat + ":newWidth=" +  newWidth + ":max=" + maxWidthUsed[curFormat] + ":cell=" + cell.getWidth() + "::" + temp2.format(date));
+			if (newWidth > cell.getWidth() - PADDING) {
+				if (newWidth > maxWidthUsed[curFormat]) {
+					maxWidthUsed[curFormat] = newWidth;
+					maxWidthDate[curFormat] = date;
+				}
+				recalcWidth(date, prefix);
+			}
+		}
+
+		String s = TimeFormatter.DATEFORMATS_DESC[curFormat] + suffix;
+		SimpleDateFormat temp = new SimpleDateFormat(s
+				+ (showTime && multiline ? "\nh:mm a" : ""));
+		String date_str = temp.format(date);
+		if ( prefix != null ){
+			date_str = prefix + date_str;
+		}
+		String existing = cell.getText();
+		if ( !date_str.equals(existing)){	
+			cell.setText(date_str);
+		}
+	}
+		
 	// @see TableColumnImpl#setWidth(int)
 	@Override
 	public void setWidthPX(int width) {
@@ -275,16 +348,18 @@ public abstract class ColumnDateSizer
 		}
 	}
 
-	private void recalcWidth(Date date, String prefix) {
-		try{
-			if ( recalculatingWidths ){
-				
-					// seen recursion here with width and format flipping, guard against it
-				
-				return;
-			}
+	private void 
+	recalcWidth(Date date, String prefix) 
+	{
+		if ( recalculatingWidths.get() > 0 ){
 			
-			recalculatingWidths = true;
+				// seen recursion here with width and format flipping, guard against it
+		
+			return;
+		}
+		
+		try{
+			recalculatingWidths.incrementAndGet();
 			
 			String suffix = showTime && !multiline ? " hh:mm a" : "";
 	
@@ -297,11 +372,9 @@ public abstract class ColumnDateSizer
 	
 			int idxFormat = TimeFormatter.DATEFORMATS_DESC.length - 1;
 	
-			GC gc = new GC(Display.getDefault());
-			gc.setFont(FontUtils.getAnyFontBold(gc));
 	
 			try {
-				Point minSize = new Point(99999, 0);
+				int minSize = 99999;
 				for (int i = 0; i < TimeFormatter.DATEFORMATS_DESC.length; i++) {
 					if (maxWidthUsed[i] > width - PADDING) {
 						continue;
@@ -312,24 +385,22 @@ public abstract class ColumnDateSizer
 					if ( prefix != null ){
 						date_str = prefix + date_str;
 					}
-					Point newSize = gc.stringExtent(date_str);
-					if (newSize.x < width - PADDING) {
+					int newWidth = stringExtent(date_str);
+					if (newWidth < width - PADDING) {
 						idxFormat = i;
-						if (maxWidthUsed[i] < newSize.x) {
-							maxWidthUsed[i] = newSize.x;
+						if (maxWidthUsed[i] < newWidth) {
+							maxWidthUsed[i] = newWidth;
 							maxWidthDate[i] = date;
 						}
 						break;
 					}
-					if (newSize.x < minSize.x) {
-						minSize = newSize;
+					if (newWidth < newWidth) {
+						minSize = newWidth;
 						idxFormat = i;
 					}
 				}
 			} catch (Throwable t) {
 				return;
-			} finally {
-				gc.dispose();
 			}
 	
 			if (curFormat != idxFormat) {
@@ -339,13 +410,12 @@ public abstract class ColumnDateSizer
 			}
 		}finally{
 			
-			recalculatingWidths = false;
+			recalculatingWidths.decrementAndGet();
 		}
 	}
 
 	private int calcWidth(Date date, String format, String prefix ) {
-		GC gc = new GC(Display.getDefault());
-		gc.setFont(FontUtils.getAnyFontBold(gc));
+		
 		SimpleDateFormat temp = new SimpleDateFormat(format);
 		String date_str = temp.format(date);
 		if ( prefix != null ){
@@ -353,9 +423,9 @@ public abstract class ColumnDateSizer
 			date_str = prefix + date_str;
 		}
 
-		Point newSize = gc.stringExtent(date_str);
-		gc.dispose();
-		return newSize.x;
+		int newSize = stringExtent(date_str);
+		
+		return newSize;
 	}
 
 	public boolean getShowTime() {
@@ -427,7 +497,14 @@ public abstract class ColumnDateSizer
 	{		
 		super.setSortAscending( bAscending );
 		
-		invalidateCells();
+		Utils.execSWTThread(()->{
+			sortChanging.incrementAndGet();
+			try{
+				invalidateCells();
+			}finally{
+				sortChanging.decrementAndGet();
+			}
+		});
 	}
 	
 }

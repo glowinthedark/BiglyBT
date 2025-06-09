@@ -30,12 +30,9 @@ import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
 import com.biglybt.core.logging.impl.FileLogging;
-import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.stats.CoreStats;
 import com.biglybt.core.util.AEDiagnostics;
-import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.Constants;
-import com.biglybt.core.util.IndentWriter;
 import com.biglybt.pifimpl.local.ui.config.*;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
@@ -182,8 +179,13 @@ public class ConfigSectionLogging
 		// Param still in use.. not sure why it's commented out
 //		BooleanParameterImpl udp_transport = new BooleanParameterImpl(config, "Logging Enable UDP Transport", "ConfigView.section.logging.udptransport");
 		
-		if ( !Constants.IS_CVS_VERSION ){
+		if ( Constants.IS_CVS_VERSION ){
 			
+			BooleanParameterImpl force_debug = new BooleanParameterImpl(
+					BCFG_LOGGER_DEBUG_FILES_DISABLE, "ConfigView.section.logging.disabledebugfiles");
+			
+			add(force_debug);
+		}else{
 				// beta versions already have the debug files forced
 			
 			BooleanParameterImpl force_debug = new BooleanParameterImpl(
@@ -191,6 +193,7 @@ public class ConfigSectionLogging
 			
 			add(force_debug);
 		}
+		
 		
 		add(new IntParameterImpl(ICFG_LOGGER_DEBUG_FILES_SIZE_KB,
 				"ConfigView.section.logging.debugfilesize", 10, Integer.MAX_VALUE),
@@ -281,7 +284,7 @@ public class ConfigSectionLogging
 		pgAdvSetting.setNumberOfColumns(3);
 
 		// network diagnostics
-
+		/* this is all fubar
 		ActionParameterImpl generate_net_button = new ActionParameterImpl(
 				"ConfigView.section.logging.netinfo",
 				"ConfigView.section.logging.generatediagnostics");
@@ -313,7 +316,8 @@ public class ConfigSectionLogging
 
 					}
 				}.start());
-
+		*/
+		
 		// stats
 
 		ActionParameterImpl generate_stats_button = new ActionParameterImpl(
@@ -322,35 +326,42 @@ public class ConfigSectionLogging
 		add(generate_stats_button);
 
 		generate_stats_button.addListener(param -> {
-			Set<String> types = new HashSet<>();
-
-			types.add(CoreStats.ST_ALL);
-
-			Map<String, Object> reply = CoreStats.getStats(types);
-
-			Iterator<Entry<String, Object>> it = reply.entrySet().iterator();
-
-			StringBuilder buffer = new StringBuilder(16000);
-
-			while (it.hasNext()) {
-
-				Entry<String, Object> entry = it.next();
-
-				if (entry == null) {
-					continue;
+			try{
+				generate_stats_button.setEnabled( false );
+				Set<String> types = new HashSet<>();
+	
+				types.add(CoreStats.ST_ALL);
+	
+				Map<String, Object> reply = CoreStats.getStats(types);
+	
+				reply = new TreeMap<>( reply );
+				
+				Iterator<Entry<String, Object>> it = reply.entrySet().iterator();
+	
+				StringBuilder buffer = new StringBuilder(16000);
+	
+				while (it.hasNext()) {
+	
+					Entry<String, Object> entry = it.next();
+	
+					if (entry == null) {
+						continue;
+					}
+	
+					buffer.append(entry.getKey()).append(" -> ").append(
+							entry.getValue()).append("\r\n");
 				}
-
-				buffer.append(entry.getKey()).append(" -> ").append(
-						entry.getValue()).append("\r\n");
-			}
-
-			String str = buffer.toString();
-
-			Logger.log(new LogEvent(LOGID, "Stats Info:\n" + str));
-
-			UIFunctions uif = UIFunctionsManager.getUIFunctions();
-			if (uif != null) {
-				uif.copyToClipboard(str);
+	
+				String str = buffer.toString();
+	
+				Logger.log(new LogEvent(LOGID, "Stats Info:\n" + str));
+	
+				UIFunctions uif = UIFunctionsManager.getUIFunctions();
+				if (uif != null) {
+					uif.copyToClipboard(str);
+				}
+			}finally{
+				generate_stats_button.setEnabled( true );
 			}
 		});
 
@@ -362,21 +373,27 @@ public class ConfigSectionLogging
 		add(generate_button);
 
 		generate_button.addListener(param -> {
-			StringWriter sw = new StringWriter();
-
-			PrintWriter pw = new PrintWriter(sw);
-
-			AEDiagnostics.generateEvidence(pw);
-
-			pw.close();
-
-			String evidence = sw.toString();
-
-			Logger.log(new LogEvent(LOGID, "Evidence Generation:\n" + evidence));
-
-			UIFunctions uif = UIFunctionsManager.getUIFunctions();
-			if (uif != null) {
-				uif.copyToClipboard(evidence);
+			try{
+				generate_button.setEnabled( false );
+				
+				StringWriter sw = new StringWriter();
+	
+				PrintWriter pw = new PrintWriter(sw);
+	
+				AEDiagnostics.generateEvidence(pw);
+	
+				pw.close();
+	
+				String evidence = sw.toString();
+	
+				Logger.log(new LogEvent(LOGID, "Evidence Generation:\n" + evidence));
+	
+				UIFunctions uif = UIFunctionsManager.getUIFunctions();
+				if (uif != null) {
+					uif.copyToClipboard(evidence);
+				}
+			}finally{
+				generate_button.setEnabled( true );
 			}
 		});
 

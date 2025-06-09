@@ -28,6 +28,7 @@ import com.biglybt.core.proxy.AEProxyFactory;
 import com.biglybt.core.proxy.AEProxyFactory.PluginProxy;
 import com.biglybt.core.util.*;
 import com.biglybt.core.util.Timer;
+import com.biglybt.core.versioncheck.VersionCheckClient;
 import com.biglybt.pif.utils.StaticUtilities;
 import com.biglybt.pif.utils.resourcedownloader.ResourceDownloader;
 import com.biglybt.pif.utils.resourcedownloader.ResourceDownloaderException;
@@ -351,9 +352,34 @@ public class PlatformMessenger
 
 		// Note: We used to append ContentNetworkVuzeGeneric.URL_PARAMS to this
 		String sURL_RPC;
+		
 		if ((lastServer != null && (lastServer.endsWith("-subscription")) || urlStem.toString().startsWith("msg=searchtemplate"))) {
-			sURL_RPC = Constants.URL_RPC2 + "?" + urlStem.toString();
-		} else {
+			
+			String rpc2 = Constants.URL_RPC2;
+			
+			try{
+				Map vc_data = VersionCheckClient.getSingleton().getMostRecentVersionCheckData();
+				
+				if ( vc_data != null ){
+					
+					byte[] b_ss = (byte[])vc_data.get( "vrpc2_server" );
+				
+					if ( b_ss != null ){
+								
+						String ss = new String( b_ss, "UTF-8" );
+									
+						rpc2 = ss;
+					}
+				}
+			}catch( Throwable f ){
+			}
+			
+			// rpc2 = "http://127.0.0.1:9898/rpc.php";
+			
+			sURL_RPC = rpc2 + "?" + urlStem.toString();
+			
+		}else{
+			
 			sURL_RPC = Constants.URL_RPC + "?" + urlStem.toString();
 		}
 
@@ -625,7 +651,13 @@ public class PlatformMessenger
 		}
 
 		rd.setProperty( "URL_Connection", "Keep-Alive" );
-
+		
+		rd.setProperty( "URL_Connect_Timeout", 10*1000 );
+		
+		rd.setProperty( "URL_Read_Timeout", 20*1000 );
+		
+		rd.setProperty(postData, rd);
+		
 		rd = rdf.getRetryDownloader(rd, 3);
 
 		// We could report percentage to listeners, but there's no need to atm

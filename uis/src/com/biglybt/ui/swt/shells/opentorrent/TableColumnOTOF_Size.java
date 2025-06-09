@@ -27,7 +27,7 @@ import com.biglybt.core.torrent.impl.TorrentOpenFileOptions;
 import com.biglybt.core.util.DisplayFormatters;
 import com.biglybt.ui.swt.views.table.TableCellSWT;
 import com.biglybt.ui.swt.views.table.TableCellSWTPaintListener;
-
+import com.biglybt.ui.swt.views.table.utils.TableColumnSWTUtils;
 import com.biglybt.pif.ui.tables.*;
 
 public class TableColumnOTOF_Size
@@ -57,8 +57,9 @@ public class TableColumnOTOF_Size
   		return;
   	}
   	TorrentOpenFileOptions tfi = (TorrentOpenFileOptions) ds;
-  	cell.setSortValue(tfi.lSize);
-  	cell.setText(DisplayFormatters.formatByteCountToKiBEtc(tfi.lSize));
+  	cell.setSortValue(tfi.getSize());
+  	cell.setText(DisplayFormatters.formatByteCountToKiBEtc(tfi.getSize()));
+  	TableColumnSWTUtils.setSizeAlpha( cell, tfi.getSize() );
   }
 
 	@Override
@@ -69,22 +70,22 @@ public class TableColumnOTOF_Size
   	}
   	TorrentOpenFileOptions tfi = (TorrentOpenFileOptions) ds;
 
-  	float pct = tfi.lSize / (float) tfi.parent.getTorrent().getSize();
+  	float pct = tfi.getSize() / (float) tfi.getTorrentOptions().getTorrent().getSize();
 
   	Rectangle bounds = cell.getBounds();
 
-		bounds.width = (int) (bounds.width * pct);
-		if (bounds.width > 2) {
-			bounds.x++;
-			bounds.y++;
-			bounds.height -= 2;
-			bounds.width -= 2;
+  	bounds.width = (int) (bounds.width * pct);
+  	if (bounds.width > 2) {
+  		bounds.x++;
+  		bounds.y++;
+  		bounds.height -= 2;
+  		bounds.width -= 2;
   		gc.setBackground(gc.getForeground());
   		int alpha = gc.getAlpha();
   		gc.setAlpha(10);
   		gc.fillRectangle(bounds);
   		gc.setAlpha(alpha);
-		}
+  	}
 	}
 
 	@Override
@@ -95,7 +96,7 @@ public class TableColumnOTOF_Size
 		}
 		TorrentOpenFileOptions tfi = (TorrentOpenFileOptions) ds;
 
-		String tooltip = NumberFormat.getInstance().format(tfi.lSize) + " "
+		String tooltip = NumberFormat.getInstance().format(tfi.getSize()) + " "
 			+ MessageText.getString("DHTView.transport.bytes");
 
 		cell.setToolTip(tooltip);

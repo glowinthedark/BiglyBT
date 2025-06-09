@@ -18,21 +18,29 @@
  */
 package com.biglybt.ui.swt;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Listener;
+import org.eclipse.swt.widgets.ColorDialog;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.events.MenuAdapter;
 import org.eclipse.swt.events.MenuEvent;
 import org.eclipse.swt.events.MenuListener;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.Shell;
+
 import com.biglybt.pif.ui.Graphic;
 import com.biglybt.pif.ui.GraphicURI;
 import com.biglybt.pif.ui.menus.MenuItem;
@@ -40,10 +48,16 @@ import com.biglybt.pif.ui.menus.MenuItemFillListener;
 import com.biglybt.pif.ui.menus.MenuItemListener;
 import com.biglybt.pif.ui.menus.MenuManager;
 import com.biglybt.pifimpl.local.ui.menus.MenuItemImpl;
+import com.biglybt.pifimpl.local.ui.tables.TableContextMenuItemImpl;
 import com.biglybt.pifimpl.local.utils.FormattersImpl;
 import com.biglybt.pif.ui.tables.TableContextMenuItem;
+import com.biglybt.ui.common.table.TableView;
 import com.biglybt.ui.swt.pif.UISWTGraphic;
+import com.biglybt.ui.swt.plugin.net.buddy.swt.BuddyUIUtils;
 import com.biglybt.ui.swt.shells.main.MainMenuV3;
+import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.disk.DiskManagerFileInfo;
+import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.*;
 
@@ -51,8 +65,6 @@ import com.biglybt.plugin.I2PHelpers;
 import com.biglybt.plugin.net.buddy.BuddyPluginUtils;
 import com.biglybt.plugin.net.buddy.BuddyPluginBeta;
 import com.biglybt.plugin.net.buddy.BuddyPluginBeta.ChatInstance;
-import com.biglybt.plugin.net.buddy.BuddyPluginUI;
-import com.biglybt.plugin.net.buddy.swt.BuddyUIUtils;
 
 
 /**
@@ -69,7 +81,7 @@ import com.biglybt.plugin.net.buddy.swt.BuddyUIUtils;
  * @author Allan Crooks
  */
 public class MenuBuildUtils {
-
+ 
 	/**
 	 * An interface to be used for addMaintenanceListenerForMenu.
 	 */
@@ -162,6 +174,8 @@ public class MenuBuildUtils {
 	 */
 	public static interface PluginMenuController {
 
+		public void buildStarts( Menu menu );
+		
 		/**
 		 * This method should create a listener object which should be invoked
 		 * when the given menu item is selected.
@@ -190,6 +204,8 @@ public class MenuBuildUtils {
 	public static class MenuItemPluginMenuControllerImpl implements
 			PluginMenuController {
 
+		private Menu	parentMenu;
+		
 		private Object[] objects;
 
 		public MenuItemPluginMenuControllerImpl(Object[] o) {
@@ -202,6 +218,10 @@ public class MenuBuildUtils {
 			return new Listener() {
 				@Override
 				public void handleEvent(Event e) {
+					if ( mii instanceof TableContextMenuItemImpl ){
+						TableView<?> tv = (TableView<?>)parentMenu.getData( TableContextMenuItemImpl.MENUKEY_TABLE_VIEW );
+						((TableContextMenuItemImpl)mii).setTable(tv);
+					}
 					mii.invokeListenersMulti(objects);
 				}
 			};
@@ -209,7 +229,12 @@ public class MenuBuildUtils {
 
 		@Override
 		public void notifyFillListeners(MenuItem menu_item) {
-			((MenuItemImpl) menu_item).invokeMenuWillBeShownListeners(objects);
+			MenuItemImpl mii = (MenuItemImpl) menu_item;
+			if ( mii instanceof TableContextMenuItemImpl ){
+				TableView<?> tv = (TableView<?>)parentMenu.getData( TableContextMenuItemImpl.MENUKEY_TABLE_VIEW );
+				((TableContextMenuItemImpl)mii).setTable(tv);
+			}
+			mii.invokeMenuWillBeShownListeners(objects);
 		}
 
 		// @see com.biglybt.ui.swt.MenuBuildUtils.PluginMenuController#buildSubmenu(com.biglybt.pif.ui.menus.MenuItem)
@@ -227,7 +252,13 @@ public class MenuBuildUtils {
 		}
 		
 		@Override
+		public void buildStarts(Menu menu){
+			parentMenu = menu;
+		}
+		
+		@Override
 		public void buildComplete(Menu menu){
+			parentMenu = menu;
 		}
 	}
 
@@ -263,6 +294,8 @@ public class MenuBuildUtils {
 			boolean prev_was_separator,
 			final boolean enable_items, final PluginMenuController controller) {
 
+		controller.buildStarts( parent );
+		
 		for (int i = 0; i < items.length; i++) {
 			final MenuItemImpl az_menuitem = (MenuItemImpl) items[i];
 
@@ -300,11 +333,19 @@ public class MenuBuildUtils {
 
 			prev_was_separator = this_is_separator;
 
-			final org.eclipse.swt.widgets.MenuItem menuItem = new org.eclipse.swt.widgets.MenuItem(
-					parent, swt_style);
-
-			if (swt_style == SWT.SEPARATOR) {continue;}
-
+			final org.eclipse.swt.widgets.MenuItem menuItem;
+			
+			if ( this_is_separator ){
+				
+				addSeparator( parent );
+				
+				continue;
+				
+			}else{
+				
+				menuItem = new org.eclipse.swt.widgets.MenuItem( parent, swt_style );
+			}
+			
 			if (enable_items) {
 
 				if (style == TableContextMenuItem.STYLE_CHECK
@@ -387,20 +428,7 @@ public class MenuBuildUtils {
 			return( result );
 		}
 
-		Collections.sort(
-			flat_entries,
-			new Comparator<String>()
-			{
-				final Comparator<String> comp = new FormattersImpl().getAlphanumericComparator( true );
-
-				@Override
-				public int
-				compare(
-					String o1, String o2)
-				{
-					return( comp.compare( o1, o2 ));
-				}
-			});
+		flat_entries.sort(new FormattersImpl().getAlphanumericComparator(true));
 
 		int[] buckets = new int[split_after];
 
@@ -1446,7 +1474,7 @@ public class MenuBuildUtils {
 		 */
 	
 	public static void
-	addSeparater(
+	addSeparator(
 		Menu		menu )
 	{
 		if ( menu.isDisposed() || menu.getItemCount() == 0 ){
@@ -1459,5 +1487,267 @@ public class MenuBuildUtils {
 			
 			new org.eclipse.swt.widgets.MenuItem( menu, SWT.SEPARATOR );
 		}
+	}
+	
+	public static void
+	addColourChooser(
+		Menu			menu,
+		String			item_resource,
+		boolean			can_clear,
+		List<RGB>		existing,
+		Consumer<RGB>	receiver )
+	{
+		final Menu sel_menu = new Menu( menu.getShell(), SWT.DROP_DOWN);
+
+		org.eclipse.swt.widgets.MenuItem sel_item = new org.eclipse.swt.widgets.MenuItem( menu, SWT.CASCADE);
+
+		Messages.setLanguageText( sel_item, item_resource );
+
+		sel_item.setMenu( sel_menu );
+		
+		org.eclipse.swt.widgets.MenuItem itemSetColor = new org.eclipse.swt.widgets.MenuItem(sel_menu, SWT.PUSH);
+		Messages.setLanguageText(itemSetColor, "label.set");
+		itemSetColor.addListener(SWT.Selection, event -> {
+			ColorDialog cd = new ColorDialog(menu.getShell());
+
+			List<RGB> customColors = Utils.getCustomColors();
+			
+			Map<RGB, Long> mapDupCount = new HashMap<>();
+			for ( RGB rgb: existing ){
+				if (!customColors.contains(rgb)) {
+					customColors.add(0, rgb);
+				} else {
+					Long count = mapDupCount.get(rgb);
+					mapDupCount.put(rgb, count == null ? 1 : count + 1);
+				}
+			}
+			
+			long maxCount = 0;
+			RGB selectRGB = null;
+			for (RGB rgb : mapDupCount.keySet()) {
+				Long count = mapDupCount.get(rgb);
+				if (count != null && count > maxCount) {
+					maxCount = count;
+					selectRGB = rgb;
+				}
+			}
+			
+			cd.setRGBs(customColors.toArray(new RGB[0]));
+			if (selectRGB != null) {
+				cd.setRGB(selectRGB);
+			}
+
+			RGB rgbChosen = cd.open();
+			
+			if ( rgbChosen != null ){
+			
+				receiver.accept(rgbChosen);
+			}	
+		});
+		
+		org.eclipse.swt.widgets.MenuItem clear_item = new org.eclipse.swt.widgets.MenuItem( sel_menu, SWT.PUSH);
+		Messages.setLanguageText(clear_item, "Button.clear");
+		clear_item.addListener(SWT.Selection, event -> {
+			receiver.accept(null);
+		});
+		clear_item.setEnabled( can_clear );
+	}
+	
+	public static boolean
+	hasOpenWithMenu(
+		Object		target,
+		boolean 	torrent )
+	{
+		boolean ok = false;
+		
+		for ( int i=0;i<ConfigKeysSWT.getLaunchHelperEntryCount();i++){
+			
+			String exe 	= ConfigKeysSWT.getLaunchHelpersProg(i).trim();
+
+			if ( exe.length() > 0 && Utils.fileExistsWithTimeout( exe )){
+				
+				ok = true;
+				
+				break;
+			}
+		}
+		
+		if ( !ok ){
+			
+			return( false );
+		}
+		
+		if ( target instanceof DownloadManager[] ){
+			
+			for ( DownloadManager dm: (DownloadManager[])target ){
+			
+				if ( torrent ){
+					
+					File tf = new File( dm.getTorrentFileName());
+					
+					if ( Utils.fileExistsWithTimeout( tf )){
+						
+						return( true );
+					}
+				}else{
+					
+					DiskManagerFileInfo[] files = dm.getDiskManagerFileInfoSet().getFiles();
+					
+					if ( files.length == 1 ){
+						
+							// allow incomplete files to be opened
+						
+						//if ( files[0].getAccessMode() == DiskManagerFileInfo.READ ){
+						
+						if ( Utils.fileExistsWithTimeout( files[0].getFile(true))){
+							
+							return( true );
+						}
+					}
+				}
+			}
+			
+		}else if ( target instanceof List ){
+			
+			List<DiskManagerFileInfo> files = (List<DiskManagerFileInfo>)target;
+			
+			for ( DiskManagerFileInfo file: files ){
+				
+				//if ( file.getAccessMode() == DiskManagerFileInfo.READ ){
+				
+				if ( Utils.fileExistsWithTimeout( file.getFile(true))){
+					
+					return( true );
+				}
+			}
+		}
+		
+		return( false );
+	}
+	
+	public static org.eclipse.swt.widgets.MenuItem
+	addOpenWithMenu(
+		org.eclipse.swt.widgets.Menu	menu,
+		boolean							has_menu,
+		Object							target,
+		boolean							torrent )
+	{
+		org.eclipse.swt.widgets.Menu 		openWithMenu;
+		org.eclipse.swt.widgets.MenuItem 	openWithItem;
+		
+		if ( has_menu ){
+			
+			openWithMenu = menu;
+			
+			openWithItem = null;
+			
+		}else{
+			openWithMenu = new org.eclipse.swt.widgets.Menu( menu.getShell(), SWT.DROP_DOWN );
+		
+			openWithItem = new org.eclipse.swt.widgets.MenuItem( menu, SWT.CASCADE );
+		
+			Messages.setLanguageText(openWithItem, "menu.open.with" );
+		
+			openWithItem.setMenu(openWithMenu);
+		}
+		
+		for ( int i=0;i<ConfigKeysSWT.getLaunchHelperEntryCount();i++){
+			
+			String exe 	= ConfigKeysSWT.getLaunchHelpersProg(i).trim();
+
+			if ( exe.length() > 0 && Utils.fileExistsWithTimeout( exe )){
+				
+				org.eclipse.swt.widgets.MenuItem mi = new org.eclipse.swt.widgets.MenuItem( openWithMenu, SWT.PUSH );
+		
+				mi.setText( exe );
+		
+				mi.addListener( SWT.Selection, (ev)->{
+					
+					if ( target instanceof DownloadManager[] ){
+						
+						for ( DownloadManager dm: (DownloadManager[])target ){
+						
+							if ( torrent ){
+								
+								File tf = new File( dm.getTorrentFileName());
+								
+								if ( Utils.fileExistsWithTimeout( tf )){
+									
+									Utils.launchFileExplicit( tf.getAbsolutePath(), exe );
+								}
+							}else{
+								DiskManagerFileInfo[] files = dm.getDiskManagerFileInfoSet().getFiles();
+								
+								if ( files.length == 1 ){
+									
+									//if ( files[0].getAccessMode() == DiskManagerFileInfo.READ ){
+									
+									if ( Utils.fileExistsWithTimeout( files[0].getFile(true))){
+										
+										Utils.launchFileExplicit( files[0], exe );
+									}
+								}
+							}
+						}
+						
+					}else if ( target instanceof List ){
+						
+						List<DiskManagerFileInfo> files = (List<DiskManagerFileInfo>)target;
+						
+						for ( DiskManagerFileInfo file: files ){
+							
+							//if ( file.getAccessMode() == DiskManagerFileInfo.READ ){
+							
+							if ( Utils.fileExistsWithTimeout( file.getFile(true))){
+								
+								Utils.launchFileExplicit( file, exe );
+							}
+						}
+					}
+				});
+			}
+		}
+		
+		return( openWithItem );
+	}
+	
+	public static void
+	addMOCHistory(
+		Menu 				moc_menu,
+		Consumer<String>	moc_setter )
+	{
+		List<String> moc_hist = COConfigurationManager.getStringListParameter( "open.torrent.window.moc.history" );
+		
+		if ( !moc_hist.isEmpty()){
+		
+			new org.eclipse.swt.widgets.MenuItem( moc_menu, SWT.SEPARATOR );
+			
+			for ( String hist: moc_hist ){
+				
+				org.eclipse.swt.widgets.MenuItem hist_item = new org.eclipse.swt.widgets.MenuItem( moc_menu, SWT.PUSH );
+
+				hist_item.setText( hist );
+
+				hist_item.addListener( SWT.Selection, (ev)->moc_setter.accept( hist ));
+			}
+		}
+	}
+	
+	public static void
+	addToMOCHistory(
+		String		path )
+	{
+		List<String> moc_hist = COConfigurationManager.getStringListParameter( "open.torrent.window.moc.history" );
+
+		moc_hist.remove( path );
+		
+		moc_hist.add( 0, path );
+		
+		if ( moc_hist.size() > 50 ){	// user wants 50, if people complain too big then make it configurable
+			
+			moc_hist.remove( moc_hist.size()-1 );
+		}
+		
+		COConfigurationManager.setParameter( "open.torrent.window.moc.history", moc_hist );
 	}
 }

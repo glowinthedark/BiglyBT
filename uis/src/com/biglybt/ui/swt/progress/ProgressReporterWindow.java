@@ -20,6 +20,8 @@ package com.biglybt.ui.swt.progress;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedList;
+import java.util.List;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.ScrolledComposite;
@@ -43,6 +45,7 @@ import org.eclipse.swt.widgets.Shell;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.AERunnable;
+import com.biglybt.core.util.Debug;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.components.shell.ShellFactory;
 import com.biglybt.ui.swt.twistie.ITwistieListener;
@@ -385,10 +388,9 @@ public class ProgressReporterWindow
 	 * Creates just an empty panel with a message indicating there are no reports to display
 	 */
 	private void createEmptyPanel() {
-		Composite emptyPanel = new Composite(scrollChild, SWT.BORDER);
 		GridData gData = new GridData(SWT.FILL, SWT.FILL, true, true);
 		gData.heightHint = 100;
-		emptyPanel.setLayoutData(gData);
+		Composite emptyPanel = Utils.createSkinnedComposite(scrollChild, SWT.BORDER, gData);
 		emptyPanel.setLayout(new GridLayout());
 		Label nothingToDisplay = new Label(emptyPanel, SWT.NONE);
 		nothingToDisplay.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
@@ -404,8 +406,23 @@ public class ProgressReporterWindow
 	/**
 	 * Set initial size and layout for the window then open it
 	 */
-	private void openWindow() {
-
+	
+	static final int ACTIVE_WINDOW_LIMIT = 10;
+	static int active_windows = 0;
+	static LinkedList<ProgressReporterWindow>	pending_windows = new LinkedList<>();
+	
+	private void 
+	openWindow() 
+	{
+			// too many of these active sends SWT into meltdown...
+		
+		if ( active_windows >= ACTIVE_WINDOW_LIMIT ){
+						
+			pending_windows.add( this );
+			
+			return;
+		}
+		
 		/*
 		 * Using initialMaxNumberOfPanels as a lower limit we exclude all other panels from the layout,
 		 * compute the window size, then finally we include all panels back into the layout
@@ -417,7 +434,7 @@ public class ProgressReporterWindow
 			((GridData) controls[i].getLayoutData()).exclude = true;
 		}
 
-		Point p = shell.computeSize(defaultShellWidth, SWT.DEFAULT);
+		Point defaultSize = shell.computeSize(defaultShellWidth, SWT.DEFAULT);
 
 		for (int i = 0; i < controls.length; i++) {
 			((GridData) controls[i].getLayoutData()).exclude = false;
@@ -429,13 +446,21 @@ public class ProgressReporterWindow
 
 		/*
 		 * Set the shell size if it's different that the computed size
-		 */
+		
+		 * Hmm, why, if the user has resized it them so be it
+		 * 
 		if (!shell.getSize().equals(p)) {
 			shell.setSize(p);
 			shell.layout(false);
 		}
-
+		*/
+		
 		if ( !alreadyPositioned ){
+			
+			shell.setSize( defaultSize );
+			
+			shell.layout(false);
+			
 			/*
 			 * Centers the window
 			 */
@@ -454,7 +479,7 @@ public class ProgressReporterWindow
 			}
 		}
 		
-		if ( COConfigurationManager.getBooleanParameter( "Reduce Auto Activate Window" )){
+		if ( COConfigurationManager.getBooleanParameter( "Reduce Auto Activate Window" ) || active_windows > 0 ){
 			
 			shell.setVisible( true );
 			
@@ -466,8 +491,40 @@ public class ProgressReporterWindow
 			
 			shell.open();
 		}
+		
+		active_windows++;
+
+		shell.addDisposeListener((ev)->{
+		
+			active_windows--;
+			
+			List<ProgressReporterWindow> to_do = new ArrayList<>();
+			
+			for ( int i=0; i<Math.min( ACTIVE_WINDOW_LIMIT - active_windows, pending_windows.size()); i++){;
+			
+				to_do.add( pending_windows.removeFirst());
+			}
+						
+			if ( !to_do.isEmpty()){
+				
+				Utils.execSWTThreadLater(
+					1,
+					()->{
+						for ( ProgressReporterWindow w: to_do ){
+							
+							w.openWindow();
+						}
+					});
+			}
+		});	
 	}
 
+	public int
+	getStyle()
+	{
+		return( style );
+	}
+	
 	private void createPanels() {
 
 		int size = pReporters.length;
@@ -490,7 +547,7 @@ public class ProgressReporterWindow
 				/*
 				 * Create the reporter panel; adding the style bit for BORDER
 				 */
-				final ProgressReporterPanel panel = new ProgressReporterPanel(
+				final ProgressReporterPanel panel = new ProgressReporterPanel( this,
 						scrollChild, pReporters[i], style | BORDER);
 
 				panel.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, false));

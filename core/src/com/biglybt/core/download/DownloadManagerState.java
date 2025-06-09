@@ -28,6 +28,7 @@ import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.util.IndentWriter;
 import com.biglybt.core.util.LinkFileMap;
+import com.biglybt.core.util.StringInterner.FileKey;
 import com.biglybt.pif.download.Download;
 
 /**
@@ -48,7 +49,7 @@ DownloadManagerState
 	public static final String AT_PEER_SOURCES				= "peersources";
 	public static final String AT_PEER_SOURCES_DENIED		= "peersourcesdenied";
 	public static final String AT_TRACKER_CLIENT_EXTENSIONS	= "trackerclientextensions";
-	public static final String AT_FILE_LINKS_DEPRECATED		= "filelinks";
+	//public static final String AT_FILE_LINKS_DEPRECATED		= "filelinks";
 	public static final String AT_FILE_LINKS2				= "filelinks2";
 	public static final String AT_FILE_ALLOC_REQUEST		= "allocreq";		// Map
 	public static final String AT_FILE_STORE_TYPES			= "storetypes";
@@ -60,8 +61,9 @@ DownloadManagerState
 	public static final String AT_RELATIVE_SAVE_PATH        = "relativepath";
 	public static final String AT_SECRETS				 	= "secrets";
 	public static final String AT_RESUME_STATE		 		= "resumecomplete";
-	public static final String AT_PRIMARY_FILE		 		= "primaryfile";
+	//public static final String AT_PRIMARY_FILE		 		= "primaryfile";
 	public static final String AT_PRIMARY_FILE_IDX		 	= "primaryfileidx";
+	public static final String AT_PRIMARY_FILE_PATH		 	= "primaryfilepath";
 	public static final String AT_TIME_SINCE_DOWNLOAD		= "timesincedl";
 	public static final String AT_TIME_SINCE_UPLOAD			= "timesinceul";
 	public static final String AT_AVAIL_BAD_TIME			= "badavail";
@@ -74,6 +76,7 @@ DownloadManagerState
 	public static final String AT_FILE_OTHER_HASHES			= "fileotherhashes";
 	public static final String AT_CANONICAL_SD_DMAP			= "canosavedir";
 	public static final String AT_DND_SUBFOLDER				= "dnd_sf";
+	public static final String AT_DND_ALT_LOC				= "dnd_al";
 	public static final String AT_PEAK_RECEIVE_RATE			= "pkdo";
 	public static final String AT_PEAK_SEND_RATE			= "pkup";
 	public static final String AT_DL_FILE_ALERTS			= "df_alerts";
@@ -87,11 +90,24 @@ DownloadManagerState
 	public static final String AT_MOVE_ON_COMPLETE_DIR		= "moc.dir";		// String - explicit move-on-complete folder
 	public static final String AT_FILE_FLAGS				= "ff";
 	public static final String AT_FILE_ALLOC_STRATEGY		= "fas";			// long
+	public static final String AT_FILE_ALLOC_ORDER			= "fao";			// long
 	public static final String AT_TRACKER_SESSION_STATS		= "tss";			// Map
 	public static final String AT_TORRENT_SAVE_TIME			= "tst";			// long
 	public static final String AT_TORRENT_EXPORT_PROPAGATED	= "tep";			// bool
-	
+	public static final String AT_SWARM_TAGS				= "stag";			// list
+	public static final String AT_MASK_DL_COMP_OPTIONAL		= "mdlc";			// Boolean (optional)
+	public static final String AT_REAL_DM_MAGNET_TIME		= "rdmmt";			// long
+	public static final String AT_PLUGIN_OPTIONS			= "pluginoptions";	// Map
+	public static final String AT_PO_ENABLE_ANNOUNCE		= "enableannounce";		// boolean, def=true
+	public static final String AT_SET_FILE_PRIORITY_REM_PIECE	= "sfp.rp";		// int
+	public static final String AT_LAST_SCRAPE_TIME			= "lastscrape";		// long
+	public static final String AT_SKIPPED_FILESET_SIZE		= "skipfss";		// long
+	public static final String AT_SKIPPED_BUT_DOWNLOADED	= "skipbdl";		// long
+
 	public static final String AT_TRANSIENT_FLAGS			= "t_flags";
+	public static final String AT_TRANSIENT_TAG_SORT		= "t_tagsort";
+	
+	public static final String AT_VIEW_FILTERS				= "vfilt";			// Map
 
 	
 	public static Object[][] ATTRIBUTE_DEFAULTS = {
@@ -104,6 +120,8 @@ DownloadManagerState
 		{ AT_REORDER_MIN_MB,						new Integer( -1 )},
 		{ AT_SHARE_RATIO_PROGRESS,					new Long( 0 )},
 		{ AT_FILE_ALLOC_STRATEGY,					new Long( FAS_DEFAULT )},
+		{ AT_FILE_ALLOC_ORDER,						new Long( -1 )},
+		{ AT_SKIPPED_FILESET_SIZE,					new Long( -1 )},
 	};
 
 	public static final long FLAG_ONLY_EVER_SEEDED						= Download.FLAG_ONLY_EVER_SEEDED;
@@ -172,6 +190,7 @@ DownloadManagerState
 
 	public static final int	TRANSIENT_FLAG_FRIEND_FP	= 0x00000001;
 	public static final int	TRANSIENT_FLAG_TAG_FP		= 0x00000002;
+	public static final int	TRANSIENT_FLAG_TAG_NOT_FP	= 0x00000004;
 	
 			
 	public TOTorrent
@@ -181,7 +200,7 @@ DownloadManagerState
 	getDownloadManager();
 
 	public File
-	getStateFile( );
+	getStateDir( );
 
 	public boolean
 	getAndClearRecoveredStatus();
@@ -209,6 +228,15 @@ DownloadManagerState
 
 	public long
 	getTransientFlags();
+	
+	public Object
+	getTransientAttribute(
+		String		name );		// use AT_TRANSIENT_X names
+	
+	public void
+	setTransientAttribute(
+		String		name,
+		Object		value );
 	
 		/**
 		 * Reset to default value
@@ -259,6 +287,18 @@ DownloadManagerState
 	public boolean
 	isResumeDataComplete();
 
+	/**
+	 * Ordered by time, most recent last
+	 * @return
+	 */
+	
+	public List<ResumeHistory>
+	getResumeDataHistory();
+	
+	public void
+	restoreResumeData(
+		ResumeHistory	history );
+	
 	public void
 	clearTrackerResponseCache();
 
@@ -284,9 +324,10 @@ DownloadManagerState
 
 	public String getRelativeSavePath();
 
-	public void setPrimaryFile(DiskManagerFileInfo dmfi);
 	public DiskManagerFileInfo getPrimaryFile();
 
+	public String getPrimaryFilePath();
+	
 	public String
 	getTrackerClientExtensions();
 
@@ -346,7 +387,7 @@ DownloadManagerState
 	public void
 	setFileLinks(
 		List<Integer>	source_indexes,
-		List<File>		link_sources,
+		List<File>		link_sources_may_have_nulls,
 		List<File>		link_destinations );
 
 	public void
@@ -354,9 +395,20 @@ DownloadManagerState
 
 	public File
 	getFileLink(
-		int		source_index,
-		File	link_source );
-
+		int		source_index );
+	
+		/**
+		 * Returns file link if it exists, def if not
+		 * @param source_index
+		 * @param def
+		 * @return
+		 */
+	
+	public FileKey
+	getFileLink(
+		int			source_index,
+		FileKey		def );
+	
 		/**
 		 * returns a File -> File map of the defined links (empty if no links)
 		 * @return
@@ -381,6 +433,7 @@ DownloadManagerState
 
 	// General access - make sure you use an AT_ value defined above when calling
 	// these methods.
+	
 	public void setAttribute(String	name, String value);
 	public void setAttribute(String	name, String value, boolean setDirty);
 	public String getAttribute(String name);
@@ -396,7 +449,32 @@ DownloadManagerState
 	public void setBooleanAttribute(String name, boolean value);
 	public boolean getBooleanAttribute(String name);
 	public boolean hasAttribute(String name);
+	public void removeAttribute(String name);
 
+	public default Boolean
+	getOptionalBooleanAttribute(
+		String		name )
+	{
+		if ( hasAttribute(name)){
+			return( getBooleanAttribute(name));
+		}else{
+			return( null );
+		}
+	}
+	
+	public default void
+	setOptionalBooleanAttribute(
+		String		name,
+		Boolean		value )
+	{
+		if ( value == null ){
+			removeAttribute( name );
+		}else{
+			setBooleanAttribute(name, value );
+		}
+	}
+
+	
 	public void
 	setActive(
 		boolean	active );
@@ -423,7 +501,7 @@ DownloadManagerState
 	 */
 	boolean parameterExists(String name);
 
-	public void generateEvidence(IndentWriter writer);
+	public void generateEvidence(IndentWriter writer, boolean full );
 
 	public void dump( IndentWriter writer );
 
@@ -440,4 +518,11 @@ DownloadManagerState
 
 	public void addListener(DownloadManagerStateAttributeListener l, String attribute, int event_type);
 	public void removeListener(DownloadManagerStateAttributeListener l, String attribute, int event_type);
+	
+	public interface
+	ResumeHistory
+	{
+		public long 
+		getDate();
+	}
 }

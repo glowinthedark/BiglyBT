@@ -71,7 +71,6 @@ public class TorrentUIUtilsV3
 
 	private final static String MSG_ALREADY_EXISTS_NAME = MSG_ALREADY_EXISTS + ".default.name";
 
-	//catches http://www.vuze.com/download/CHJW43PLS277RC7U3S5XRS2PZ4UUG7RS.torrent
 	private static final Pattern hashPattern = Pattern.compile("download/([A-Z0-9]{32})\\.torrent");
 
 	static ImageLoader imageLoaderThumb;
@@ -343,7 +342,7 @@ public class TorrentUIUtilsV3
 
 			// add torrent size here to differentiate meta-data downloads from actuals
 
-		final String id = "Thumbnail." + hash + "." + torrent.getSize() + "." + thumbnailVersion;
+		final String id = "Thumbnail." + hash + "." + torrent.getSize() + "." + thumbnailVersion + (big ? ".big" : "");
 
 		Image image = imageLoaderThumb.imageAdded(id) ? imageLoaderThumb.getImage(id) : null;
 		//System.out.println("image = " + image);
@@ -400,17 +399,25 @@ public class TorrentUIUtilsV3
 					path = files[0].getRelativePath();
 				}
 			} else {
-				DiskManagerFileInfo primaryFile = dm.getDownloadState().getPrimaryFile();
-				path = primaryFile == null ? null : primaryFile.getFile(true).getName();
+				path = dm.getDownloadState().getPrimaryFilePath();
+				//DiskManagerFileInfo primaryFile = dm.getDownloadState().getPrimaryFile();
+				//path = primaryFile == null ? null : primaryFile.getFile(true).getName();
+				if ( path == null ){
+					path = dm.getSaveLocation().getAbsolutePath();
+				}
 			}
 			if (path != null) {
 				image = ImageRepository.getPathIcon(path, big, false);
 
 				if (image != null && !torrent.isSimpleTorrent()) {
-					Image[] images = new Image[] {
-						image,
-						ImageRepository.getPathIcon(new File(path).getParent(), false, false)
-					};
+					Image parentPathIcon = ImageRepository.getPathIcon(new File(path).getParent(), false, false);
+					Image[] images = parentPathIcon == null || parentPathIcon.isDisposed()
+							? new Image[] {
+								image
+							} : new Image[] {
+								image,
+								parentPathIcon
+							};
 					return images;
 				}
 			}

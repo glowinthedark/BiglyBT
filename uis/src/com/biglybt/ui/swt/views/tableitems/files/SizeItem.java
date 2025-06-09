@@ -27,7 +27,7 @@ import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.views.FilesView;
 import com.biglybt.ui.swt.views.table.CoreTableColumnSWT;
 import com.biglybt.ui.swt.views.table.TableCellSWT;
-
+import com.biglybt.ui.swt.views.table.utils.TableColumnSWTUtils;
 import com.biglybt.pif.ui.tables.*;
 
 /**
@@ -70,9 +70,13 @@ public class SizeItem
     	
     	text = "";
     	
+    	cell.setNumeric( Double.NaN );
+    	
     }else{
     	
     	text = DisplayFormatters.formatByteCountToKiBEtc(value);
+    	
+    	cell.setNumeric( value );
     	
     	if ( internal ){
     		
@@ -82,15 +86,7 @@ public class SizeItem
     
     cell.setText( text );
     
-	if (Utils.getUserMode() > 0 && (cell instanceof TableCellSWT)) {
-		if (value >= 0x40000000l) {
-			((TableCellSWT) cell).setTextAlpha(200 | 0x100);
-		} else if (value < 0x100000) {
-			((TableCellSWT) cell).setTextAlpha(180);
-		} else {
-			((TableCellSWT) cell).setTextAlpha(255);
-		}
-	}
+    TableColumnSWTUtils.setSizeAlpha( cell, value );
   }
 
 	@Override

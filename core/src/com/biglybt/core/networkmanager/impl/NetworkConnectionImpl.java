@@ -27,6 +27,7 @@ import java.util.Map;
 import com.biglybt.core.networkmanager.*;
 import com.biglybt.core.peermanager.messaging.MessageStreamDecoder;
 import com.biglybt.core.peermanager.messaging.MessageStreamEncoder;
+import com.biglybt.core.proxy.AEProxyFactory.PluginProxy;
 import com.biglybt.core.util.AddressUtils;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.LightHashMap;
@@ -49,18 +50,18 @@ NetworkConnectionImpl
   private boolean allow_fallback;
   private byte[][] shared_secrets;
 
-  ConnectionListener connection_listener;
-  boolean 	is_connected;
+  private ConnectionListener connection_listener;
+  private boolean 	is_connected;
   private byte		is_lan_local	= AddressUtils.LAN_LOCAL_MAYBE;
 
   private int		enhanced_partition_id = -1;
   
-  final OutgoingMessageQueueImpl outgoing_message_queue;
+  private final OutgoingMessageQueueImpl outgoing_message_queue;
   private final IncomingMessageQueueImpl incoming_message_queue;
 
-  Transport	transport;
+  private Transport	transport;
 
-  volatile ConnectionAttempt			connection_attempt;
+  private volatile ConnectionAttempt	connection_attempt;
   private boolean						started;
   private volatile boolean				closed;
 
@@ -162,7 +163,10 @@ NetworkConnectionImpl
     			priority,
     			new Transport.ConnectListener() {
 			      @Override
-			      public int connectAttemptStarted(int default_connect_timeout ){
+			      public int connectAttemptStarted(Transport _transport, int default_connect_timeout ){
+			    	if ( _transport != null ){
+			    		transport	= _transport;
+			    	}
 			        return( connection_listener.connectStarted( default_connect_timeout ));
 			      }
 
@@ -177,7 +181,7 @@ NetworkConnectionImpl
 			      }
 
 			      @Override
-			      public void connectFailure(Throwable failure_msg ) {
+			      public void connectFailure(Transport transport, Throwable failure_msg ) {
 			        is_connected = false;
 			        connection_listener.connectFailure( failure_msg );
 			      }
@@ -394,7 +398,7 @@ NetworkConnectionImpl
 				",closed/con=" + closed + "/" + is_connected +
 				",w_ready=" + transport.isReadyForWrite(null)+
 				",r_ready=" + transport.isReadyForRead( null ))+ 
-				",in=" + incoming_message_queue.getPercentDoneOfCurrentMessage() +
+				",in=" + incoming_message_queue.getCurrentMessageProgress() +
 				",out=" + (outgoing_message_queue==null?0:outgoing_message_queue.getTotalSize()) + 
 				",owner=" + (connection_listener==null?"null":connection_listener.getDescription()));
 	}
@@ -442,6 +446,13 @@ NetworkConnectionImpl
 			return( transport.isSOCKS());
 		}
 
+		@Override
+		public PluginProxy 
+		getPluginProxy()
+		{
+			return( transport.getPluginProxy());
+		}
+		
 		@Override
 		public String
 		getDescription()
@@ -552,7 +563,7 @@ NetworkConnectionImpl
 		{
 			Debug.out( "Bogus Transport Operation" );
 
-			listener.connectFailure( new Throwable( "Bogus Transport" ));
+			listener.connectFailure( transport, new Throwable( "Bogus Transport" ));
 		}
 
 		@Override
@@ -571,6 +582,15 @@ NetworkConnectionImpl
 		}
 
 		@Override
+		public boolean 
+		isClosed()
+		{
+			Debug.out( "Bogus Transport Operation" );
+			
+			return( false );
+		}
+		
+		@Override
 		public void
 		bindConnection(
 			NetworkConnection	connection )
@@ -584,6 +604,16 @@ NetworkConnectionImpl
 		{
 		}
 
+		@Override
+		public Object getUserData(Object key){
+			return( transport.getUserData(key));
+		}
+		
+		@Override
+		public void setUserData(Object key, Object value){
+			transport.setUserData(key, value);
+		}
+		
 		@Override
 		public void
 		setTrace(

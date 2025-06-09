@@ -26,16 +26,10 @@ import com.biglybt.core.peermanager.piecepicker.util.BitFlags;
 import com.biglybt.pif.ui.tables.*;
 import com.biglybt.ui.swt.views.table.CoreTableColumnSWT;
 
-/**
- *
- * @author Olivier
- * @author TuxPaper (2004/Apr/19: modified to TableCellAdapter)
- */
 public class PercentHaveWeNeedItem
        extends CoreTableColumnSWT
        implements TableCellRefreshListener
 {
-  /** Default Constructor */
   public PercentHaveWeNeedItem(String table_id) {
     super("haveweneed", ALIGN_TRAIL, POSITION_INVISIBLE, 55, table_id);
     setRefreshInterval(INTERVAL_LIVE);
@@ -55,7 +49,7 @@ public class PercentHaveWeNeedItem
     
     int value = -1;
     
-    if ( peer != null ){
+    if ( peer != null && !peer.isMyPeer()){
     	
     	PEPeerManager pm = peer.getManager();
     	

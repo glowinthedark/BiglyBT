@@ -61,6 +61,23 @@ AEThread2
 		}.start();
 	}
 	
+	public static AEThread2
+	createAndStartDaemon2(
+		String			name,
+		Runnable		r )
+	{
+		AEThread2 thread = new AEThread2( name, true ){
+			@Override
+			public void run(){
+				
+				r.run();
+			}
+		};
+		
+		thread.start();
+		
+		return( thread );
+	}
 	//private static AtomicLong	total_starts	= new AtomicLong();
 	//private static AtomicLong	total_creates	= new AtomicLong();
 
@@ -233,6 +250,7 @@ AEThread2
 		AEThread.setOurThread( thread );
 	}
 
+	/*
 	public static void
 	setDebug(
 		Object		debug )
@@ -244,13 +262,13 @@ AEThread2
 			((threadWrapper)current).setDebug( debug );
 		}
 	}
-
+	*/
 		/**
 		 * entry 0 is debug object, 1 is Long mono-time it was set
 		 * @param t
 		 * @return
 		 */
-
+	/*
 	public static Object[]
 	getDebug(
 		Thread		t )
@@ -262,7 +280,8 @@ AEThread2
 
 		return( null );
 	}
-
+	*/
+	
 	protected static class
 	threadWrapper
 		extends Thread
@@ -273,7 +292,7 @@ AEThread2
 
 		private long		last_active_time;
 
-		private Object[]		debug;
+		//private Object[]		debug;
 
 		protected
 		threadWrapper(
@@ -325,7 +344,7 @@ AEThread2
 
 						target = PENDING;
 
-						debug	= null;
+						// debug	= null;
 
 						currentLock.released = true;
 
@@ -440,6 +459,7 @@ AEThread2
 			LockSupport.unpark( this );
 		}
 
+		/*
 		protected void
 		setDebug(
 			Object	d )
@@ -452,6 +472,7 @@ AEThread2
 		{
 			return( debug );
 		}
+		*/
 	}
 
 	public void

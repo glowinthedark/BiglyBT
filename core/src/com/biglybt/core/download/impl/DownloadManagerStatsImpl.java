@@ -123,6 +123,8 @@ DownloadManagerStatsImpl
 
 	private int	last_sr_progress = -1;
 
+	private int[]		file_priority_stats = { 0,0,0,0 };
+	
 	protected
 	DownloadManagerStatsImpl(
 		DownloadManagerImpl	dm )
@@ -977,7 +979,7 @@ DownloadManagerStatsImpl
 			// manipulate by updating downloaded to be one full copy and then uploaded as required
 
 		long	target_downloaded 	= total_size;
-		long	target_uploaded 	= ( ratio * total_size ) / 1000;
+		long	target_uploaded 	= ( ratio * total_size + 999) / 1000;
 
 		saved_data_bytes_downloaded	= target_downloaded - downloaded;
 		saved_data_bytes_uploaded	= target_uploaded - uploaded;
@@ -1059,6 +1061,8 @@ DownloadManagerStatsImpl
 		int max_rate_bps )
 	{
 		max_upload_rate_bps = max_rate_bps;
+		
+		download_manager.rateLimitChanged();
 	}
 
 	@Override
@@ -1073,12 +1077,9 @@ DownloadManagerStatsImpl
 	setDownloadRateLimitBytesPerSecond(
 		int max_rate_bps )
 	{
-		if ( Constants.IS_CVS_VERSION && max_download_rate_bps == -1 && max_rate_bps != -1 ){
-			
-			Debug.out( "Download changed from disabled to " + max_rate_bps + " for " + download_manager.getDisplayName());
-		}
-		
 		max_download_rate_bps = max_rate_bps;
+		
+		download_manager.rateLimitChanged();
 	}
 
 	@Override
@@ -1282,7 +1283,7 @@ DownloadManagerStatsImpl
 					
 					if ( consolidated == null ){
 						
-						consolidated = vals;
+						consolidated = vals.clone();
 						
 					}else{
 						
@@ -1544,28 +1545,49 @@ DownloadManagerStatsImpl
 		saved_peak_receive_rate		= state.getLongAttribute( DownloadManagerState.AT_PEAK_RECEIVE_RATE );
 		saved_peak_send_rate		= state.getLongAttribute( DownloadManagerState.AT_PEAK_SEND_RATE );
 
+		/*
+		 * 24/06/2024. going to assume that this bug has long since been fixed and any potential recovery 
+		 * performed. It is causing cache-fixups on restart for downloads that legitimately have 0 completed data
 		if (saved_data_bytes_downloaded > 0 && saved_completed_download_bytes == 0) {
 			// Bug where 0 is stored in config for torrent's saved_completed_download_bytes
 			// when there's actually completed data.  Force a recalc on next request
 			saved_completed_download_bytes = -1;
 		}
+		*/
+		
+		saved_skipped_file_set_size = state.getLongAttribute( DownloadManagerState.AT_SKIPPED_FILESET_SIZE );
+		saved_skipped_but_downloaded = state.getLongAttribute( DownloadManagerState.AT_SKIPPED_BUT_DOWNLOADED );
 		
 		loadTrackerStats();
 	}
 
 	public void
 	setSkippedFileStats(
-			long skipped_file_set_size,
-			long skipped_but_downloaded
-			)
+		long skipped_file_set_size,
+		long skipped_but_downloaded )
 	{
-		this.saved_skipped_file_set_size = skipped_file_set_size;
-		this.saved_skipped_but_downloaded = skipped_but_downloaded;
+		DownloadManagerState state = download_manager.getDownloadState();
+
+		if ( saved_skipped_file_set_size != skipped_file_set_size){
+			
+			saved_skipped_file_set_size = skipped_file_set_size;
+
+			state.setLongAttribute( DownloadManagerState.AT_SKIPPED_FILESET_SIZE, skipped_file_set_size );
+		}
+		
+		if ( saved_skipped_but_downloaded != skipped_but_downloaded){
+			
+			saved_skipped_but_downloaded = skipped_but_downloaded;
+
+			state.setLongAttribute( DownloadManagerState.AT_SKIPPED_BUT_DOWNLOADED, skipped_but_downloaded );
+		}
 	}
 
 	private long
-	getSkippedFileSetSize() {
-		if (saved_skipped_file_set_size < 0) {
+	getSkippedFileSetSize() 
+	{
+		if ( saved_skipped_file_set_size < 0 ){
+			
 			DiskManagerFileInfo[] files = download_manager.getDiskManagerFileInfoSet().getFiles();
 
 			long skipped_file_set_size = 0;
@@ -1580,11 +1602,27 @@ DownloadManagerStatsImpl
 					skipped_but_downloaded  += file.getDownloaded();
 				}
 			}
+			
 			setSkippedFileStats(skipped_file_set_size, skipped_but_downloaded);
 		}
+		
 		return saved_skipped_file_set_size;
 	}
 
+	protected void
+	setFilePriorityStats(
+		int[]	stats )
+	{
+		file_priority_stats = stats;
+	}
+	
+	@Override
+	public int[] 
+	getFilePriorityStats()
+	{
+		return( file_priority_stats );
+	}
+	
 	@Override
   public long
   getRemainingExcludingDND()
@@ -1641,9 +1679,17 @@ DownloadManagerStatsImpl
 		if (sizeExcludingDND < 0) {
 			return 0;
 		}
-		float pct = (sizeExcludingDND - getRemainingExcludingDND()) / (float) sizeExcludingDND;
+		long rem = getRemainingExcludingDND();
+		float pct = (sizeExcludingDND - rem) / (float) sizeExcludingDND;
 
-		return (int) (1000 * pct);
+		int result =  (int) (1000 * pct);
+		
+		if ( result == 1000 && rem > 0 ){
+			result = 999;
+		}else if ( result < 0 ){
+			result = 0;	// can occur with a borked download that has files missing and inconsistent cached stats
+		}
+		return( result );
 	}
 
 

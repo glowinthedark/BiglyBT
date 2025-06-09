@@ -899,7 +899,7 @@ DHTUDPUtils
 
 				if ( reply.getProtocolVersion() < DHTTransportUDP.PROTOCOL_VERSION_VIVALDI_OPTIONAL ){
 
-						// need to add one in for backward compatability
+						// need to add one in for backward compatibility
 
 					DHTNetworkPosition np = VivaldiPositionFactory.createPosition( Float.NaN );
 
@@ -1397,6 +1397,24 @@ DHTUDPUtils
 		}
 	}
 
+	public static DHTTransportAlternativeNetwork
+	getAlternativeNetwork(
+		int				type )
+	{
+		synchronized( transports ){
+
+			for (DHTTransportAlternativeNetwork net: alt_networks ){
+				
+				if  ( net.getNetworkType() == type ){
+					
+					return( net );
+				}
+			}
+		}
+		
+		return( null );
+	}
+	
 	public static void
 	unregisterAlternativeNetwork(
 		DHTTransportAlternativeNetwork	net )
@@ -1427,9 +1445,10 @@ DHTUDPUtils
 								@Override
 								public int
 								compare(
-										DHTTransportAlternativeContact o1,
-										DHTTransportAlternativeContact o2) {
-									int res = o1.getAge() - o2.getAge();
+									DHTTransportAlternativeContact o1,
+									DHTTransportAlternativeContact o2)
+								{
+									int res = o2.getLastAlive() - o1.getLastAlive();
 
 									if (res == 0) {
 
@@ -1475,11 +1494,24 @@ DHTUDPUtils
 				}
 			}
 
+			Set<Integer>	used_ids = new HashSet<>();
+
 			Iterator<DHTTransportAlternativeContact> it = result_set.iterator();
 
 			while( it.hasNext() && result_list.size() < max ){
 
-				result_list.add( it.next());
+				DHTTransportAlternativeContact c = it.next();
+				
+				int id = c.getID();
+				
+				if ( used_ids.contains( id )){
+					
+					continue;
+				}
+				
+				used_ids.add( id );
+				
+				result_list.add( c);
 			}
 		}
 

@@ -3,14 +3,17 @@ package com.biglybt.core.util.spi;
 import java.lang.reflect.*;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.List;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.config.COConfigurationListener;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.core.util.Constants;
+import com.biglybt.core.util.NetUtils;
 import com.biglybt.core.util.TorrentUtils;
 import com.biglybt.pif.PluginAdapter;
 import com.biglybt.pif.PluginInterface;
@@ -19,8 +22,6 @@ import com.biglybt.plugin.I2PHelpers;
 public class 
 AENameServiceJava9 
 {	
-	private static final String 		TEST_HOST	= "dns.test.client.vuze.com";
-
 	public static boolean
 	init()
 	{
@@ -95,30 +96,52 @@ AENameServiceJava9
 	
 					String host_name = (String)args[0];
 	
-					if ( host_name.equals( TEST_HOST )){
+					if ( host_name.equals( NetworkAdmin.DNS_SPI_TEST_HOST )){
 	
 						if ( delegate == null ){
 	
 							throw( new RuntimeException( "Delegate Name Service unavailable" ));
 						}
 	
-						host_name = "www.google.com";
+						List<String> domains = NetUtils.getTestDomains();
+
+						if ( domains.isEmpty()){
+							
+							throw( new RuntimeException( "No test domains available" ));
+						}
+						
+						RuntimeException 	last_error	= null;
+						boolean				maybe_ok	= false;
+						
+						for ( String domain: domains ){
 	
-						try{
-							Object result = delegate_method.invoke( delegate, host_name );
-	
-						}catch( Throwable e ){
-	
-							if ( e instanceof UnknownHostException ){
-	
-								// guess their DNS might be down - don't treat as complete fail
-	
-								System.err.println( "DNS resolution of " + host_name + " failed, DNS unavailable?" );
-	
-							}else{
-	
-								throw( new RuntimeException( "Delegate lookup failed", e ));
+							try{
+								Object result = delegate_method.invoke( delegate, domain );
+		
+								last_error = null;
+								
+								break;
+								
+							}catch( Throwable e ){
+		
+								if ( e instanceof UnknownHostException ){
+		
+									// guess their DNS might be down - don't treat as complete fail
+		
+									System.err.println( "DNS resolution of " + domain + " failed, DNS unavailable?" );
+		
+									maybe_ok = true;
+									
+								}else{
+		
+									last_error = new RuntimeException( "Delegate lookup failed", e );
+								}
 							}
+						}
+	
+						if ( last_error != null && !maybe_ok ){
+							
+							throw( last_error );
 						}
 	
 						// byte[][] or InetAddress[]
@@ -224,19 +247,24 @@ AENameServiceJava9
 					// get quite a few of these from 3rd party libs :(
 					// new Exception("Bad DNS lookup: " + host_name).printStackTrace();
 
-				}else if ( host_name.endsWith( ".i2p" )){
+				}else{
+					
+					String host_net = AENetworkClassifier.categoriseAddress( host_name );
+					
+					if ( host_net == AENetworkClassifier.AT_I2P ){
 
-					//new Exception( "Prevented DNS leak for " + host_name ).printStackTrace();
-
-					checkI2PInstall( host_name );
-
-					throw( new UnknownHostException( host_name ));
-
-				}else if ( host_name.endsWith( ".onion" )){
-
-					//new Exception( "Prevented DNS leak for " + host_name ).printStackTrace();
-
-					throw( new UnknownHostException( host_name ));
+						//new Exception( "Prevented DNS leak for " + host_name ).printStackTrace();
+	
+						checkI2PInstall( host_name );
+	
+						throw( new UnknownHostException( host_name ));
+	
+					}else if ( host_net == AENetworkClassifier.AT_TOR ){
+	
+						//new Exception( "Prevented DNS leak for " + host_name ).printStackTrace();
+	
+						throw( new UnknownHostException( host_name ));
+					}
 				}
 				
 				// System.out.println( "DNS: " + host_name );

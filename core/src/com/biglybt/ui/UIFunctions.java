@@ -18,6 +18,7 @@ package com.biglybt.ui;
 
 
 import java.io.File;
+import java.util.List;
 import java.util.Map;
 
 import com.biglybt.core.CoreComponent;
@@ -90,6 +91,10 @@ public interface UIFunctions
 
 	void setStatusText(int statustype, String key, UIStatusTextClickListener l);
 
+	Object pushStatusText( String message );
+	
+	void popStatusText( Object pushed, int reason, String message );
+	
 	/**
 	 * Request the UI be shut down.
 	 *
@@ -218,6 +223,9 @@ public interface UIFunctions
 
 	public boolean addTorrentWithOptions(TorrentOpenOptions torrentOptions, Map<String,Object> addOptions );
 
+	public List<TorrentOpenOptions>
+	getTorrentOptions();
+	
 	public void showErrorMessage(String keyPrefix, String details, String[] textParams);
 
 	public void showCreateTagDialog(TagReturner tagReturner);

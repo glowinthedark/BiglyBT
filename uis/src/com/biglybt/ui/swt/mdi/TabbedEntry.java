@@ -18,7 +18,9 @@
 
 package com.biglybt.ui.swt.mdi;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.swt.SWT;
@@ -30,7 +32,6 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 
-import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.Debug;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
@@ -42,18 +43,20 @@ import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.pif.UISWTViewEventListener;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.pifimpl.UISWTViewEventCancelledException;
+import com.biglybt.ui.swt.shells.PopOutManager;
 import com.biglybt.ui.swt.skin.SWTSkin;
 import com.biglybt.ui.swt.skin.SWTSkinObject;
 import com.biglybt.ui.swt.skin.SWTSkinObjectContainer;
-import com.biglybt.ui.swt.views.skin.SkinnedDialog;
-import com.biglybt.util.DataSourceUtils;
 import com.biglybt.util.MapUtils;
+import com.biglybt.ui.swt.widgets.TabFolderRenderer;
+import com.biglybt.ui.swt.widgets.TabFolderRenderer.TabbedEntryVitalityImage;
 
 /**
  * MDI Entry that is a {@link CTabItem} and belongs wo {@link TabbedMDI}
  */
 public class TabbedEntry
 	extends BaseMdiEntry
+	implements TabFolderRenderer.TabbedEntry
 {
 	private CTabItem swtItem;
 
@@ -65,7 +68,10 @@ public class TabbedEntry
 
 	private boolean userInitiatedClose;
 	
-	public TabbedEntry(TabbedMDI mdi, SWTSkin skin, String id) {
+	public 
+	TabbedEntry(
+		TabbedMDI mdi, SWTSkin skin, String id) 
+	{
 		super(mdi, id);
 		this.skin = skin;
 	}
@@ -307,41 +313,7 @@ public class TabbedEntry
 
 			viPopout.addListener((x, y) -> {
 				// From TabbedMDI.addMenus, but there's also Sidebar.addGeneralMenus which doesn't set datasource
-				SkinnedDialog skinnedDialog = new SkinnedDialog(
-						"skin3_dlg_sidebar_popout", "shell", null, // standalone
-						SWT.RESIZE | SWT.MAX | SWT.DIALOG_TRIM);
-
-				SWTSkin skin = skinnedDialog.getSkin();
-
-				SWTSkinObjectContainer cont = buildStandAlone(
-						(SWTSkinObjectContainer) skin.getSkinObject("content-area"));
-
-				if (cont != null) {
-
-					String ds_str = "";
-					Object ds = getDataSource();
-					DownloadManager[] dms = DataSourceUtils.getDMs(ds);
-
-					for ( DownloadManager dm: dms ){
-						
-						ds_str += (ds_str.isEmpty()?"":", ") + dm.getDisplayName();
-						
-						if ( ds_str.length() > 200 ){
-							
-							ds_str = ds_str.substring( 0, 200 ) + "...";
-							
-							break;
-						}
-					}
-
-					skinnedDialog.setTitle(	getTitle() + (ds_str.length() == 0 ? "" : (" - " + ds_str)));
-
-					skinnedDialog.open(  "mdi.popout:" + getId(), true );
-
-				} else {
-
-					skinnedDialog.close();
-				}
+				PopOutManager.popOut( TabbedEntry.this );
 			});
 
 		} else if (viPopout != null) {
@@ -358,7 +330,8 @@ public class TabbedEntry
 		swtItem.addDisposeListener(e -> closeView( userInitiatedClose ));
 		String title = getTitle();
 		if (title != null) {
-			swtItem.setText(Utils.escapeAccelerators(title));
+			//swtItem.setText(Utils.escapeAccelerators(title));	// seems we don't need this anymore...
+			swtItem.setText(title);
 		}
 
 		updateLeftImage();
@@ -381,7 +354,8 @@ public class TabbedEntry
 				if (swtItem == null || swtItem.isDisposed()) {
 					return;
 				}
-				swtItem.setText(Utils.escapeAccelerators(getTitle()));
+				//swtItem.setText(Utils.escapeAccelerators(getTitle()));	// seems we don't need this anymore...
+				swtItem.setText(getTitle());
 			});
 		}
 		return changed;
@@ -395,7 +369,8 @@ public class TabbedEntry
 				if (swtItem == null || swtItem.isDisposed()) {
 					return;
 				}
-				swtItem.setText(Utils.escapeAccelerators(getTitle()));
+				//swtItem.setText(Utils.escapeAccelerators(getTitle()));	// seems we don't need this anymore...
+				swtItem.setText(getTitle());
 			});
 		}
 		return changed;
@@ -430,30 +405,10 @@ public class TabbedEntry
 	}
 
 	@Override
-	public void redraw() {
-		Utils.execSWTThread(() -> {
-			if (swtItem == null || swtItem.isDisposed()) {
-				return;
-			}
-			CTabFolder parent = swtItem.getParent();
-			if (parent == null) {
-				return;
-			}
-
-			Rectangle bounds = swtItem.getBounds();
-			GC gc = new GC(parent);
-			Point point = ((TabbedMDI_Ren) parent.getRenderer()).computeSize(parent.indexOf(swtItem), parent.getSelection() == swtItem ? SWT.SELECTED : SWT.NONE, gc, SWT.DEFAULT, SWT.DEFAULT);
-			gc.dispose();
-			if (point.x != bounds.width) {
-				// width of the tab changed (text changed or image added/removed),
-				// tell folder to recalculate tab positions by faking Resize event
-				parent.notifyListeners(SWT.Resize, new Event());
-			} else {
-				// Same size, but maybe the image got updated or text is different and 
-				// just happens to be the same size
-				parent.redraw(bounds.x, bounds.y, bounds.width, bounds.height, true);
-			}
-		});
+	public void 
+	redraw() 
+	{
+		getMDI().getRenderer().redraw( this );
 	}
 
 	// @see BaseMdiEntry#setImageLeftID(java.lang.String)
@@ -514,18 +469,6 @@ public class TabbedEntry
 	// @see MdiEntry#setSelectable(boolean)
 	@Override
 	public void setSelectable(boolean selectable) {
-	}
-
-	// @see MdiEntrySWT#addListener(MdiSWTMenuHackListener)
-	@Override
-	public void addListener(MdiSWTMenuHackListener l) {
-		// TODO Auto-generated method stub
-	}
-
-	// @see MdiEntrySWT#removeListener(MdiSWTMenuHackListener)
-	@Override
-	public void removeListener(MdiSWTMenuHackListener l) {
-		// TODO Auto-generated method stub
 	}
 
 	// @see BaseMdiEntry#setParentID(java.lang.String)
@@ -605,5 +548,31 @@ public class TabbedEntry
 	@Override
 	public TabbedMDI getMDI() {
 		return (TabbedMDI) super.getMDI();
+	}
+	
+	@Override
+	public CTabItem 
+	getTabbedEntryItem()
+	{
+		return( swtItem );
+	}
+	
+	@Override
+	public List<TabbedEntryVitalityImage> 
+	getTabbedEntryVitalityImages()
+	{
+		return( new ArrayList<>( getVitalityImages()));
+	}
+	
+	public ViewTitleInfo 
+	getTabbedEntryViewTitleInfo()
+	{
+		return( getViewTitleInfo());
+	}
+	
+	public boolean
+	isTabbedEntryActive()
+	{
+		return( isActive());
 	}
 }

@@ -99,7 +99,7 @@ public class AboutWindow {
 
       Image image2 = new Image(display, w, h);
       GC gc = new GC(image2);
-      gc.setBackground(window.getBackground());
+      gc.setBackground(Utils.getSkinnedBackground( window ));
       gc.fillRectangle(image2.getBounds());
       gc.dispose();
       imageToDispose = image = Utils.renderTransparency(display, image2, imgGray, new Point(0, 0), 180);
@@ -139,7 +139,7 @@ public class AboutWindow {
 			}
 		});
 
-    Group gInternet = new Group(window, SWT.NULL);
+    Group gInternet = Utils.createSkinnedGroup(window, SWT.NULL);
     GridLayout gridLayout = new GridLayout();
     gridLayout.numColumns = 2;
     gridLayout.makeColumnsEqualWidth = true;
@@ -148,7 +148,7 @@ public class AboutWindow {
     gridData = new GridData(GridData.VERTICAL_ALIGN_FILL | GridData.HORIZONTAL_ALIGN_FILL);
 		gInternet.setLayoutData(gridData);
 
-    Group gSys = new Group(window, SWT.NULL);
+    Group gSys = Utils.createSkinnedGroup(window, SWT.NULL);
     gSys.setLayout(new GridLayout());
     Messages.setLanguageText(gSys, "MainWindow.about.section.system"); //$NON-NLS-1$
     gridData = new GridData(GridData.VERTICAL_ALIGN_FILL | GridData.HORIZONTAL_ALIGN_FILL);
@@ -175,11 +175,11 @@ public class AboutWindow {
     				+ System.getProperty("java.vendor") + "\n"
     				+ System.getProperty("java.home") + "\n\n"
     				+ "SWT v" + Utils.getSWTVersionAndRevision() + ", " + SWT.getPlatform() + swt + "\n"
-    				+ System.getProperty("os.name") + " v"
-    				+ System.getProperty("os.version") + ", "
-    				+ System.getProperty("os.arch") + " (" + (Constants.isOS64Bit?64:32) + " bit)\n"
+    				+ Constants.OSName + " v"
+    				+ Constants.OSVersion + ", "
+    				+ Constants.OSArch + " (" + (Constants.isOS64Bit?64:32) + " bit)\n"
     				+ Constants.APP_NAME.charAt(0) + Constants.getCurrentVersion() + (Constants.SUBVERSION.length()==0?"":("-"+Constants.SUBVERSION)) + "/" + CorePatchLevel.getCurrentPatchLevel() + " "
-    				+ COConfigurationManager.getStringParameter("ui");
+    				+ COConfigurationManager.getStringParameter("ui") + " " + MessageText.getCurrentLocale();
 
     txtSysInfo.setText( about_text );
 		gridData = new GridData(GridData.FILL_BOTH);
@@ -202,10 +202,15 @@ public class AboutWindow {
 				Constants.URL_FORUMS,
 				Constants.URL_WIKI,
 				Constants.PLUGINS_WEB_SITE,
-				"http://ezhdqq3jjpsqg65l.onion"
+				"https://xp5qetgwtj6w62sutz2xnjpx2l7j4z56mbt7xr7wmejerbg67g7nwfyd.onion"
 			}
 		};
 
+	Button copy = new Button( gSys, SWT.PUSH );
+	copy.setLayoutData( new GridData( GridData.HORIZONTAL_ALIGN_END ));
+	copy.setText( MessageText.getString( "label.copy" ));
+	copy.addListener( SWT.Selection,(ev)->{ClipboardCopy.copyToClipBoard(about_text);});
+	
     for (int i = 0; i < link[0].length; i++) {
       final CLabel linkLabel = new CLabel(gInternet, SWT.NONE);
       if (link[0][i].startsWith("!")) {
@@ -215,7 +220,7 @@ public class AboutWindow {
       }
       linkLabel.setData(link[1][i]);
       linkLabel.setCursor(display.getSystemCursor(SWT.CURSOR_HAND));
-      linkLabel.setForeground(Colors.blue);
+      Utils.setLinkForeground(linkLabel);
       gridData = new GridData(GridData.FILL_HORIZONTAL);
       gridData.horizontalSpan = 1;
 			linkLabel.setLayoutData(gridData);

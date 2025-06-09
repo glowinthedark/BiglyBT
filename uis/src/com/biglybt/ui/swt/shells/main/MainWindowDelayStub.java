@@ -21,6 +21,7 @@
 package com.biglybt.ui.swt.shells.main;
 
 import java.io.File;
+import java.util.List;
 import java.util.Map;
 
 import com.biglybt.core.*;
@@ -252,9 +253,9 @@ MainWindowDelayStub
 	}
 
 	private interface
-	Fixup4
+	Fixup4<T>
 	{
-		public Object
+		public T
 		fix(
 			UIFunctionsSWT uif );
 	}
@@ -351,9 +352,9 @@ MainWindowDelayStub
 		}
 	}
 
-	private Object
+	private <T> T
 	fixup(
-		Fixup4	f )
+		Fixup4<T>	f )
 	{
 		core_sem.reserve();
 
@@ -616,6 +617,7 @@ MainWindowDelayStub
 		setStatusText(
 			String key)
 		{
+			log( "setStatusText" );
 		}
 
 		@Override
@@ -627,7 +629,27 @@ MainWindowDelayStub
 		{
 			log( "setStatusText" );
 		}
+		
+		@Override
+		public Object 
+		pushStatusText(
+			String key )
+		{
+			log( "pushStatusText" );
+			
+			return( "" );
+		}
 
+		@Override
+		public void 
+		popStatusText(
+			Object 	o,
+			int		reason,
+			String	message )
+		{
+			log( "popStatusText" );
+		}
+		
 		@Override
 		public boolean
 		dispose(
@@ -841,14 +863,6 @@ MainWindowDelayStub
 			log( "openPluginView" );
 		}
 
-		public void
-		openPluginView(
-			final UISWTViewCore view,
-			final String name)
-		{
-			log( "openPluginView" );
-		}
-
 		@Override
 		public UISWTInstance
 		getUISWTInstance()
@@ -878,11 +892,11 @@ MainWindowDelayStub
 		createMainMenu(
 			final Shell shell)
 		{
-				// OSX Vuze->About menu
+				// OSX BiglyBT->About menu
 
-			return((IMainMenu)fixup( new Fixup4(){
+			return(fixup( new Fixup4<IMainMenu>(){
 				@Override
-				public Object fix(UIFunctionsSWT uif){ return( uif.createMainMenu( shell )); }}));
+				public IMainMenu fix(UIFunctionsSWT uif){ return( uif.createMainMenu( shell )); }}));
 		}
 
 		@Override
@@ -922,9 +936,9 @@ MainWindowDelayStub
 			final String extension,
 			final String name )
 		{
-			return((Boolean)fixup( new Fixup4(){
+			return(fixup( new Fixup4<Boolean>(){
 				@Override
-				public Object fix(UIFunctionsSWT uif){ return( uif.isProgramInstalled( extension, name )); }}));
+				public Boolean fix(UIFunctionsSWT uif){ return( uif.isProgramInstalled( extension, name )); }}));
 		}
 
 		@Override
@@ -1008,9 +1022,9 @@ MainWindowDelayStub
 			final boolean 				force,
 			final TorrentOpenOptions 	torrentOptions)
 		{
-			return((Boolean)fixup( new Fixup4(){
+			return(fixup( new Fixup4<Boolean>(){
 				@Override
-				public Object fix(UIFunctionsSWT uif){ return( uif.addTorrentWithOptions( force, torrentOptions )); }}));
+				public Boolean fix(UIFunctionsSWT uif){ return( uif.addTorrentWithOptions( force, torrentOptions )); }}));
 		}
 
 		@Override
@@ -1019,9 +1033,9 @@ MainWindowDelayStub
 			final TorrentOpenOptions 	torrentOptions,
 			final Map<String,Object>	options )
 		{
-			return((Boolean)fixup( new Fixup4(){
+			return(fixup( new Fixup4<Boolean>(){
 				@Override
-				public Object fix(UIFunctionsSWT uif){ return( uif.addTorrentWithOptions( torrentOptions, options )); }}));
+				public Boolean fix(UIFunctionsSWT uif){ return( uif.addTorrentWithOptions( torrentOptions, options )); }}));
 		}
 
 		@Override
@@ -1051,6 +1065,15 @@ MainWindowDelayStub
 				public void fix(UIFunctionsSWT uif){ uif.openTorrentOpenOptions( shell, sPathOfFilesToOpen, sFilesToOpen, options);}});
 		}
 
+		@Override
+		public List<TorrentOpenOptions> 
+		getTorrentOptions()
+		{
+			return(fixup( new Fixup4<List<TorrentOpenOptions>>(){
+				@Override
+				public List<TorrentOpenOptions> fix(UIFunctionsSWT uif){ return( uif.getTorrentOptions()); }}));
+		}
+		
 		@Override
 		public void
 		openTorrentWindow()

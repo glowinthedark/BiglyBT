@@ -156,23 +156,28 @@ public class StartStopConfigModel
 		listFP.add(model.createGroup(null, firstPriorityType));
 
 		// row
-		String[] minQueueLabels = new String[55];
-		int[] minQueueValues = new int[55];
-		minQueueLabels[0] = "1:2 (" + 0.5 + ")";
-		minQueueValues[0] = 500;
-		minQueueLabels[1] = "3:4 (" + 0.75 + ")";
-		minQueueValues[1] = 750;
-		minQueueLabels[2] = "1:1";
-		minQueueValues[2] = 1000;
-		minQueueLabels[3] = "5:4 (" + 1.25 + ")";
-		minQueueValues[3] = 1250;
-		minQueueLabels[4] = "3:2 (" + 1.50 + ")";
-		minQueueValues[4] = 1500;
-		minQueueLabels[5] = "7:4 (" + 1.75 + ")";
-		minQueueValues[5] = 1750;
-		for (int i = 6; i < minQueueLabels.length; i++) {
-			minQueueLabels[i] = i - 4 + ":1";
-			minQueueValues[i] = (i - 4) * 1000;
+		String[] minQueueLabels = new String[57];
+		int[] minQueueValues = new int[57];
+		int mqpos = 0;
+		minQueueLabels[mqpos] = MessageText.getString("ConfigView.text.ignore");
+		minQueueValues[mqpos++] = 0;
+		minQueueLabels[mqpos] = "1:2 (" + 0.5 + ")";
+		minQueueValues[mqpos++] = 500;
+		minQueueLabels[mqpos] = "3:4 (" + 0.75 + ")";
+		minQueueValues[mqpos++] = 750;
+		minQueueLabels[mqpos] = "1:1";
+		minQueueValues[mqpos++] = 1000;
+		minQueueLabels[mqpos] = "5:4 (" + 1.25 + ")";
+		minQueueValues[mqpos++] = 1250;
+		minQueueLabels[mqpos] = "3:2 (" + 1.50 + ")";
+		minQueueValues[mqpos++] = 1500;
+		minQueueLabels[mqpos] = "7:4 (" + 1.75 + ")";
+		minQueueValues[mqpos++] = 1750;
+		minQueueLabels[mqpos] = "2:1";
+		minQueueValues[mqpos++] = 2000;
+		for (int i = mqpos; i < minQueueLabels.length; i++) {
+			minQueueLabels[i] = i - 5 + ":1";
+			minQueueValues[i] = (i - 5) * 1000;
 		}
 		listFP.add(
 				model.addIntListParameter2("StartStopManager_iFirstPriority_ShareRatio",
@@ -349,10 +354,17 @@ public class StartStopConfigModel
 				"ConfigView.label.seeding.rankType.timed.minTimeWithPeers", 0, 0,
 				Integer.MAX_VALUE);
 
+		IntParameter paramMaxSeedingTimeWithPeers = model.addIntParameter2(
+				"StartStopManager_iTimed_MaxSeedingTimeWithPeers",
+				"ConfigView.label.seeding.rankType.timed.maxTimeWithPeers", 0, 0,
+				Integer.MAX_VALUE);
+
+		paramMaxSeedingTimeWithPeers.setIndent(1, true);
+		
 		ParameterGroup pgTimedOptions = model.createGroup(
 				"ConfigView.label.seeding.rankType.timed.options",
-				paramMinSeedingTimeWithPeers);
-
+				paramMinSeedingTimeWithPeers, paramMaxSeedingTimeWithPeers );
+		
 		ParameterGroup pgRankTypeOptions = model.createGroup(null, pgSeedOptions,
 				pgTimedOptions);
 
@@ -660,7 +672,30 @@ public class StartStopConfigModel
 
 		model.addHyperlinkParameter2("ConfigView.label.please.visit.here",
 				Wiki.DOWNLOADING_RULES);
+		
+		// queue position
+				
+		String[] qpLabels = {
+				MessageText.getString("OpenTorrentWindow.addPosition.first"),
+				MessageText.getString("OpenTorrentWindow.addPosition.last"),
+				//MessageText.getString("OpenTorrentWindow.addPosition.auto"),	// selected dynamically if needed
+			};
 
+		int[] qpValues = {
+			0, 1, // 2
+		};
+
+		IntListParameter queue_position = model.addIntListParameter2(
+				"Add Torrent Queue Position",
+				"label.new.download.queue.position", qpValues, qpLabels,
+				1 );
+		
+		LabelParameter qp_info = model.addLabelParameter2( "queue.position.info" );
+
+		ParameterGroup qp_group = model.createGroup( null, queue_position, qp_info );
+
+		qp_group.setNumberOfColumns( 2 );
+		
 		// sort type
 
 		String[] orderLabels = {
@@ -671,6 +706,8 @@ public class StartStopConfigModel
 			MessageText.getString("label.reverse.size"),
 			MessageText.getString("label.speed"),
 			MessageText.getString("TableColumn.header.eta"),
+			MessageText.getString("TableColumn.header.file.priorities"),
+			MessageText.getString("TableColumn.header.remaining"),
 		};
 
 		int[] orderValues = {
@@ -681,6 +718,8 @@ public class StartStopConfigModel
 			DefaultRankCalculator.DOWNLOAD_ORDER_REVERSE_SIZE,
 			DefaultRankCalculator.DOWNLOAD_ORDER_SPEED,
 			DefaultRankCalculator.DOWNLOAD_ORDER_ETA,
+			DefaultRankCalculator.DOWNLOAD_ORDER_FILE_PRIORITIES,
+			DefaultRankCalculator.DOWNLOAD_ORDER_REMAINING,
 		};
 
 		IntListParameter sort_type = model.addIntListParameter2(

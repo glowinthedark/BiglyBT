@@ -117,7 +117,7 @@ public class OpenTorrentWindow
 		soTextArea = (SWTSkinObjectTextbox) skin.getSkinObject("text-area");
 		
 		Text tb = ((Text) soTextArea.getControl());
-				
+			
 		Clipboard clipboard = new Clipboard(Display.getDefault());
 
 		String sClipText = (String) clipboard.getContents(TextTransfer.getInstance());
@@ -138,15 +138,79 @@ public class OpenTorrentWindow
 		
 		tb.setFocus();
 		tb.addModifyListener(new ModifyListener() {
+			
+			String lastText = tb.getText();
 			@Override
-			public void modifyText(ModifyEvent e) {
+			public void 
+			modifyText(
+				ModifyEvent e ) 
+			{
+				String text = tb.getText();
+							
+				String lastTextTrim = lastText.replaceFirst("\\s++$", "");
+								
+				int lastTextLength = lastTextTrim.length();
+				
+					// If someone pastes a URL onto the end of existing text without a separator then stick one in
+					// Allows multiple pastes of magnets, for example, without manually having to add separators between each
+				
+				if ( text.length() > lastTextLength + 10 && text.startsWith( lastTextTrim )){
+					
+					String newText = text.substring( lastTextLength ).trim();
+																
+					boolean addSeparators = false;
+
+					try{
+						addSeparators = new File( newText ).exists();
+						
+					}catch( Throwable f ){
+					}
+
+					if ( !addSeparators ){
+						
+						try{
+							addSeparators = new URL( newText ).getProtocol().length() > 0;
+							
+						}catch( Throwable f ){
+						}
+					}
+											
+					if ( addSeparators ){
+						
+						if ( lastTextLength > 0 && !lastTextTrim.endsWith( "\n" )){
+							
+							newText = "\r\n" + newText; 
+						}
+						
+						text = lastTextTrim + newText + "\r\n";
+
+						lastText = text;	// set here so recursive modification doesn't go mad
+
+						tb.setText( text );
+
+						tb.setSelection( text.length());
+
+						return;
+					}
+				}
+				lastText = text;
 				int userMode = COConfigurationManager.getIntParameter("User Mode");
 				if (userMode > 0) {
 					if (soReferArea != null) {
-						String text = ((Text) e.widget).getText();
 						boolean hasURL = UrlUtils.parseTextForURL(text, false, true) != null;
 						soReferArea.setVisible(hasURL);
 					}
+				}
+			}
+		});
+
+		tb.addListener(SWT.KeyDown,(ev)->{
+
+			if ( ev.keyCode == SWT.CR || ev.keyCode == SWT.KEYPAD_CR ){
+
+				if (( ev.stateMask & ( SWT.SHIFT | SWT.CTRL | SWT.ALT )) != 0 ){
+					
+					openTorrent( SWT.OK );
 				}
 			}
 		});
@@ -199,18 +263,7 @@ public class OpenTorrentWindow
 			buttonsArea = new StandardButtonsArea() {
 				@Override
 				protected void clicked(int intValue) {
-					String referrer = null;
-					if (referrer_combo != null) {
-						referrer = referrer_combo.getText().trim();
-					}
-
-					if (dlg != null) {
-						dlg.close();
-					}
-					if (intValue == SWT.OK && soTextArea != null
-							&& soTextArea.getText().length()>0) {
-						openTorrent(soTextArea.getText(), referrer);
-					}
+					openTorrent( intValue );
 				}
 			};
 			buttonsArea.setButtonIDs(new String[] {
@@ -240,6 +293,24 @@ public class OpenTorrentWindow
 				dispose();
 			}
 		});
+	}
+	
+	private void
+	openTorrent(
+		int	intValue )
+	{
+		String referrer = null;
+		if (referrer_combo != null) {
+			referrer = referrer_combo.getText().trim();
+		}
+
+		if (dlg != null) {
+			dlg.close();
+		}
+		if (intValue == SWT.OK && soTextArea != null
+				&& soTextArea.getText().length()>0) {
+			openTorrent(soTextArea.getText(), referrer);
+		}
 	}
 
 	protected void openTorrent(String text, String newReferrer) {
@@ -430,7 +501,7 @@ public class OpenTorrentWindow
 					if (UrlUtils.isURL(sFileName)
 							|| (file.exists() && TorrentUtils.isTorrentFile(sFileName))) {
 						if (text.length() > 0) {
-							text += "\n";
+							text += "\r\n";
 						}
 						text += sFileName;
 						numAdded++;
@@ -441,7 +512,15 @@ public class OpenTorrentWindow
 			}
 
 			if (numAdded > 0) {
+				text += "\r\n";
+				
 				soTextArea.setText(text);
+				
+				Text tb = ((Text)soTextArea.getControl());
+				
+				tb.setSelection( text.length());
+				
+				tb.setFocus();
 			}
 		}
 

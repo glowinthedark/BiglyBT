@@ -28,6 +28,7 @@ public interface
 ScriptProvider
 {
 	public static final String	ST_JAVASCRIPT	= "javascript";
+	public static final String	ST_PLUGIN		= "plugin";
 
 	public String
 	getProviderName();
@@ -35,6 +36,13 @@ ScriptProvider
 	public String
 	getScriptType();
 
+	public default boolean
+	canEvalBatch(
+		String		script )
+	{
+		return( false );
+	}
+	
 	public Object
 	eval(
 		String					script,

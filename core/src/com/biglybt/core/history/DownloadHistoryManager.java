@@ -37,6 +37,9 @@ DownloadHistoryManager
 	public int
 	getHistoryCount();
 
+	public List<DownloadHistory>
+	getHistory();
+	
 	public void
 	removeHistory(
 		List<DownloadHistory>	history );
@@ -51,7 +54,8 @@ DownloadHistoryManager
 
 	public long[]
 	getDates(
-		byte[]		hash );
+		byte[]		hash,
+		boolean		with_redownload );	// setting this true has side-effects...
 
 	public void
 	addListener(

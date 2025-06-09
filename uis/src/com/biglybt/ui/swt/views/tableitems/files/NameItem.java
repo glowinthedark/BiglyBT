@@ -38,12 +38,16 @@ import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.torrent.TOTorrentFile;
+import com.biglybt.core.util.AERunnable;
+import com.biglybt.core.util.AsyncDispatcher;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.FileUtil;
 import com.biglybt.ui.common.table.TableCellCore;
 import com.biglybt.ui.common.table.TableRowCore;
 import com.biglybt.ui.swt.ImageRepository;
+import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.debug.ObfuscateCellText;
 import com.biglybt.ui.swt.debug.UIDebugGenerator;
@@ -72,11 +76,12 @@ import com.biglybt.core.CoreOperationTask;
 public class NameItem extends CoreTableColumnSWT implements
 	TableCellLightRefreshListener, ObfuscateCellText,
 	TableCellSWTPaintListener, TableCellMouseMoveListener,
-	TableCellInplaceEditorListener
+	TableCellInplaceEditorListener, TableCellToolTipListener
 {
 	private static final String ID_CHECKHITAREA		= "checkHitArea";
 
-	private static final Object	KEY_OLD_CELL_TT	= new Object();
+	private static final Object	KEY_OLD_CELL_TT		= new Object();
+	private static final Object	KEY_PATH_ICON		= new Object();
 	
 	private static boolean NEVER_SHOW_TWISTY;
 	
@@ -89,12 +94,14 @@ public class NameItem extends CoreTableColumnSWT implements
 				public void parameterChanged(String parameterName){
 					NEVER_SHOW_TWISTY =	!COConfigurationManager.getBooleanParameter("FilesView.use.tree");
 				}
-			});;	
+			});	
 	}
 
 	
 	private static boolean bShowIcon;
 
+	private static AsyncDispatcher dispatcher = new AsyncDispatcher( "NameItem" );
+	
 	private ParameterListener configShowProgramIconListener;
 
 	final TableContextMenuItem menuItem;
@@ -307,38 +314,55 @@ public class NameItem extends CoreTableColumnSWT implements
 			String check_key;
 			boolean is_ro = false;
 			
-			if ( is_leaf ){
-				if (fileInfo.isSkipped()){
-					
-					int	st = fileInfo.getStorageType();
-					
-					if ( 	st == DiskManagerFileInfo.ST_COMPACT ||
-							st == DiskManagerFileInfo.ST_REORDER_COMPACT ){
-						
-						check_key = "check_no";
-					}else{
-						check_key = "check_no_grey";
-					}
-				}else{
-					if ( fileInfo.getLength() == fileInfo.getDownloaded()){
-						check_key = "check_ro_yes";
-						is_ro = true;
-					}else{
-						check_key = "check_yes";
-					}
-				}
+			TOTorrentFile tf = fileInfo.getTorrentFile();
+			
+			if ( tf != null && tf.isPadFile()){
+				
+				is_ro = true;
+				
+				check_key = "check_ro_no";
+				
 			}else{
-				if ( is_skipped == 0 ){
-					check_key = "check_no";
-				}else if ( is_skipped == 1 ){
-					if ( fileInfo.getLength() == fileInfo.getDownloaded()){
-						check_key = "check_ro_yes";
-						is_ro = true;
+				
+				if ( is_leaf ){
+					Boolean isSkipped = fileInfo.isSkipping();
+					
+					if ( isSkipped == null ){
+						isSkipped = fileInfo.isSkipped();
+					}
+					
+					if (isSkipped){
+						
+						int	st = fileInfo.getStorageType();
+						
+						if ( 	st == DiskManagerFileInfo.ST_COMPACT ||
+								st == DiskManagerFileInfo.ST_REORDER_COMPACT ){
+							
+							check_key = "check_no";
+						}else{
+							check_key = "check_no_grey";
+						}
 					}else{
-						check_key = "check_yes";
+						if ( fileInfo.getLength() == fileInfo.getDownloaded()){
+							check_key = "check_ro_yes";
+							is_ro = true;
+						}else{
+							check_key = "check_yes";
+						}
 					}
 				}else{
-					check_key = "check_maybe";
+					if ( is_skipped == 0 ){
+						check_key = "check_no";
+					}else if ( is_skipped == 1 ){
+						if ( fileInfo.getLength() == fileInfo.getDownloaded()){
+							check_key = "check_ro_yes";
+							is_ro = true;
+						}else{
+							check_key = "check_yes";
+						}
+					}else{
+						check_key = "check_maybe";
+					}
 				}
 			}
 			
@@ -370,8 +394,31 @@ public class NameItem extends CoreTableColumnSWT implements
 			return;
 		}
 
-		Image[] imgThumbnail = new Image[]{  fileInfo==null?null:ImageRepository.getPathIcon(fileInfo.getFile(true).getPath(),
-				cell.getHeight() > 32, false) };
+		Image[] imgThumbnail = null;
+
+		if ( fileInfo != null ){
+			
+			File file = fileInfo.getFile(true);
+					
+			Object piCache = cell.getData( KEY_PATH_ICON );
+		
+			if ( piCache != null ){
+				
+				Object[] temp = (Object[])piCache;
+				
+				if ( FileUtil.areFilePathsIdentical((File)temp[0],file )){
+					
+					imgThumbnail = (Image[])temp[1];
+				}
+			}
+			
+			if ( imgThumbnail == null ){
+			
+				imgThumbnail = new Image[]{ ImageRepository.getPathIcon(file.getPath(), cell.getHeight() > 32, false) };
+		
+				cell.setData( KEY_PATH_ICON, new Object[]{ file, imgThumbnail });
+			}
+		}
 
 		if (imgThumbnail != null && ImageLoader.isRealImage(imgThumbnail[0])) {
 			try {
@@ -511,7 +558,27 @@ public class NameItem extends CoreTableColumnSWT implements
 
 		cell.setToolTip(tooltip.length()==0?null:tooltip);
 	}
-	
+
+	@Override
+	public void cellHover(TableCell cell) {
+		DiskManagerFileInfo fileInfo = (DiskManagerFileInfo) cell.getDataSource();
+		String tooltip;
+		if (fileInfo == null) {
+			tooltip = null;
+		} else {
+			String name = fileInfo.getFile(true).getName();
+			String origName = fileInfo.getFile( false ).getName();
+			tooltip = name.equals(origName) ? name : name + "\n" + origName;
+		}
+
+		cell.setToolTip(tooltip);
+	}
+
+	@Override
+	public void cellHoverComplete(TableCell cell) {
+		cell.setToolTip(null);
+	}
+
 	@Override
 	public String getClipboardText(TableCell cell) {
 		final DiskManagerFileInfo fileInfo = (DiskManagerFileInfo) cell.getDataSource();
@@ -534,7 +601,9 @@ public class NameItem extends CoreTableColumnSWT implements
 	public void cellMouseTrigger(TableCellMouseEvent event) {
 		if (event.eventType == TableCellMouseEvent.EVENT_MOUSEMOVE
 				|| event.eventType == TableRowMouseEvent.EVENT_MOUSEDOWN) {
-			TableRow row = event.cell.getTableRow();
+			TableCell cell = event.cell;
+			
+			TableRow row = cell.getTableRow();
 			if (row == null) {
 				return;
 			}
@@ -548,7 +617,7 @@ public class NameItem extends CoreTableColumnSWT implements
 				if ( inExpando ){
 					inArea = true;
 				
-					if (event.eventType == TableCellMouseEvent.EVENT_MOUSEDOWN) {
+					if (event.eventType == TableCellMouseEvent.EVENT_MOUSEDOWN && event.button == 1) {
 			
 						if (row instanceof TableRowCore) {
 							TableRowCore rowCore = (TableRowCore) row;
@@ -563,13 +632,13 @@ public class NameItem extends CoreTableColumnSWT implements
 				Rectangle hitArea = (Rectangle) data;
 				boolean inCheck = hitArea.contains(event.x, event.y);
 
-				String our_tt = MessageText.getString( "filesview.name.check.tt" );
+				String our_tt = Messages.getLanguageText( "filesview.name.check.tt" );
 				
 				Object set_tt = null;
 				
 				if ( inCheck ){
 					
-					final DiskManagerFileInfo fileInfo = (DiskManagerFileInfo)event.cell.getDataSource();
+					final DiskManagerFileInfo fileInfo = (DiskManagerFileInfo)cell.getDataSource();
 
 					boolean realFile;
 					
@@ -588,52 +657,78 @@ public class NameItem extends CoreTableColumnSWT implements
 					}
 					
 					inArea = true;
-					if (event.eventType == TableCellMouseEvent.EVENT_MOUSEDOWN) {
+					if (event.eventType == TableCellMouseEvent.EVENT_MOUSEDOWN && event.button == 1 ) {
 						if (row instanceof TableRowCore) {
 							TableRowCore rowCore = (TableRowCore) row;
 							if ( rowCore != null ){
 							
-								if ( fileInfo instanceof FilesView.FilesViewTreeNode ){
-									
-									FilesView.FilesViewTreeNode node = (FilesView.FilesViewTreeNode)fileInfo;
-									
-									if ( !node.isLeaf()){
+									// we really don't want lots of concurrently running threads
+									// switching skip state...
 								
-										int old_skipped = node.getSkippedState();
+								dispatcher.dispatch( AERunnable.create(()->{
+									
+									if ( fileInfo instanceof FilesView.FilesViewTreeNode ){
 										
-										boolean new_skipped;
+										FilesView.FilesViewTreeNode node = (FilesView.FilesViewTreeNode)fileInfo;
 										
-										if ( old_skipped == 0 ){
-											new_skipped = false;
-										}else if ( old_skipped == 1 ){
-											new_skipped = true;
-										}else{
-											new_skipped = true;
+										if ( !node.isLeaf()){
+									
+											int old_skipped = node.getSkippedState();
+											
+											boolean new_skipped;
+											
+											if ( old_skipped == 0 ){
+												new_skipped = false;
+											}else if ( old_skipped == 1 ){
+												new_skipped = true;
+											}else{
+												new_skipped = false;	// intermediate -> checked
+											}
+											
+											// disconcerting if we don't force the checkbox state
+											// to update quickly...
+										
+											Utils.execSWTThreadLater( 100, ()->{
+												
+												cell.invalidate();
+												
+												rowCore.redraw( true );
+											});
+										
+											node.setSkipped( new_skipped );
+											
+											return;
 										}
-										
-										node.setSkipped( new_skipped );
-										
-										return;
 									}
-								}
-								
-								if ( ( event.keyboardState & SWT.SHIFT ) != 0 && !fileInfo.isSkipped()){
 									
-									FilesViewMenuUtil.changePriority(
-											FilesViewMenuUtil.PRIORITY_DELETE,
-											Collections.singletonList(fileInfo), false );
-								}else{
-								
-									ManagerUtils.setFileSkipped( fileInfo, !fileInfo.isSkipped());
-								}
+									if ( ( event.keyboardState & SWT.SHIFT ) != 0 && !fileInfo.isSkipped()){
+										
+										FilesViewMenuUtil.changePriority(
+												FilesViewMenuUtil.PRIORITY_DELETE,
+												Collections.singletonList(fileInfo), false );
+									}else{
+									
+											// disconcerting if we don't force the checkbox state
+											// to update quickly...
+										
+										Utils.execSWTThreadLater( 100, ()->{
+											
+											cell.invalidate();
+											
+											rowCore.redraw();
+										});
+																																																			
+										ManagerUtils.setFileSkipped( fileInfo, !fileInfo.isSkipped());
+									}
+								}));
 							}
 						}
 					}
 				}
 				
-				if ( event.cell instanceof TableCellCore ){
+				if ( cell instanceof TableCellCore ){
 					
-					TableCellCore cellCore = (TableCellCore)event.cell;
+					TableCellCore cellCore = (TableCellCore)cell;
 										
 					Object existingTT = cellCore.getToolTip();
 					
@@ -664,7 +759,7 @@ public class NameItem extends CoreTableColumnSWT implements
 			}
 			
 			if (event.eventType == TableCellMouseEvent.EVENT_MOUSEMOVE) {
-				((TableCellCore) event.cell).setCursorID(inArea ? SWT.CURSOR_HAND : SWT.CURSOR_ARROW);
+				((TableCellCore)cell).setCursorID(inArea ? SWT.CURSOR_HAND : SWT.CURSOR_ARROW);
 			}
 		}
 	}
@@ -720,8 +815,13 @@ public class NameItem extends CoreTableColumnSWT implements
 
 			
 			@Override
-			public void run(CoreOperation operation) {
-				result[0] = fileInfo.setLink(target);
+			public boolean 
+			runOperation(
+				CoreOperation operation) 
+			{
+				result[0] = fileInfo.setLink( target, false );
+				
+				return( true );
 			}
 
 			@Override

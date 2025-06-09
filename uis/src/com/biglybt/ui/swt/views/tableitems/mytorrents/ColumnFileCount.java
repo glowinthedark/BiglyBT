@@ -28,6 +28,7 @@ import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.mdi.BaseMdiEntry;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.shells.GCStringPrinter;
+import com.biglybt.ui.swt.shells.PopOutManager;
 import com.biglybt.ui.swt.views.FilesView;
 import com.biglybt.ui.swt.views.ViewManagerSWT;
 import com.biglybt.ui.swt.views.skin.SkinnedDialog;
@@ -107,6 +108,7 @@ public class ColumnFileCount
 		}
 
 		int sortVal = dm.getNumFileInfos();
+		cell.setTextEquivalent( String.valueOf( sortVal ));
 		Rectangle bounds = cell.getBounds();
 		Rectangle printArea = new Rectangle(bounds.x, bounds.y, bounds.width - 6,
 				bounds.height);
@@ -120,8 +122,8 @@ public class ColumnFileCount
 		if (builder == null) {
 			return;
 		}
-		SkinnedDialog skinnedDialog = BaseMdiEntry.buildSkinnedDialog("FilesView",
-				dm, builder);
+		SkinnedDialog skinnedDialog = PopOutManager.buildSkinnedDialog("FilesView",	dm, builder);
+		
 		if (skinnedDialog == null) {
 			return;
 		}

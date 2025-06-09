@@ -21,6 +21,7 @@
 package com.biglybt.ui.swt.views.skin;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -32,9 +33,16 @@ import org.eclipse.swt.events.KeyListener;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 
+import com.biglybt.core.CoreFactory;
 import com.biglybt.core.category.Category;
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
+import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.download.DownloadManager;
+import com.biglybt.core.global.GlobalManager;
+import com.biglybt.core.global.GlobalManagerEvent;
+import com.biglybt.core.global.GlobalManagerEventListener;
+import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.tag.*;
 import com.biglybt.core.util.*;
 import com.biglybt.ui.UIFunctions;
@@ -44,13 +52,17 @@ import com.biglybt.ui.common.table.*;
 import com.biglybt.ui.common.table.impl.TableColumnManager;
 import com.biglybt.ui.common.table.impl.TableViewImpl;
 import com.biglybt.ui.common.updater.UIUpdatable;
+import com.biglybt.ui.config.ConfigSectionInterfaceTags;
+import com.biglybt.ui.mdi.MultipleDocumentInterface;
 import com.biglybt.ui.selectedcontent.SelectedContentManager;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.SimpleTextEntryWindow;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.columns.tag.*;
+import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.mainwindow.MenuFactory;
 import com.biglybt.ui.swt.mdi.MdiEntrySWT;
+import com.biglybt.ui.swt.mdi.MultipleDocumentInterfaceSWT;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.pifimpl.UISWTViewCore;
 import com.biglybt.ui.swt.skin.*;
@@ -63,7 +75,6 @@ import com.biglybt.ui.swt.views.table.TableViewSWTMenuFillListener;
 import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
 import com.biglybt.ui.swt.views.table.impl.TableViewSWT_TabsCommon;
 import com.biglybt.ui.swt.views.utils.TagUIUtils;
-
 import com.biglybt.pif.ui.UIInputReceiver;
 import com.biglybt.pif.ui.UIInputReceiverListener;
 import com.biglybt.pif.ui.UIPluginViewToolBarListener;
@@ -79,7 +90,7 @@ import com.biglybt.pif.ui.toolbar.UIToolBarItem;
 public class SBC_TagsOverview
 	extends SkinView
 	implements UIUpdatable, UIPluginViewToolBarListener, TableViewFilterCheck<Tag>, TagManagerListener, TagTypeListener,
-	TableViewSWTMenuFillListener, TableSelectionListener, KeyListener {
+	TableViewSWTMenuFillListener, TableSelectionListener, KeyListener, ParameterListener, GlobalManagerEventListener {
 
 	private static final String TABLE_TAGS = "TagsView";
 	// TODO: This should be com.biglybt.pif.tag.Tag but we'd have to
@@ -93,9 +104,43 @@ public class SBC_TagsOverview
 	private boolean columnsAdded = false;
 
 	private boolean tm_listener_added;
+	private boolean gm_listener_added;
+	
+	private List<Tag> datasources_for_selection = new ArrayList<>();
 
-	private Object datasource;
-
+	private boolean show_swarm_tags;
+	
+	private GlobalManager global_manager;
+	
+	{
+		try{
+			global_manager = CoreFactory.getSingleton().getGlobalManager();
+			
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+		}
+	}
+	
+	public
+	SBC_TagsOverview()
+	{
+		COConfigurationManager.addAndFireParameterListener( ConfigKeys.Tag.BCFG_TAG_SHOW_SWARM_TAGS_IN_OVERVIEW, this );
+	}
+	
+	@Override
+	public void 
+	parameterChanged(
+		String parameterName)
+	{
+		show_swarm_tags = COConfigurationManager.getBooleanParameter(parameterName);
+		
+		if ( tv != null ){
+			
+			tv.refilter();
+		}
+	}
+	
 	// @see com.biglybt.pif.ui.toolbar.UIToolBarActivationListener#toolBarItemActivated(ToolBarItem, long, java.lang.Object)
 	@Override
 	public boolean toolBarItemActivated(ToolBarItem item, long activationType,
@@ -196,6 +241,30 @@ public class SBC_TagsOverview
 	public Object skinObjectInitialShow(SWTSkinObject skinObject, Object params) {
 		initColumns();
 
+		SWTSkinObjectContainer	soTopArea 	= (SWTSkinObjectContainer)getSkinObject("tag-top-area");
+		SWTSkinObjectText	 	soTitle 	= (SWTSkinObjectText)getSkinObject("title");
+		
+		for (Control comp: new Control[]{ soTopArea.getComposite(), soTitle.getControl()}){
+			
+			Menu menu = new Menu(comp);
+			comp.setMenu( menu );
+			
+			MenuItem mi = new MenuItem( menu, SWT.PUSH );
+	
+			mi.setText( MessageText.getString( "menu.tag.options"));
+	
+			mi.addListener( SWT.Selection, (ev)->{
+				UIFunctions uif = UIFunctionsManager.getUIFunctions();
+	
+				if ( uif != null ){
+	
+					uif.getMDI().showEntryByID(
+							MultipleDocumentInterface.SIDEBAR_SECTION_CONFIG,
+							ConfigSectionInterfaceTags.SECTION_ID );
+				}
+			});
+		}
+		
 		SWTSkinObjectButton soAddTagButton = (SWTSkinObjectButton) getSkinObject("add-tag");
 		if (soAddTagButton != null) {
 			soAddTagButton.addSelectionListener(new ButtonListenerAdapter() {
@@ -501,6 +570,45 @@ public class SBC_TagsOverview
 					}
 				});
 
+		tableManager.registerColumn(Tag.class, ColumnTagEOA.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnTagEOA(column);
+					}
+				});
+		
+		tableManager.registerColumn(Tag.class, ColumnTagSortAutoApply.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnTagSortAutoApply(column);
+					}
+				});
+		
+		tableManager.registerColumn(Tag.class, ColumnTagHideWhenEmpty.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnTagHideWhenEmpty(column);
+					}
+				});
+
+		tableManager.registerColumn(Tag.class, ColumnTagMaxActiveDownloads.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnTagMaxActiveDownloads(column);
+					}
+				});
+		
+		tableManager.registerColumn(Tag.class, ColumnTagMaxActiveSeeds.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnTagMaxActiveSeeds(column);
+					}
+				});
 		
 		tableManager.setDefaultColumnNames(TABLE_TAGS,
 				new String[] {
@@ -522,6 +630,15 @@ public class SBC_TagsOverview
 	// @see SkinView#skinObjectHidden(SWTSkinObject, java.lang.Object)
 	@Override
 	public Object skinObjectHidden(SWTSkinObject skinObject, Object params) {
+
+		datasources_for_selection.clear();
+		
+		List<Object> dataSources = tv.getSelectedDataSources();
+		for (Object dataSource : dataSources) {
+			if ((dataSource instanceof Tag)){
+				datasources_for_selection.add((Tag)dataSource);
+			}
+		}
 
 		if (tv != null) {
 
@@ -545,7 +662,13 @@ public class SBC_TagsOverview
 			tm_listener_added = false;
 		}
 
-
+		if ( global_manager != null ){
+			
+			global_manager.removeEventListener( this );
+		
+			gm_listener_added = false;
+		}
+		
 		return super.skinObjectHidden(skinObject, params);
 	}
 
@@ -583,6 +706,13 @@ public class SBC_TagsOverview
 			}
 		}
 
+		if ( global_manager != null && !gm_listener_added ){
+			
+			global_manager.addEventListener( this );
+		
+			gm_listener_added = true;
+		}
+
 		return null;
 	}
 
@@ -607,6 +737,8 @@ public class SBC_TagsOverview
 			}
 		}
 
+		COConfigurationManager.removeParameterListener( ConfigKeys.Tag.BCFG_TAG_SHOW_SWARM_TAGS_IN_OVERVIEW, this );
+		
 		return super.skinObjectDestroyed(skinObject, params);
 	}
 
@@ -628,17 +760,31 @@ public class SBC_TagsOverview
 			SWTSkinObjectTextbox soFilter = (SWTSkinObjectTextbox) getSkinObject(
 					"filterbox");
 			if (soFilter != null) {
-				tv.enableFilterCheck(soFilter.getBubbleTextBox(), this);
+				BubbleTextBox filter = soFilter.getBubbleTextBox();
+				tv.enableFilterCheck(filter, this);
+				
+				String tooltip = MessageText.getString("filter.tt.start");
+				tooltip += MessageText.getString("tagsoverview.filter.tt.line1");
+				tooltip += MessageText.getString("tagsoverview.filter.tt.line2");
+				
+				filter.setTooltip( tooltip );
+				
+				filter.setMessage( MessageText.getString( "Button.search2" ) );
 			}
 
 			tv.setRowDefaultHeightEM(1);
 
-			table_parent = new Composite(control, SWT.BORDER);
-			table_parent.setLayoutData(Utils.getFilledFormData());
+			table_parent = Utils.createSkinnedComposite(control, SWT.BORDER,Utils.getFilledFormData());
+		
 			GridLayout layout = new GridLayout();
 			layout.marginHeight = layout.marginWidth = layout.verticalSpacing = layout.horizontalSpacing = 0;
 			table_parent.setLayout(layout);
 
+			/*
+			 * 05/2024. Removed this because re-activation is causing selected content to be lost. In this case select a tag, select the Torrents sub-view
+			 * and select a torrent. Hit F2 for example (to get a change-name dialog) and then hit escape to close the dialog. With this code enabled it causes
+			 * selection to return to the Tag above rather than the torrent
+			 * 
 			table_parent.addListener(SWT.Activate, new Listener() {
 				@Override
 				public void handleEvent(Event event) {
@@ -646,6 +792,7 @@ public class SBC_TagsOverview
 					updateSelectedContent();
 				}
 			});
+			*/
 			/*
 			table_parent.addListener(SWT.Deactivate, new Listener() {
 				public void handleEvent(Event event) {
@@ -671,12 +818,17 @@ public class SBC_TagsOverview
 
 				@Override
 				public void rowAdded(TableRowCore row) {
-					if (datasource == row.getDataSource()) {
-						tv.setSelectedRows(new TableRowCore[] { row });
+					if ( datasources_for_selection.remove( row.getDataSource())) {
+						List<TableRowCore> rows = Arrays.asList(tv.getSelectedRows());
+						if ( !rows.contains( row )){
+							rows = new ArrayList<>( rows );
+							rows.add( row );
+							tv.setSelectedRows( rows.toArray( new TableRowCore[rows.size()]));
+						}
 					}
 				}
 			});
-
+			
 			DragSource dragSource = tv.createDragSource(DND.DROP_COPY | DND.DROP_MOVE);
 			if (dragSource != null) {
 				dragSource.setTransfer(TextTransfer.getInstance());
@@ -800,12 +952,19 @@ public class SBC_TagsOverview
 							return;
 						}
 
-						for (DownloadManager dm : dms) {
-							if ( doAdd ){
-								tag.addTaggable( dm );
-							}else{
-								tag.removeTaggable( dm );
+						try{
+							tag.addTaggableBatch( true );
+						
+							for (DownloadManager dm : dms) {
+								if ( doAdd ){
+									tag.addTaggable( dm );
+								}else{
+									tag.removeTaggable( dm );
+								}
 							}
+						}finally{
+							
+							tag.addTaggableBatch( false );
 						}
 					}
 				});
@@ -971,6 +1130,49 @@ public class SBC_TagsOverview
 		}
 	}
 
+	public void
+	eventOccurred(
+		GlobalManagerEvent		event )
+	{
+		if ( tv != null && event.getEventType() == GlobalManagerEvent.ET_REQUEST_ATTENTION ){
+
+			DownloadManager dm = event.getDownload();
+			
+			List<Object>	ds = tv.getSelectedDataSources();
+
+			boolean hit = false;
+			
+			for ( Object obj: ds ){
+
+				if ( obj instanceof Tag ){
+
+					Tag tag = (Tag)obj;
+					
+					if ( tag.getTagged().contains( dm )){
+						
+						hit = true;
+						
+						break;
+					}
+				}
+			}
+
+			if ( hit ){
+					
+				MultipleDocumentInterfaceSWT tabbed_mdi = tv.getTabsCommon().getMDI();
+	
+				tabbed_mdi.showEntryByID( MyTorrentsSubView.MSGID_PREFIX );
+				
+				MdiEntrySWT view = tabbed_mdi.getEntry( MyTorrentsSubView.MSGID_PREFIX );
+				
+				if ( view != null ){
+				
+					((MyTorrentsView)view.getEventListener()).requestAttention( dm );
+				}
+			}
+		}
+	}
+	
 	@Override
 	public void
 	addThisColumnSubMenu(
@@ -1029,6 +1231,13 @@ public class SBC_TagsOverview
 
 				Tag tag = (Tag)obj;
 
+				int tt = tag.getTagType().getTagType();
+				
+				if ( tt == TagType.TT_DOWNLOAD_INTERNAL || tt == TagType.TT_SWARM_TAG ){
+					
+					return;
+				}
+				
 				UIFunctions uiFunctions = UIFunctionsManager.getUIFunctions();
 
 				if ( uiFunctions != null ){
@@ -1081,7 +1290,7 @@ public class SBC_TagsOverview
 		}
 			// if we're not active then ignore this update as we don't want invisible components
 			// updating the toolbar with their invisible selection. Note that unfortunately the
-			// call we get here when activating a view does't yet have focus
+			// call we get here when activating a view doesn't yet have focus
 
 		if ( !isVisible()){
 			if ( !force ){
@@ -1112,10 +1321,55 @@ public class SBC_TagsOverview
 	}
 
 	@Override
-	public boolean filterCheck(Tag ds, String filter, boolean regex) {
-		String name = ds.getTagName( true );
-
-		String s = regex ? filter : "\\Q" + filter.replaceAll("\\s*[|;]\\s*", "\\\\E|\\\\Q") + "\\E";
+	public boolean 
+	filterCheck(
+		Tag 		tag, 
+		String 		filter, 
+		boolean 	regex,
+		boolean		confusable )
+	{
+		if ( confusable ){
+			
+			return( false );
+		}
+		
+		int tt = tag.getTagType().getTagType();
+		
+		if ( tt == TagType.TT_SWARM_TAG && !show_swarm_tags){
+			
+			return( false );
+		}
+		
+		String name;
+		
+		if ( filter.startsWith( "g:" )){
+			
+			filter = filter.substring( 2 );
+			
+			name = tag.getGroup();
+			
+			if ( name == null ){
+				
+				name = "";
+			}
+		}else if ( filter.startsWith( "p:" )){
+			
+			filter = filter.substring( 2 );
+			
+			if ( tag instanceof TagFeatureProperties ){
+				
+				name = ((TagFeatureProperties)tag).getPropertiesString();
+				
+			}else{
+				
+				name = "";
+			}
+		}else{
+		
+			name = tag.getTagName( true );
+		}
+		
+		String s = regex ? filter : RegExUtil.splitAndQuote( filter, "\\s*[|;]\\s*" );
 
 		boolean	match_result = true;
 
@@ -1238,15 +1492,17 @@ public class SBC_TagsOverview
 	// @see SWTSkinObjectAdapter#dataSourceChanged(SWTSkinObject, java.lang.Object)
 	@Override
 	public Object dataSourceChanged(SWTSkinObject skinObject, Object params) {
+		datasources_for_selection.clear();
 		if (params instanceof Tag) {
+			Tag tag = (Tag)params;
+			datasources_for_selection.add(tag);
 			if (tv != null) {
-				TableRowCore row = tv.getRow((Tag) params);
+				TableRowCore row = tv.getRow( tag );
 				if (row != null) {
 					tv.setSelectedRows(new TableRowCore[] { row });
 				}
 			}
 		}
-		datasource = params;
 		return null;
 	}
 

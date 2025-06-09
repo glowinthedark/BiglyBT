@@ -175,7 +175,7 @@ SubscriptionRSSFeed
 
 				pw.println(
 						"<rss version=\"2.0\" " +
-						"xmlns:vuze=\"http://www.vuze.com\" " +
+						Constants.XMLNS_VUZE + " " +
 						"xmlns:media=\"http://search.yahoo.com/mrss/\" " +
 						"xmlns:atom=\"http://www.w3.org/2005/Atom\" " +
 						"xmlns:itunes=\"http://www.itunes.com/dtds/podcast-1.0.dtd\">" );
@@ -287,8 +287,31 @@ SubscriptionRSSFeed
 
 							pw.println( "<vuze:rank>" + rank + "</vuze:rank>" );
 						}
+						
+						Long	completed = (Long)result.getProperty( SearchResult.PR_COMPLETED_COUNT );
 
+						if ( completed != null && completed >= 0){
 
+							pw.println( "<completed>" + completed + "</completed>" );
+						}
+						
+						String	cat = (String)result.getProperty( SearchResult.PR_CATEGORY );
+						
+						if ( cat != null && !cat.isEmpty()){
+															
+							pw.println( "<category>" + escape( cat ) + "</category>" );
+						}
+						
+						String[]	tags = (String[])result.getProperty( SearchResult.PR_TAGS );
+						
+						if ( tags != null ){
+							
+							for ( String tag: tags ){
+								
+								pw.println( "<tag>" + escape( tag ) + "</tag>" );
+							}
+						}
+						
 		  				pw.println( "</item>" );
 
 					}catch( Throwable e ){

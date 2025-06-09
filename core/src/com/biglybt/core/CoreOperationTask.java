@@ -19,6 +19,8 @@
 
 package com.biglybt.core;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.util.FileUtil;
 
@@ -44,11 +46,9 @@ CoreOperationTask
 		return( null );
 	}
 	
-	public default void
-	run(
-		CoreOperation operation )
-	{
-	}
+	public boolean
+	runOperation(
+		CoreOperation operation );
 	
 	public ProgressCallback
 	getProgressCallback();
@@ -65,12 +65,26 @@ CoreOperationTask
 		public int ST_SUBTASKS	= 0x0008;
 		
 		public int ST_QUEUED	= 0x0010;	// differentiates between active (ST_NONE) and active but currently not scheduled
+		public int ST_MINIMIZE	= 0x0020;
 
 		public int ST_BUTTONS	= ST_PAUSE | ST_RESUME | ST_CANCEL;
 		
 		public int STYLE_NONE		= 0x0000;
 		public int STYLE_NO_CLOSE	= 0x0001;
 		public int STYLE_MODAL		= 0x0002;
+		public int STYLE_MINIMIZE	= 0x0004;
+		
+		public default long
+		getAllocID()
+		{
+			return( 0 );
+		}
+		
+		public default long
+		getSortParam()
+		{
+			return( -1 );
+		}
 		
 		public default int
 		getStyle()
@@ -117,10 +131,10 @@ CoreOperationTask
 			boolean		b );
 	
 		public int
-		getOrder();
+		getIndicativeOrder();
 		
 		public void
-		setOrder(
+		setIndicativeOrder(
 			int		order );
 		
 		public int
@@ -138,11 +152,59 @@ CoreOperationTask
 	ProgressCallbackAdapter
 		implements ProgressCallback
 	{
+		public static final int	SORT_ALLOC_ORDER		= 1;
+		public static final int	SORT_SIZE				= 2;
+		public static final int	SORT_EXPLICIT_ORDER		= 3;
+		
+		private static final AtomicLong	alloc_id_next = new AtomicLong();
+		
+		private final long	alloc_id = alloc_id_next.incrementAndGet();
+		
+		private final int			sort_type;
+		private final long			sort_param;
+		
 		private volatile int 		thousandths;
 		private volatile long		size;
+		private volatile int		state	= ST_NONE;
 		private volatile String		subtask;
 		private volatile boolean	auto_pause;
 		private volatile int	 	order;
+		
+		public
+		ProgressCallbackAdapter()
+		{
+			this( SORT_ALLOC_ORDER );
+		}
+		
+		public
+		ProgressCallbackAdapter(
+			int		_sort_type )
+		{
+			sort_type 	= _sort_type;
+			sort_param	= -1;
+		}
+		
+		public
+		ProgressCallbackAdapter(
+			int		_sort_type,
+			long	_sort_param )
+		{
+			sort_type	= _sort_type;
+			sort_param	= _sort_param;
+		}
+		
+		@Override
+		public long 
+		getAllocID()
+		{
+			return( alloc_id );
+		}
+		
+		public long
+		getSortParam()
+		{
+			return( sort_param );
+		}
 		
 		public int
 		getProgress()
@@ -197,13 +259,13 @@ CoreOperationTask
 		}
 		
 		public int
-		getOrder()
+		getIndicativeOrder()
 		{
 			return( order );
 		}
 		
 		public void
-		setOrder(
+		setIndicativeOrder(
 			int		_order )
 		{
 			order = _order;
@@ -213,19 +275,25 @@ CoreOperationTask
 		public int
 		getSupportedTaskStates()
 		{
-			return( ST_NONE );
+			return( state );
 		}
 		
 		public void
 		setTaskState(
-			int		state )
+			int		_state )
 		{
+			if ( _state == ST_RESUME ){
+				
+				_state = ST_NONE;
+			}
+			
+			state	= _state;
 		}
 		
 		public int
 		getTaskState()
 		{
-			return( ST_NONE );
+			return( state );
 		}
 		
 		@Override
@@ -233,11 +301,35 @@ CoreOperationTask
 		compareTo(
 			ProgressCallback o)
 		{
-			long l = getSize() - o.getSize();
+			long metric;
 			
-			if ( l < 0 ){
+			if ( sort_type == SORT_SIZE ){
+				
+				metric = getSize() - o.getSize();
+				
+			}else if ( sort_type == SORT_ALLOC_ORDER ){
+				
+				metric = getAllocID() - o.getAllocID();
+				
+			}else{
+				
+				long s1 = getSortParam();
+				long s2 = o.getSortParam();
+				
+				if ( s1 == -1 && s2 == -1 ){
+					metric = getAllocID() - o.getAllocID();
+				}else if ( s1 == -1 ){
+					metric = 1;
+				}else if ( s2 == -1 ){
+					metric = -1;
+				}else{
+					metric = s1 - s2;
+				}
+			}
+			
+			if ( metric < 0 ){
 				return( -1 );
-			}else if ( l > 0 ){
+			}else if ( metric > 0 ){
 				return( 1 );
 			}else{
 				return( 0 );

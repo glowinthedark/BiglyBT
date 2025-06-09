@@ -19,10 +19,11 @@
 
 package com.biglybt.core.util;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.StringWriter;
 import java.nio.ByteBuffer;
-import java.nio.charset.Charset;
 import java.util.*;
 
 import org.json.simple.JSONArray;
@@ -33,7 +34,7 @@ import com.biglybt.util.JSONUtils;
 
 /**
  * A set of utility methods to encode a Map into a bencoded array of byte.
- * integer are represented as Long, String as byte[], dictionnaries as Map, and list as List.
+ * integer are represented as Long, String as byte[], dictionaries as Map, and list as List.
  *
  * @author  TdC_VgA
  */
@@ -59,11 +60,44 @@ BEncoder
     	return( encoder.toByteArray());
     }
 
-    private byte[]		current_buffer		= new byte[256];
+    public static void
+    encodeToStream(
+    	Map					object,
+    	OutputStream		os )
+    
+    	throws IOException
+    {
+    	BEncoder encoder = new BEncoder();
+    	
+    	encoder.encodeObject( object, os, false );
+    }
+    
+    private byte[]		current_buffer		= new byte[16*1024];
     private int			current_buffer_pos	= 0;
     private byte[][]	old_buffers;
+    
+    private OutputStream	current_os;
+    
 
     private final byte[]		int_buffer			= new byte[12];
+    
+    private void
+   	encodeObject(
+   		Object 					object,
+   		OutputStream			os,
+   		boolean					utf_key_expected )
+
+       	throws IOException
+   	{
+    	current_os	= os;
+    	
+    	encodeObject( object, utf_key_expected );
+    	
+    	if ( current_buffer_pos > 0 ){
+    		
+    		current_os.write( current_buffer, 0, current_buffer_pos );
+    	}
+   	}
     
     private boolean
    	encodeObject(
@@ -300,6 +334,8 @@ BEncoder
     private void
     writeChar(
     	char		c )
+    
+    	throws IOException
    	{
     	int rem = current_buffer.length - current_buffer_pos;
 
@@ -309,25 +345,34 @@ BEncoder
 
     	}else{
 
-       		int	next_buffer_size = current_buffer.length < BUFFER_DOUBLE_LIMIT?(current_buffer.length << 1):(current_buffer.length + BUFFER_DOUBLE_LIMIT );
+    		int current_buffer_size = current_buffer.length;
+    		
+       		int	next_buffer_size = current_buffer_size < BUFFER_DOUBLE_LIMIT?(current_buffer_size << 1):current_buffer_size;
 
     		byte[]	new_buffer = new byte[ next_buffer_size ];
 
     		new_buffer[ 0 ] = (byte)c;
 
-    		if ( old_buffers == null ){
-
-    			old_buffers = new byte[][]{ current_buffer };
-
+    		if ( current_os != null ){
+    			
+    			current_os.write( current_buffer );
+    			
     		}else{
-
-    			byte[][] new_old_buffers = new byte[old_buffers.length+1][];
-
-    			System.arraycopy( old_buffers, 0, new_old_buffers, 0, old_buffers.length );
-
-    			new_old_buffers[ old_buffers.length ] = current_buffer;
-
-    			old_buffers = new_old_buffers;
+    			
+	    		if ( old_buffers == null ){
+	
+	    			old_buffers = new byte[][]{ current_buffer };
+	
+	    		}else{
+	
+	    			byte[][] new_old_buffers = new byte[old_buffers.length+1][];
+	
+	    			System.arraycopy( old_buffers, 0, new_old_buffers, 0, old_buffers.length );
+	
+	    			new_old_buffers[ old_buffers.length ] = current_buffer;
+	
+	    			old_buffers = new_old_buffers;
+	    		}
     		}
 
     		current_buffer		= new_buffer;
@@ -338,6 +383,8 @@ BEncoder
     private void
     writeInt(
     	int		i )
+    
+    	throws IOException
     {
     		// we get a bunch of -1 values, optimise
 
@@ -356,6 +403,8 @@ BEncoder
     private void
     writeLong(
     	long	l )
+    
+    	throws IOException
     {
      	if ( l <= Integer.MAX_VALUE && l >= Integer.MIN_VALUE ){
 
@@ -370,6 +419,8 @@ BEncoder
     private void
     writeBytes(
     	byte[]			bytes )
+    
+    	throws IOException
     {
     	writeBytes( bytes, 0, bytes.length );
     }
@@ -379,6 +430,8 @@ BEncoder
     	byte[]			bytes,
     	int				offset,
     	int				length )
+    
+    	throws IOException
     {
     	int rem = current_buffer.length - current_buffer_pos;
 
@@ -397,27 +450,36 @@ BEncoder
 	    		length -= rem;
     		}
 
-    		int	next_buffer_size = current_buffer.length < BUFFER_DOUBLE_LIMIT?(current_buffer.length << 1):(current_buffer.length + BUFFER_DOUBLE_LIMIT );
+    		int current_buffer_size = current_buffer.length;
+    		
+       		int	next_buffer_size = current_buffer_size < BUFFER_DOUBLE_LIMIT?(current_buffer_size << 1):current_buffer_size;
 
     		byte[]	new_buffer = new byte[ Math.max( next_buffer_size, length + 512 ) ];
 
     		System.arraycopy( bytes, offset + rem, new_buffer, 0, length );
 
-    		if ( old_buffers == null ){
-
-    			old_buffers = new byte[][]{ current_buffer };
-
+    		if ( current_os != null ){
+    			
+    			current_os.write( current_buffer );
+    			
     		}else{
-
-    			byte[][] new_old_buffers = new byte[old_buffers.length+1][];
-
-    			System.arraycopy( old_buffers, 0, new_old_buffers, 0, old_buffers.length );
-
-    			new_old_buffers[ old_buffers.length ] = current_buffer;
-
-    			old_buffers = new_old_buffers;
+    			
+	    		if ( old_buffers == null ){
+	
+	    			old_buffers = new byte[][]{ current_buffer };
+	
+	    		}else{
+	
+	    			byte[][] new_old_buffers = new byte[old_buffers.length+1][];
+	
+	    			System.arraycopy( old_buffers, 0, new_old_buffers, 0, old_buffers.length );
+	
+	    			new_old_buffers[ old_buffers.length ] = current_buffer;
+	
+	    			old_buffers = new_old_buffers;
+	    		}
     		}
-
+    		
     		current_buffer		= new_buffer;
     		current_buffer_pos 	= length;
      	}
@@ -426,6 +488,8 @@ BEncoder
     private void
 	writeByteBuffer(
 		ByteBuffer		bb )
+	
+		throws IOException
     {
     	writeBytes( bb.array(), bb.arrayOffset() + bb.position(), bb.remaining());
     }
@@ -703,6 +767,139 @@ BEncoder
     	return( true );
     }
 
+    public static long
+    getEncodedSize(
+    	Map		map )
+    {
+    	try{
+	    	long[] result = {0};
+	    	
+	    	encodeToStream( 
+	    		map,
+	    		new OutputStream()
+	    		{
+	    			@Override
+		    	    public void 
+		    	    write(
+		    	    	int val)
+		    	    {
+		    	    	result[0]++;
+		    	    }
+		
+		    	    @Override
+		    	    public void 
+		    	    write(
+		    	    	byte src[])
+		    	    {
+		    	    	result[0] += src.length;
+		    	    }
+		
+		    	    @Override
+		    	    public void 
+		    	    write(
+		    	    	byte src[], 
+		    	    	int off, 
+		    	    	int len) 
+		    	    {
+		    	    	result[0] += len;
+		    	    }
+		
+		    	    @Override
+		    	    public void flush() {}
+		
+		    	    @Override
+		    	    public void close() {}
+	    		});
+	    	
+	    	return( result[0] );
+    	}catch( Throwable e ){
+    		
+    		Debug.out( e );
+    		
+    		return( -1 );
+    	}
+    }
+    
+    public static byte[]
+    encodeIfLessThan(
+    	Map			map,
+    	long		max_size )
+    {
+    	try{
+    		ByteArrayOutputStream baos = new ByteArrayOutputStream( 32*1024 );
+    		
+	    	encodeToStream( 
+	    		map,
+	    		new OutputStream()
+	    		{
+	    			@Override
+		    	    public void 
+		    	    write(
+		    	    	int val)
+		    	    {
+	    				baos.write( val );
+	    				
+	    				if ( baos.size() > max_size ){
+	    					
+	    					throw( new Error());
+	    				}
+		    	    }
+		
+		    	    @Override
+		    	    public void 
+		    	    write(
+		    	    	byte src[])
+		    	    
+		    	    	throws IOException
+		    	    {
+		    	    	baos.write( src );
+		    	    	
+		    	    	if ( baos.size() > max_size ){
+	    					
+	    					throw( new Error());
+	    				}
+		    	    }
+		
+		    	    @Override
+		    	    public void 
+		    	    write(
+		    	    	byte src[], 
+		    	    	int off, 
+		    	    	int len) 
+		    	    {
+		    	    	baos.write( src, off, len);
+		    	    	
+		    	    	if ( baos.size() > max_size ){
+	    					
+	    					throw( new Error());
+	    				}
+		    	    }
+		
+		    	    @Override
+		    	    public void 
+		    	    flush()
+		    	    	throws IOException
+		    	    {
+		    	    	baos.flush();
+		    	    }
+		
+		    	    @Override
+		    	    public void 
+		    	    close()
+		    	    	throws IOException
+		    	    {
+		    	    	baos.close();
+		    	    }
+	    		});
+	    	
+	    	return( baos.toByteArray());
+	    	
+    	}catch( Throwable e ){
+    		
+    		return( null );
+    	}
+    }
+    
     public static Map
     cloneMap(
     	Map		map )

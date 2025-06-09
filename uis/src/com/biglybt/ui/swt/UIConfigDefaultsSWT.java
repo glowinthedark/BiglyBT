@@ -48,6 +48,7 @@ public class UIConfigDefaultsSWT
 		def.addParameter("Graphics Update", 4);
 		def.addParameter("ReOrder Delay", 4);
 		def.addParameter("Refresh When Inactive", 2);
+		def.addParameter("GUI Refresh Disable When Minimized", false );
 		def.addParameter("Send Version Info", true);
 		def.addParameter("Show Download Basket", false);
 		def.addParameter("config.style.refreshMT", 0);
@@ -74,7 +75,9 @@ public class UIConfigDefaultsSWT
 		def.addParameter("RankColumn.showUpDownIcon.small", false );
 		def.addParameter("SeedsColumn.showNetworkIcon", true );
 		def.addParameter("PeersColumn.showNetworkIcon", true );
-
+		def.addParameter("DownSpeedColumn.showIcon", true );
+		def.addParameter("UpSpeedColumn.showIcon", true );
+		
 		def.addParameter("DND Always In Incomplete", false);
 
 		def.addParameter("Message Popup Autoclose in Seconds", 15);
@@ -102,7 +105,7 @@ public class UIConfigDefaultsSWT
 		def.addParameter("Open Bar Incomplete", false);
 		def.addParameter("Open Bar Complete", false);
 
-		def.addParameter("Close To Tray", true);
+		def.addParameter("Close To Tray", Constants.isLinux?false:true);
 		def.addParameter("Minimize To Tray", false);
 
 		def.addParameter("Status Area Show SR", true);
@@ -205,16 +208,22 @@ public class UIConfigDefaultsSWT
 		def.addParameter("MyTorrentsView.table.style", 0);
 
 		def.addParameter("v3.topbar.height", 60);
+		def.addParameter("v3.rightbar.width", 150);
 		def.addParameter("v3.topbar.show.plugin", false);
 		def.addParameter("pluginbar.visible", false);
+		def.addParameter("rightbar.visible", false);
 		def.addParameter("quick-links.visible", true);
 		def.addParameter("ui.toolbar.uiswitcher", false);
 		def.addParameter("Table.extendedErase", false);
 		def.addParameter("Table.useTree", false);
 		def.addParameter("Table.tooltip.disable", false);
+		def.addParameter("Table.tooltip.truncate", true);
 		def.addParameter("Table.sort.intuitive", false);
+		def.addParameter("Table.filter.confusable", true );
+		def.addParameter("Table Header Gradient Fill", true);
 		def.addParameter("Dark Table Colors", false );
 		def.addParameter("Dark Misc Colors", false );
+		def.addParameter("Gradient Fill Selection", true );
 		
 		if ("az2".equalsIgnoreCase(COConfigurationManager.getStringParameter("ui", "az3"))) {
 			def.addParameter("v3.Show Welcome", false);
@@ -237,10 +246,13 @@ public class UIConfigDefaultsSWT
 
 		def.addParameter( "Low Resource Silent Update Restart Enabled", true );
 
+		def.addParameter( "Library.ShowTitle", true );
 		def.addParameter( "Library.ShowCatButtons", false );
+		def.addParameter( "Library.ShowCatButtons.CompOnly", false );
 		def.addParameter( "Library.ShowTagButtons", true );
 		def.addParameter( "Library.ShowTagButtons.FiltersOnly", false );
 		def.addParameter( "Library.ShowTagButtons.ImageOverride", false );
+		def.addParameter( "Library.ShowTagButtons.Align", 0);
 		def.addParameter( "Library.ShowTagButtons.CompOnly", false );
 		def.addParameter( "Library.ShowTagButtons.Inclusive", true );
 		
@@ -312,16 +324,32 @@ public class UIConfigDefaultsSWT
 		def.addParameter( "browser.external.non.pub", true );
 		def.addParameter( "browser.external.test.url", Constants.URL_CLIENT_HOME );
 
+	    def.addParameter( "Show Side Bar", true );
+	    def.addParameter( "Side Bar Top Level Gap", 1 );
+	    def.addParameter( "Show Options In Side Bar", false );
+	    def.addParameter( "Show New In Side Bar", true );
+	    def.addParameter( "Show Downloading In Side Bar", true );
+	    def.addParameter( "Side Bar Close Position", 0 );
+	    def.addParameter( "Side Bar Indent Expanders", true );
+	    def.addParameter( "Side Bar Compact View", false );
+	    def.addParameter( "Side Bar Hide Left Icon", false );
+	    
 		String orderDef = "";
 		for (int i=0;i<MultipleDocumentInterface.SIDEBAR_HEADER_ORDER_DEFAULT.length;i++){
 			orderDef += (orderDef.isEmpty()?"":", ") + (i+1);
 		}
 		def.addParameter( "Side Bar Top Level Order", orderDef );
+		def.addParameter( "Side Bar Double Click Action", 0 );
+		
 		def.addParameter( "Library.TagInTabBar", 1 );
 		
 		def.addParameter( "Peers View Show Local Peer", false);
 		def.addParameter( "Pieces View Show Uploading", false);
 		
 		def.addParameter( ConfigKeys.File.ICFG_UI_ADDTORRENT_OPENOPTIONS_AUTO_CLOSE_SECS, 0 );
+		
+		def.addParameter( "DownloadActivity.show.eta", true );
+		
+		def.addParameter( "blocks.view.max.active", 500 );
 	}
 }

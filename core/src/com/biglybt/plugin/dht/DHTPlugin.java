@@ -103,6 +103,7 @@ DHTPlugin
 	public static final int			NW_MAIN				= DHT.NW_AZ_MAIN;
 	
 	public static final int			NW_AZ_MAIN			= DHT.NW_AZ_MAIN;
+	public static final int			NW_AZ_MAIN_V6		= DHT.NW_AZ_MAIN_V6;
 	public static final int			NW_AZ_CVS			= DHT.NW_AZ_CVS;
 	public static final int			NW_BIGLYBT_MAIN		= DHT.NW_BIGLYBT_MAIN;
 
@@ -114,7 +115,7 @@ DHTPlugin
 	private static final String PLUGIN_RESOURCE_ID		= "ConfigView.section.plugins.dht";
 
 	private static final boolean	AZ_MAIN_DHT_ENABLE			= COConfigurationManager.getBooleanParameter( "dht.net.main_v4.enable", true );
-	private static final boolean	AZ_CVS_DHT_ENABLE			= COConfigurationManager.getBooleanParameter( "dht.net.cvs_v4.enable", true );
+	private static final boolean	AZ_CVS_DHT_ENABLE			= COConfigurationManager.getBooleanParameter( "dht.net.cvs_v4.enable", false );	// disabled, no longer of any use
 	private static final boolean	AZ_MAIN_DHT_V6_ENABLE		= COConfigurationManager.getBooleanParameter( "dht.net.main_v6.enable", true );
 	private static final boolean	BIGLYBT_MAIN_DHT_ENABLE		= COConfigurationManager.getBooleanParameter( "dht.net.biglybt_main_v4.enable", true );
 
@@ -1026,7 +1027,7 @@ DHTPlugin
 										run()
 										{
 											try{
-												List	plugins = new ArrayList();
+												List<DHTPluginImpl>	plugins = new ArrayList<>();
 
 													// adapter only added to first DHTPluginImpl we create
 
@@ -1051,6 +1052,7 @@ DHTPlugin
 
 													main_dht =
 														new DHTPluginImpl(
+																	DHTPlugin.this,
 																	plugin_interface,
 																	CoreFactory.getSingleton().getNATTraverser(),
 																	adapter,
@@ -1073,6 +1075,7 @@ DHTPlugin
 
 													main_v6_dht =
 														new DHTPluginImpl(
+															DHTPlugin.this,
 															plugin_interface,
 															CoreFactory.getSingleton().getNATTraverser(),
 															adapter,
@@ -1095,6 +1098,7 @@ DHTPlugin
 
 													cvs_dht =
 														new DHTPluginImpl(
+															DHTPlugin.this,
 															plugin_interface,
 															CoreFactory.getSingleton().getNATTraverser(),
 															adapter,
@@ -1117,6 +1121,7 @@ DHTPlugin
 
 													biglybt_dht =
 														new DHTPluginImpl(
+															DHTPlugin.this,
 															plugin_interface,
 															CoreFactory.getSingleton().getNATTraverser(),
 															adapter,
@@ -1479,6 +1484,188 @@ DHTPlugin
 			}
 		}
 	}
+	
+	private DHTPluginImpl[]
+	getDHTsToUse()
+	{		
+			// if we have both active and one is acting up then ditch it as it'll probably impact the other's completion
+		
+		if ( main_dht != null && main_v6_dht != null ){
+			
+			DHTPluginImpl to_remove = null;
+			
+			if ( !main_v6_dht.isHealthy()){
+				
+				to_remove = main_v6_dht;
+				
+			}else if ( !main_dht.isHealthy()){
+				
+				to_remove = main_dht;
+			}	
+			
+			if ( to_remove == null ){
+				
+				return( dhts );
+				
+			}else{
+				
+				DHTPluginImpl[] result = new DHTPluginImpl[dhts.length-1];
+				
+				int pos = 0;
+				
+				for ( DHTPluginImpl dht: dhts ){
+					
+					if ( dht != to_remove ){
+						
+						result[pos++] = dht;
+					}
+				}
+				
+				return( result );
+			}
+		}else{
+			
+			return( dhts );
+		}
+	}
+	
+	public void
+	put(
+		final byte[]						key,
+		final String						description,
+		final byte[]						value,
+		final short							flags,
+		final boolean						high_priority,
+		final DHTPluginOperationListener	listener)
+	{
+		if ( !isEnabled()){
+
+			throw( new RuntimeException( "DHT isn't enabled" ));
+		}
+		
+		if( dhts.length == 1 ){
+
+			dhts[0].putEx( key, description, value, flags, high_priority, listener );
+
+		}else{
+
+			DHTPluginImpl[] dhts_to_use = getDHTsToUse();
+			
+			final int[]	completes_to_go = { dhts_to_use.length };
+
+			DHTPluginOperationListener main_listener =
+				new DHTPluginOperationListener()
+				{
+					@Override
+					public boolean
+					diversified()
+					{
+						return( listener.diversified());
+					}
+
+					@Override
+					public void
+					starts(
+						byte[] 				key )
+					{
+						listener.starts(key);
+					}
+
+					@Override
+					public void
+					valueRead(
+						DHTPluginContact	originator,
+						DHTPluginValue		value )
+					{
+						listener.valueRead(originator, value);
+					}
+
+					@Override
+					public void
+					valueWritten(
+						DHTPluginContact	target,
+						DHTPluginValue		value )
+					{
+						listener.valueWritten(target, value);
+					}
+
+					@Override
+					public void
+					complete(
+						byte[]	key,
+						boolean	timeout_occurred )
+					{
+						synchronized( completes_to_go ){
+
+							completes_to_go[0]--;
+
+							if ( completes_to_go[0] == 0 ){
+
+								listener.complete(key, timeout_occurred);
+							}
+						}
+					}
+				};
+
+			dhts_to_use[0].putEx( key, description, value, flags, high_priority, main_listener );
+
+			for (int i=1;i<dhts_to_use.length;i++){
+
+				dhts_to_use[i].putEx(
+						key, description, value, flags, high_priority,
+						new DHTPluginOperationListener()
+						{
+							@Override
+							public boolean
+							diversified()
+							{
+								return( true );
+							}
+
+							@Override
+							public void
+							starts(
+								byte[] 				key )
+							{
+							}
+
+							@Override
+							public void
+							valueRead(
+								DHTPluginContact	originator,
+								DHTPluginValue		value )
+							{
+							}
+
+							@Override
+							public void
+							valueWritten(
+								DHTPluginContact	target,
+								DHTPluginValue		value )
+							{
+							}
+
+							@Override
+							public void
+							complete(
+								byte[]	key,
+								boolean	timeout_occurred )
+							{
+								synchronized( completes_to_go ){
+
+									completes_to_go[0]--;
+
+									if ( completes_to_go[0] == 0 ){
+
+										listener.complete(key, timeout_occurred);
+									}
+								}
+							}
+						});
+			}
+		}
+	}
+
 
 	public DHTPluginValue
 	getLocalValue(
@@ -1547,37 +1734,23 @@ DHTPlugin
 
 	public List<DHTPluginValue>
 	getValues(
-		int			network,
-		boolean		ipv6 )
-	{
+		int			network )
+	{	
 		DHTPluginImpl	dht = null;
 
-		if ( network == NW_AZ_MAIN ){
-
-			if ( ipv6 ){
-
-				dht = main_v6_dht;
-
-			}else{
-
+		switch( network ){
+			case NW_AZ_MAIN:
 				dht = main_dht;
-			}
-		}else if ( network == NW_BIGLYBT_MAIN ){
-			
-			if ( ipv6 ){
-
-				dht = null;
-
-			}else{
-
-				dht = biglybt_dht;
-			}
-		}else{
-
-			if ( !ipv6 ){
-
+				break;
+			case NW_AZ_MAIN_V6:
+				dht = main_v6_dht;
+				break;
+			case NW_AZ_CVS:
 				dht = cvs_dht;
-			}
+				break;
+			case NW_BIGLYBT_MAIN:
+				dht = biglybt_dht;
+				break;
 		}
 
 		if ( dht == null ){
@@ -1738,13 +1911,30 @@ DHTPlugin
 					});
 		}
 
-		if ( main_dht != null && main_v6_dht == null ){
+		DHTPluginImpl main_dht_to_use		= main_dht;
+		DHTPluginImpl main_v6_dht_to_use	= main_v6_dht;
+		
+			// if we have both active and one is acting up then ditch it as it'll probably impact the other's completion
+		
+		if ( main_dht_to_use != null && main_v6_dht_to_use != null ){
+			
+			if ( !main_v6_dht_to_use.isHealthy()){
+				
+				main_v6_dht_to_use = null;
+				
+			}else if ( !main_dht_to_use.isHealthy()){
+				
+				main_dht_to_use = null;
+			}	
+		}
+		
+		if ( main_dht_to_use != null && main_v6_dht_to_use == null ){
 
-			main_dht.get( original_key, description, flags, max_values, timeout, exhaustive, high_priority, main_listener );
+			main_dht_to_use.get( original_key, description, flags, max_values, timeout, exhaustive, high_priority, main_listener );
 
-		}else if ( main_dht == null && main_v6_dht != null ){
+		}else if ( main_dht_to_use == null && main_v6_dht_to_use != null ){
 
-			main_v6_dht.get( original_key, description, flags, max_values, timeout, exhaustive, high_priority, main_listener );
+			main_v6_dht_to_use.get( original_key, description, flags, max_values, timeout, exhaustive, high_priority, main_listener );
 
 		}else{
 
@@ -1893,9 +2083,9 @@ DHTPlugin
 				// hack - use different keys so we can distinguish which completion event we
 				// have received above
 
-			main_dht.get( v4_key, description, flags, max_values, timeout, exhaustive, high_priority, dual_listener );
+			main_dht_to_use.get( v4_key, description, flags, max_values, timeout, exhaustive, high_priority, dual_listener );
 
-			main_v6_dht.get( v6_key, description, flags, max_values, timeout, exhaustive, high_priority, dual_listener );
+			main_v6_dht_to_use.get( v6_key, description, flags, max_values, timeout, exhaustive, high_priority, dual_listener );
 		}
 	}
 
@@ -1918,12 +2108,23 @@ DHTPlugin
 		final String						description,
 		final DHTPluginOperationListener	listener )
 	{
+		remove( key, description, (short)0, listener );
+	}
+	
+	@Override
+	public void
+	remove(
+		byte[]						key,
+		String						description,
+		short						flags,
+		DHTPluginOperationListener	listener )
+	{
 		if ( !isEnabled()){
 
 			throw( new RuntimeException( "DHT isn't enabled" ));
 		}
 
-		dhts[0].remove( key, description, listener );
+		dhts[0].remove( key, description, flags, listener );
 
 		for (int i=1;i<dhts.length;i++){
 
@@ -1936,7 +2137,7 @@ DHTPlugin
 				run()
 				{
 					dhts[f_i].remove(
-							key, description,
+							key, description, flags,
 							new DHTPluginOperationListener()
 							{
 								@Override
@@ -2191,6 +2392,18 @@ DHTPlugin
 		byte							version,
 		boolean							is_cvs )
 	{
+		int	preferred_net = is_cvs?DHT.NW_AZ_CVS:DHT.NW_AZ_MAIN;
+
+		return( importContact( address, version, preferred_net ));
+	}
+
+	@Override
+	public DHTPluginContact
+	importContact(
+		InetSocketAddress				address,
+		byte							version,
+		int								preferred_net )
+	{
 		if ( !isEnabled()){
 
 			throw( new RuntimeException( "DHT isn't enabled" ));
@@ -2198,11 +2411,9 @@ DHTPlugin
 
 		InetAddress contact_address = address.getAddress();
 
-		int	target_network = is_cvs?DHT.NW_AZ_CVS:DHT.NW_AZ_MAIN;
-
 		for ( DHTPluginImpl dht: dhts ){
 
-			if ( dht.getDHT().getTransport().getNetwork() != target_network ){
+			if ( dht.getDHT().getTransport().getNetwork() != preferred_net ){
 
 				continue;
 			}
@@ -2221,6 +2432,7 @@ DHTPlugin
 		return( importContact( address, version ));
 	}
 
+	
 	@Override
 	public DHTPluginContact
 	getLocalAddress()
@@ -2356,6 +2568,26 @@ DHTPlugin
 		return( null );
 	}
 
+	public DHTPluginBasicInterface
+	getDHTPlugin(
+		int		network )
+	{
+		if ( dhts == null ){
+
+			return( null );
+		}
+
+		for (int i=0;i<dhts.length;i++){
+
+			if ( dhts[i].getDHT().getTransport().getNetwork() == network ){
+
+				return( dhts[i] );
+			}
+		}
+
+		return( null );
+	}
+	
 	@Override
 	public DHTInterface[]
 	getDHTInterfaces()

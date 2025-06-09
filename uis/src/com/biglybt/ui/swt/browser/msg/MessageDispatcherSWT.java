@@ -122,7 +122,7 @@ public class MessageDispatcherSWT
 	 * Registers the given listener for the given ID.
 	 *
 	 * @param id unique identifier used when dispatching messages
-	 * @param listener receives messages targetted at the given ID
+	 * @param listener receives messages targeted at the given ID
 	 *
 	 * @throws IllegalStateException
 	 *              if another listener is already registered under the same ID
@@ -209,6 +209,12 @@ public class MessageDispatcherSWT
 		if (listener == null) {
 			context.debug("No listener registered with ID " + listenerId);
 		} else {
+			listener.handleMessage(message);
+			message.complete(true, true, null);
+			
+			// if we leave the thread then some result callbacks seem to get hung up 
+			// for some reason...
+			/*
 			new AEThread2("dispatch for " + listenerId, true) {
 				@Override
 				public void run() {
@@ -216,6 +222,7 @@ public class MessageDispatcherSWT
 					message.complete(true, true, null);
 				}
 			}.start();
+			*/
 		}
 	}
 }

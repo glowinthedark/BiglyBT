@@ -189,11 +189,19 @@ PluginCoreUtils
 				}
 
 				@Override
+				public Boolean 
+				isSkipping()
+				{
+					return( info.isSkipping());
+				}
+				
+				@Override
 				public boolean
 				setLink(
-					File	link_destination )
+					File	link_destination,
+					boolean	dont_delete )
 				{
-					info.setLink(link_destination);
+					info.setLink(link_destination,dont_delete);
 
 					return( true );
 				}
@@ -201,9 +209,10 @@ PluginCoreUtils
 				@Override
 				public boolean
 				setLinkAtomic(
-					File link_destination )
+					File 	link_destination,
+					boolean	dont_delete )
 				{
-					info.setLink(link_destination);
+					info.setLink(link_destination,dont_delete);
 
 					return( true );
 				}
@@ -217,9 +226,10 @@ PluginCoreUtils
 				public boolean
 				setLinkAtomic(
 					File 						link_destination,
+					boolean						dont_delete,
 					FileUtil.ProgressListener	pl )
 				{
-					info.setLink( link_destination );
+					info.setLink( link_destination, dont_delete );
 
 					return( true );
 				}
@@ -618,7 +628,11 @@ PluginCoreUtils
 	unwrap(
 		Peer		peer )
 	{
-		return(((PeerImpl)peer).getDelegate());
+		if ( peer instanceof PeerImpl ){
+			return(((PeerImpl)peer).getDelegate());
+		}else{
+			return( null );
+		}
 	}
 
 	public static boolean

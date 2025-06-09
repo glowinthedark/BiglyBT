@@ -400,7 +400,7 @@ DHTTransportUDPImpl
 							try{
 								this_mon.enter();
 								
-								long start = SystemTime.getMonotonousTime();
+								int seen_secs = (int)(SystemTime.getMonotonousTime()/1000);	// use "now" as don't know otherwise
 								
 								int net = getNetworkType();
 								
@@ -449,15 +449,9 @@ DHTTransportUDPImpl
 											public int
 											getLastAlive()
 											{
-												return( 0 );	// deprecated
+												return( seen_secs );
 											}
-											
-											public int
-											getAge()
-											{
-												return((int)((SystemTime.getMonotonousTime() - start )/1000 ));
-											}
-	
+												
 											public Map<String,Object>
 											getProperties()
 											{
@@ -1750,7 +1744,7 @@ DHTTransportUDPImpl
 				}
 
 				if ( ip_filter.isInRange(
-						contact.getTransportAddress().getAddress(), "DHT", null,
+						contact.getTransportAddress().getAddress(), "DHT", null, false,
 						logger.isEnabled( DHTLogger.LT_IP_FILTER ))){
 
 						// don't let an attacker deliberately fill up our filter so we start
@@ -3513,7 +3507,7 @@ outer:
 
 		for ( DHTTransportAlternativeNetworkImpl net: alt_net_states.values()){
 
-			total_required += net.getRequiredContactCount();
+			total_required += net.getRequiredContactCount( true );
 		}
 
 		if ( total_required > 0 ){
@@ -3596,7 +3590,7 @@ outer:
 						continue;
 					}
 
-					int wanted = local.getRequiredContactCount();
+					int wanted = local.getRequiredContactCount( false );
 
 					if ( wanted > 0 ){
 
@@ -3610,7 +3604,7 @@ outer:
 
 						// need to limit response for large serialisations
 
-					if ( net == DHTTransportAlternativeNetwork.AT_I2P ){
+					if ( net == DHTTransportAlternativeNetwork.AT_I2P || net == DHTTransportAlternativeNetwork.AT_TOR ){
 
 						count = Math.min( 2, count );
 					}
@@ -3638,13 +3632,13 @@ outer:
 
 			for ( DHTTransportAlternativeNetworkImpl net: alt_net_states.values()){
 
-				int req = net.getRequiredContactCount();
+				int req = net.getRequiredContactCount( false );
 
 				if ( req > 0 ){
 
 					int net_type = net.getNetworkType();
 
-					if ( net_type == DHTTransportAlternativeNetwork.AT_I2P ){
+					if ( net_type == DHTTransportAlternativeNetwork.AT_I2P || net_type == DHTTransportAlternativeNetwork.AT_TOR ){
 
 						req = Math.min( 2, req );
 					}

@@ -25,6 +25,7 @@ import java.net.InetSocketAddress;
 import java.net.URL;
 import java.security.KeyPair;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -55,11 +56,13 @@ import com.biglybt.core.metasearch.impl.web.rss.RSSEngine;
 import com.biglybt.core.security.CryptoECCUtils;
 import com.biglybt.core.subs.*;
 import com.biglybt.core.subs.SubscriptionUtils.SubscriptionDownloadDetails;
+import com.biglybt.core.subs.util.SearchSubsResultBase;
 import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagManagerFactory;
 import com.biglybt.core.torrent.PlatformTorrentUtils;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentFactory;
+import com.biglybt.core.torrent.TOTorrentFactory.TorrentDataHolder;
 import com.biglybt.core.util.*;
 import com.biglybt.core.util.DataSourceResolver.DataSourceImporter;
 import com.biglybt.core.vuzefile.VuzeFile;
@@ -67,6 +70,7 @@ import com.biglybt.core.vuzefile.VuzeFileComponent;
 import com.biglybt.core.vuzefile.VuzeFileHandler;
 import com.biglybt.core.vuzefile.VuzeFileProcessor;
 import com.biglybt.net.magneturi.MagnetURIHandler;
+import com.biglybt.pif.PluginAdapter;
 import com.biglybt.pif.PluginException;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.ddb.DistributedDatabase;
@@ -78,12 +82,15 @@ import com.biglybt.pif.torrent.TorrentManager;
 import com.biglybt.pif.ui.UIManager;
 import com.biglybt.pif.ui.UIManagerEvent;
 import com.biglybt.pif.utils.DelayedTask;
+import com.biglybt.pif.utils.ScriptProvider;
 import com.biglybt.pif.utils.StaticUtilities;
 import com.biglybt.pif.utils.Utilities;
 import com.biglybt.pif.utils.search.*;
+import com.biglybt.pifimpl.PluginUtils;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
 import com.biglybt.pifimpl.local.PluginInitializer;
 import com.biglybt.pifimpl.local.torrent.TorrentImpl;
+import com.biglybt.pifimpl.local.utils.SearchMatcher;
 import com.biglybt.pifimpl.local.utils.UtilitiesImpl;
 import com.biglybt.plugin.dht.*;
 import com.biglybt.plugin.magnet.MagnetPlugin;
@@ -119,8 +126,9 @@ SubscriptionManagerImpl
 	private static final String	CONFIG_DL_SUBS_ENABLE		= "subscriptions.config.dl_subs_enable";
 	private static final String	CONFIG_DL_RATE_LIMITS		= "subscriptions.config.rate_limits";
 
-	private static final String CONFIG_ACTIVATE_ON_CHANGE	= "subscriptions.config.activate.sub.on.change";
-
+	private static final String CONFIG_ACTIVATE_ON_CHANGE		= "subscriptions.config.activate.sub.on.change";
+	private static final String CONFIG_MARK_LIB_RESULTS_READ	= "subscriptions.config.mark.lib.results.read";
+	
 	private static final int DELETE_UNUSED_AFTER_MILLIS = 2*7*24*60*60*1000;
 
 	private static final int PUB_ASSOC_CONC_MAX;
@@ -173,6 +181,9 @@ SubscriptionManagerImpl
 
 						VuzeFileComponent[] comps = vf.getComponents();
 
+						List<Subscription> new_subscriptions = new ArrayList<>();
+						List<Subscription> new_templates = new ArrayList<>();
+						
 						for (int j=0;j<comps.length;j++){
 
 							VuzeFileComponent comp = comps[j];
@@ -189,6 +200,15 @@ SubscriptionManagerImpl
 											( expected_types &
 												( VuzeFileComponent.COMP_TYPE_SUBSCRIPTION | VuzeFileComponent.COMP_TYPE_SUBSCRIPTION_SINGLETON )) == 0 );
 
+									if ( subs.isSubscriptionTemplate()){
+										
+										new_templates.add( subs );
+										
+									}else{
+										
+										new_subscriptions.add( subs );
+									}
+									
 									comp.setProcessed();
 
 									comp.setData( Subscription.VUZE_FILE_COMPONENT_SUBSCRIPTION_KEY, subs );
@@ -197,6 +217,14 @@ SubscriptionManagerImpl
 
 									Debug.printStackTrace(e);
 								}
+							}
+						}
+						
+						if ( !new_templates.isEmpty()){
+							
+							for ( Subscription s: new_subscriptions ){
+								
+								s.setDependsOn( new_templates );
 							}
 						}
 					}
@@ -262,9 +290,9 @@ SubscriptionManagerImpl
 
 	private volatile DHTPluginInterface dht_plugin_public;
 
-	private List<SubscriptionImpl>		subscriptions	= new ArrayList<>();
+	private CopyOnWriteMap<String,SubscriptionImpl>		subscription_map	= new CopyOnWriteMap<>();
 
-	private boolean	config_dirty;
+	private AtomicBoolean	config_dirty = new AtomicBoolean();
 
 	private int		publish_associations_active;
 	private boolean	publish_next_asyc_pending;
@@ -536,6 +564,11 @@ SubscriptionManagerImpl
 									hash,
 									subs,
 									((Boolean)entry[1]).booleanValue());
+							}
+							
+							if ( !download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
+								
+								libraryMutated();
 							}
 						}
 					}
@@ -925,8 +958,28 @@ SubscriptionManagerImpl
 					throw( new PluginException( "derp" ));
 				}
 			});
+		
+		default_pi.addListener(
+			new PluginAdapter()
+			{
+				@Override
+				public void 
+				closedownComplete()
+				{
+					if ( config_dirty.get()){
+						
+						saveConfig();
+					}
+				}
+			});
 	}
 
+	protected boolean
+	isClosing()
+	{
+		return( CoreFactory.getSingleton().isStopping());
+	}
+	
 	protected Object[]
 	getSearchTemplateVuzeFile(
 		SubscriptionImpl	sub )
@@ -1014,11 +1067,13 @@ SubscriptionManagerImpl
 				{
 					final Set<String>	hashes = new HashSet<>();
 
-					searchMatcher	matcher = new searchMatcher( term );
+					SearchMatcher	matcher = new SearchMatcher( term );
 
 					try{
 						List<SubscriptionResult>	matches = matchSubscriptionResults( matcher );
 
+						String subs_str = MessageText.getString( "subscriptions.column.name" );
+								
 						for ( final SubscriptionResult result: matches ){
 
 							final Map result_properties = result.toPropertyMap();
@@ -1037,6 +1092,12 @@ SubscriptionManagerImpl
 								hashes.add( hash_str );
 							}
 
+							Subscription subs = result.getSubscription();
+							
+							String desc = (String)result_properties.get( SearchResult.PR_DESCRIPTION );
+							
+							String f_desc = (desc==null?"":(desc+", ")) + subs_str + ": " + subs.getName();
+														
 							SearchResult search_result =
 								new SearchResult()
 								{
@@ -1045,7 +1106,14 @@ SubscriptionManagerImpl
 									getProperty(
 										int		property_name )
 									{
-										return( result_properties.get( property_name ));
+										if ( property_name == SearchResult.PR_DESCRIPTION ){
+											
+											return( f_desc );
+											
+										}else{
+										
+											return( result_properties.get( property_name ));
+										}
 									}
 								};
 
@@ -1335,7 +1403,7 @@ SubscriptionManagerImpl
 
 	private List<SubscriptionResult>
 	matchSubscriptionResults(
-		searchMatcher	matcher  )
+		SearchMatcher	matcher  )
 	{
 		List<SubscriptionResult> result = new ArrayList<>();
 
@@ -1457,7 +1525,6 @@ SubscriptionManagerImpl
 		boolean		b )
 	{
 		COConfigurationManager.setParameter( CONFIG_ACTIVATE_ON_CHANGE, b );
-
 	}
 
 	@Override
@@ -1467,6 +1534,21 @@ SubscriptionManagerImpl
 		return( COConfigurationManager.getBooleanParameter( CONFIG_ACTIVATE_ON_CHANGE, false ));
 	}
 
+	@Override
+	public void
+	setMarkResultsInLibraryRead(
+		boolean		b )
+	{
+		COConfigurationManager.setParameter( CONFIG_MARK_LIB_RESULTS_READ, b );
+	}
+	
+	@Override
+	public boolean
+	getMarkResultsInLibraryRead()
+	{
+		return( COConfigurationManager.getBooleanParameter( CONFIG_MARK_LIB_RESULTS_READ, true ));
+	}
+	
 	@Override
 	public String
 	getRSSLink()
@@ -1500,7 +1582,7 @@ SubscriptionManagerImpl
 	}
 
 	@Override
-	public Subscription
+	public SubscriptionImpl
 	createSingletonRSS(
 		String		name,
 		URL			url,
@@ -1654,7 +1736,7 @@ SubscriptionManagerImpl
 	}
 
 
-	protected Subscription
+	protected SubscriptionImpl
 	createSingletonRSSSupport(
 		String		name,
 		URL			url,
@@ -1669,7 +1751,7 @@ SubscriptionManagerImpl
 		checkURL( url );
 
 		try{
-			Subscription existing = lookupSingletonRSS( name, url, is_public, check_interval_mins, is_anon );
+			SubscriptionImpl existing = lookupSingletonRSS( name, url, is_public, check_interval_mins, is_anon );
 
 			if ( existing != null ){
 
@@ -1706,7 +1788,7 @@ SubscriptionManagerImpl
 			throw( new SubscriptionException( "Failed to create subscription", e ));
 		}
 	}
-
+	
 	protected String
 	getUniqueName(
 		String	name )
@@ -1982,6 +2064,26 @@ SubscriptionManagerImpl
 		}
 	}
 
+	@Override
+	public Subscription 
+	createSubscriptionTemplate(
+		String name )
+	
+		throws SubscriptionException
+	{
+		try{
+			return( createRSS( name, new URL( "subscription:?type=template" ), -1, false, null ));
+			
+		}catch( SubscriptionException e ){
+			
+			throw( e );
+			
+		}catch( Throwable e ){
+
+			throw( new SubscriptionException( "Failed to create subscription template", e ));
+		}
+	}
+	
 	protected void
 	checkURL(
 		URL		url )
@@ -1992,7 +2094,12 @@ SubscriptionManagerImpl
 
 			String protocol = url.getProtocol().toLowerCase();
 
-			if ( ! ( protocol.equals( "tor" ) || protocol.equals( "azplug" ) || protocol.equals( "file" ) || protocol.equals( "vuze" ))){
+			if ( ! ( 	protocol.equals( "tor" ) || 
+						protocol.equals( "i2p" ) || 
+						protocol.equals( "azplug" ) || 
+						protocol.equals( "file" ) || 
+						protocol.equals( "subscription" ) || 
+						protocol.equals( "vuze" ))){
 
 				throw( new SubscriptionException( "Invalid URL '" + url + "'" ));
 			}
@@ -2007,21 +2114,15 @@ SubscriptionManagerImpl
 
 		synchronized( this ){
 
-			int index = Collections.binarySearch(subscriptions, subs, new Comparator<Subscription>() {
-				@Override
-				public int compare(Subscription arg0, Subscription arg1) {
-					return arg0.getID().compareTo(arg1.getID());
-				}
-			});
-			if (index < 0) {
-				existing = null;
-				index = -1 * index - 1; // best guess
+			String id = subs.getID();
+			
+			existing = subscription_map.get( id );
 
-				subscriptions.add( index, subs );
+			if ( existing == null ){
+
+				subscription_map.put( id, subs );
 
 				saveConfig();
-			} else {
-				existing = (SubscriptionImpl) subscriptions.get(index);
 			}
 		}
 
@@ -2128,16 +2229,11 @@ SubscriptionManagerImpl
 				engineUpdated(
 					Engine		engine )
 				{
-					synchronized( SubscriptionManagerImpl.this ){
+					for ( SubscriptionImpl subs: subscription_map.getReadOnlyMap().values()){
 
-						for (int i=0;i<subscriptions.size();i++){
+						if ( subs.isMine()){
 
-							SubscriptionImpl	subs = (SubscriptionImpl)subscriptions.get(i);
-
-							if ( subs.isMine()){
-
-								subs.engineUpdated( engine );
-							}
+							subs.engineUpdated( engine );
 						}
 					}
 				}
@@ -2160,16 +2256,17 @@ SubscriptionManagerImpl
 
 	protected void
 	changeSubscription(
-		SubscriptionImpl		subs )
+		SubscriptionImpl		subs,
+		int						reason )
 	{
 		if ( !subs.isRemoved()){
 
-			Iterator it = listeners.iterator();
+			Iterator<SubscriptionManagerListener> it = listeners.iterator();
 
 			while( it.hasNext()){
 
 				try{
-					((SubscriptionManagerListener)it.next()).subscriptionChanged( subs );
+					it.next().subscriptionChanged( subs, reason );
 
 				}catch( Throwable e ){
 
@@ -2206,7 +2303,7 @@ SubscriptionManagerImpl
 	{
 		synchronized( this ){
 
-			if ( subscriptions.remove( subs )){
+			if ( subscription_map.remove( subs.getID()) != null ){
 
 				saveConfig();
 
@@ -2426,18 +2523,11 @@ SubscriptionManagerImpl
 	{
 		long now = SystemTime.getCurrentTime();
 
-		List<SubscriptionImpl> subs;
-
-		synchronized( this ){
-
-			subs = new ArrayList<>(subscriptions);
-		}
+		List<SubscriptionImpl> subs = new ArrayList<>( subscription_map.getReadOnlyMap().values());
 
 		SubscriptionImpl	expired_subs = null;
 
-		for (int i=0;i<subs.size();i++){
-
-			SubscriptionImpl sub = subs.get( i );
+		for ( SubscriptionImpl sub: subs ){
 
 			if ( !( sub.isMine() || sub.isSubscribed())){
 
@@ -2804,17 +2894,16 @@ SubscriptionManagerImpl
 	}
 
 	@Override
-	public Subscription[]
+	public SubscriptionImpl[]
 	getSubscriptions()
 	{
-		synchronized( this ){
+		Collection<SubscriptionImpl> subs = subscription_map.getReadOnlyMap().values();
 
-			return((SubscriptionImpl[])subscriptions.toArray( new SubscriptionImpl[subscriptions.size()]));
-		}
+		return((SubscriptionImpl[])subs.toArray( new SubscriptionImpl[subs.size()]));
 	}
 
 	@Override
-	public Subscription[]
+	public SubscriptionImpl[]
 	getSubscriptions(
 		boolean	subscribed_only )
 	{
@@ -2823,18 +2912,15 @@ SubscriptionManagerImpl
 			return( getSubscriptions());
 		}
 
-		List	result = new ArrayList();
+		Collection<SubscriptionImpl> subs = subscription_map.getReadOnlyMap().values();
 
-		synchronized( this ){
+		List<SubscriptionImpl>	result = new ArrayList<>( subs.size());
 
-			for (int i=0;i<subscriptions.size();i++){
+		for ( SubscriptionImpl sub: subs ){
 
-				SubscriptionImpl subs = (SubscriptionImpl)subscriptions.get(i);
+			if ( sub.isSubscribed()){
 
-				if ( subs.isSubscribed()){
-
-					result.add( subs );
-				}
+				result.add( sub );
 			}
 		}
 
@@ -2850,14 +2936,13 @@ SubscriptionManagerImpl
 
 			int total = 0;
 
-			synchronized( this ){
+			Collection<SubscriptionImpl> subs = subscription_map.getReadOnlyMap().values();
+			
+			for ( SubscriptionImpl sub: subs ){
+				
+				if ( sub.isSubscribed()){
 
-				for ( Subscription subs: subscriptions ){
-
-					if ( subs.isSubscribed()){
-
-						total++;
-					}
+					total++;
 				}
 			}
 
@@ -2865,10 +2950,7 @@ SubscriptionManagerImpl
 
 		}else{
 
-			synchronized( this ){
-
-				return( subscriptions.size());
-			}
+			return( subscription_map.size());
 		}
 	}
 
@@ -2876,16 +2958,13 @@ SubscriptionManagerImpl
 	getSubscriptionFromName(
 		String		name )
 	{
-		synchronized( this ){
+		Collection<SubscriptionImpl> subs = subscription_map.getReadOnlyMap().values();
 
-			for (int i=0;i<subscriptions.size();i++){
+		for ( SubscriptionImpl sub: subs ){
 
-				SubscriptionImpl s = (SubscriptionImpl)subscriptions.get(i);
+			if ( sub.getName().equalsIgnoreCase( name )){
 
-				if ( s.getName().equalsIgnoreCase( name )){
-
-					return( s );
-				}
+				return( sub );
 			}
 		}
 
@@ -2893,27 +2972,11 @@ SubscriptionManagerImpl
 	}
 
 	@Override
-	public Subscription
+	public SubscriptionImpl
 	getSubscriptionByID(
 		String		id )
 	{
-		synchronized( this ){
-
-  		int index = Collections.binarySearch(subscriptions, id, new Comparator() {
-  			@Override
-			  public int compare(Object o1, Object o2) {
-  				String id1 = (o1 instanceof Subscription) ? ((Subscription) o1).getID() : o1.toString();
-  				String id2 = (o2 instanceof Subscription) ? ((Subscription) o2).getID() : o2.toString();
-  				return id1.compareTo(id2);
-  			}
-  		});
-
-  		if (index >= 0) {
-  			return subscriptions.get(index);
-  		}
-		}
-
-		return null;
+		return( subscription_map.get( id ));
 	}
 
 	private Map<String,AtomicInteger>	imported_sids = new HashMap<>();
@@ -5219,7 +5282,7 @@ SubscriptionManagerImpl
 									
 									String alt_url = UrlUtils.parseTextForURL( url.substring( 10 ), true );
 
-									if ( key.startsWith( alt_url )){
+									if ( alt_url != null && key.startsWith( alt_url )){
 
 										result_hash = hash;	// force match below
 									}
@@ -5728,7 +5791,7 @@ SubscriptionManagerImpl
 					runSupport()
 					{
 						try{
-							Download download = core.getPluginManager().getDefaultPluginInterface().getDownloadManager().getDownload( assoc.getHash());
+							Download download = core.getPluginManager().getDefaultPluginInterface().getDownloadManager().getDownload( assoc.getHash(), false );
 
 							if ( download != null ){
 
@@ -5930,7 +5993,9 @@ SubscriptionManagerImpl
 
 			log( "Publishing Associations Starts (conc=" + publish_associations_active + ")" );
 
-			List<SubscriptionImpl> shuffled_subs = new ArrayList<>(subscriptions);
+			List<SubscriptionImpl> subs = new ArrayList<>( subscription_map.getReadOnlyMap().values());
+
+			List<SubscriptionImpl> shuffled_subs = new ArrayList<>(subs);
 
 			Collections.shuffle( shuffled_subs );
 
@@ -5974,20 +6039,19 @@ SubscriptionManagerImpl
 	private int
 	getPublishRemainingCount()
 	{
-		synchronized( this ){
+		Collection<SubscriptionImpl> subs = subscription_map.getReadOnlyMap().values();
 
-			int	result = 0;
+		int	result = 0;
 
-			for ( SubscriptionImpl sub: subscriptions ){
+		for ( SubscriptionImpl sub: subs ){
 
-				if ( sub.isSubscribed() && sub.isPublic()){
+			if ( sub.isSubscribed() && sub.isPublic()){
 
-					result += sub.getAssociationsRemainingForPublish();
-				}
+				result += sub.getAssociationsRemainingForPublish();
 			}
-
-			return( result );
 		}
+
+		return( result );
 	}
 
 	private void
@@ -6257,7 +6321,7 @@ SubscriptionManagerImpl
 	protected void
 	publishSubscriptions()
 	{
-		List	 shuffled_subs;
+		List<SubscriptionImpl>	 shuffled_subs;
 
 		synchronized( this ){
 
@@ -6266,7 +6330,9 @@ SubscriptionManagerImpl
 				return;
 			}
 
-			shuffled_subs = new ArrayList( subscriptions );
+			Collection<SubscriptionImpl> subs = subscription_map.getReadOnlyMap().values();
+
+			shuffled_subs = new ArrayList<>( subs );
 
 			publish_subscription_active = true;
 		}
@@ -6278,7 +6344,7 @@ SubscriptionManagerImpl
 
 			for (int i=0;i<shuffled_subs.size();i++){
 
-				SubscriptionImpl sub = (SubscriptionImpl)shuffled_subs.get( i );
+				SubscriptionImpl sub = shuffled_subs.get( i );
 
 				if ( sub.isSubscribed() && sub.isPublic() && !sub.getPublished()){
 
@@ -6821,7 +6887,11 @@ SubscriptionManagerImpl
 
 			log( "Subscription torrent downloaded" );
 
-			TOTorrent torrent = TOTorrentFactory.deserialiseFromBEncodedByteArray( torrent_data );
+			TorrentDataHolder d_bytes = new TOTorrentFactory.TorrentDataHolder( torrent_data );
+			
+			torrent_data = null;
+			
+			TOTorrent torrent = TOTorrentFactory.deserialiseFromBEncodedByteArray( d_bytes );
 
 				// update size is just that of signed content, torrent itself is .vuze file
 				// so take this into account
@@ -7402,12 +7472,54 @@ SubscriptionManagerImpl
 		throw( new SubscriptionException( "Failed to extract engine id " + id ));
 	}
 
+	private static final Object 		LIB_MUTATION_KEY = new Object();
+	private static final AtomicInteger	lib_mutation_count = new AtomicInteger(0);
+	
+	private void
+	libraryMutated()
+	{
+			// check the active subscriptions now - others will have to wait until they are re-loaded
+			// This does leave inactive ones with potentially inaccurate num_read caches but we 
+			// probably don't want to go fully loading all subscriptions everytime a download is
+			// added
+		
+		Map<SubscriptionImpl,Object[]>	to_check;
+		
+		synchronized( result_cache ){
+			
+			lib_mutation_count.incrementAndGet();
+			
+			to_check = new HashMap<>( result_cache );
+			
+			result_cache.clear();
+		}
+		
+		for ( Map.Entry<SubscriptionImpl, Object[]>	entry: to_check.entrySet()){
+			
+			LinkedHashMap<String,SubscriptionResultImpl>	temp = (LinkedHashMap<String,SubscriptionResultImpl>)entry.getValue()[0];
+			
+			processResults( entry.getKey(), temp.values(), false );
+		}
+	}
+	
 	protected LinkedHashMap<String,SubscriptionResultImpl>
 	loadResults(
 		SubscriptionImpl			subs )
-	{
+	{		
+		LinkedHashMap<String,SubscriptionResultImpl>	results;
+		
+		boolean	check_results = false;
+		
+		long latest_unread_result = 0;
+		
 		synchronized( result_cache ){
 
+			Integer mut = (Integer)subs.getUserData( LIB_MUTATION_KEY );
+			
+			check_results = mut == null || mut != lib_mutation_count.get();
+			
+			subs.setUserData( LIB_MUTATION_KEY, lib_mutation_count.get());
+			
 			Object[]	entry = result_cache.get( subs );
 
 			if ( entry != null ){
@@ -7417,7 +7529,7 @@ SubscriptionManagerImpl
 				return((LinkedHashMap<String,SubscriptionResultImpl>)entry[0]);
 			}
 
-			LinkedHashMap	results = new LinkedHashMap<String,SubscriptionResultImpl>(1024);
+			results = new LinkedHashMap<String,SubscriptionResultImpl>(1024);
 
 			try{
 				File	f = getResultsFile( subs );
@@ -7439,6 +7551,15 @@ SubscriptionManagerImpl
 
 							results.put( result.getID(), result );
 
+							if ( !( result.isDeleted() || result.getRead())){
+							
+								long time_found = result.getTimeFound();
+								
+								if ( time_found > latest_unread_result ){
+									
+									latest_unread_result = time_found;
+								}
+							}
 						}catch( Throwable e ){
 
 							log( "Failed to decode result '" + result_map + "'", e );
@@ -7471,9 +7592,16 @@ SubscriptionManagerImpl
 
 				result_cache.remove( oldest_sub );
 			}
-
-			return( results );
 		}
+		
+		subs.setNewestUnreadResultTime( latest_unread_result );
+		
+		if ( check_results ){
+		
+			processResults( subs, results.values(), false );
+		}
+		
+		return( results );
 	}
 
 	protected void
@@ -7669,36 +7797,358 @@ SubscriptionManagerImpl
 
 	protected void
  	saveResults(
- 		SubscriptionImpl			subs,
- 		SubscriptionResultImpl[]	results )
- 	{
+ 		SubscriptionImpl				subs,
+ 		SubscriptionResultImpl[]		results,
+ 		List<SubscriptionResultImpl>	new_unread_results )
+ 	{		
+		List<SubscriptionResultImpl>	saved_results = new ArrayList<>( results.length );
+		
+		long latest_unread_result = 0;
+
 		synchronized( result_cache ){
 
 			result_cache.remove( subs );
 
-			try{
+			try{				
+				List<SubscriptionResultImpl>	deleted_old_results = new ArrayList<>( results.length );
+				
+				int now_days = (int)( SystemTime.getCurrentTime() / (1000*60*60*24 ));
+
+				for ( SubscriptionResultImpl result: results ){
+					
+					if ( result.isDeleted()){
+						
+						int days = result.getDeletedLastSeen();
+					
+						if ( days > 0 && now_days - days > 14 ){
+						
+							deleted_old_results.add( result );
+							
+						}else{
+							
+							saved_results.add( result );
+						}
+					}else{
+						
+						saved_results.add( result );
+						
+						if ( !result.getRead()){
+							
+							long time_found = result.getTimeFound();
+							
+							if ( time_found > latest_unread_result ){
+								
+								latest_unread_result = time_found;
+							}
+						}
+					}
+				}
+
+				if ( deleted_old_results.size() > 10000 ){
+					
+					Collections.sort(
+						deleted_old_results,
+						(r1,r2)->{
+					
+							return( r2.getDeletedLastSeen() - r1.getDeletedLastSeen());
+						});
+					
+						// most recently deleted results are at the front of the list, save some
+						// of them
+					
+					for ( int i=0; i<5000; i++ ){
+						
+						saved_results.add( deleted_old_results.get( i ));
+					}
+				}else{
+					
+					for ( SubscriptionResultImpl result: deleted_old_results ){
+						
+						saved_results.add( result );					
+					}
+				}
+				
 				File	f = getResultsFile( subs );
 
 				Map	map = new HashMap();
 
-				List	list = new ArrayList( results.length );
+				List<Map>	list = new ArrayList<>( results.length );
 
 				map.put( "results", list );
 
-				for (int i=0;i<results.length;i++){
-
-					list.add( results[i].toBEncodedMap());
+				for ( SubscriptionResultImpl result: saved_results ){
+					
+					list.add( result.toBEncodedMap());
 				}
-
-				FileUtil.writeResilientFile( f, map );
+				
+				FileUtil.writeResilientFileIncrementally( f, map );
 
 			}catch( Throwable e ){
 
 				log( "Failed to save results for '" + subs.getName(), e );
 			}
 		}
+		
+		subs.setNewestUnreadResultTime( latest_unread_result );
+		
+		if ( new_unread_results != null && !new_unread_results.isEmpty()){
+		
+			processResults( subs, new_unread_results, true );
+		}
  	}
 
+	private static AsyncDispatcher library_checker	= new AsyncDispatcher( "Subs::libcheck" );
+	private static AsyncDispatcher result_exec		= new AsyncDispatcher( "Subs::resexec" );
+	
+	private void
+	processResults(
+		SubscriptionImpl					subs,
+		Collection<SubscriptionResultImpl>	results,
+		boolean								has_new_results )
+	{
+		if ( has_new_results ){
+			
+			checkGloballyMarkedRead( subs, results );
+			
+			String script = subs.getExecuteOnNewResult();
+			
+			if ( script != null && !script.isEmpty()){
+				
+					// e.g. plugin( simpleapi, "method=markresultsread" ) or markresultsreadinall
+				
+				List<SubscriptionResultImpl> new_results = new ArrayList<>( results.size());
+				
+				for ( SubscriptionResultImpl result: results ){
+					
+					if ( !result.isDeleted() && !result.getRead()){
+						
+						new_results.add( result );
+					}
+				}
+				
+				if ( !new_results.isEmpty()){
+					
+					result_exec.dispatch(()->{
+							
+						evalScript( subs, script, new_results, "subs:newResult" );
+					});
+				}
+			}
+		}
+		
+		if ( getMarkResultsInLibraryRead()){
+			
+			for ( SubscriptionResultImpl test_result: results ){
+				
+				if ( !test_result.isDeleted() && !test_result.getRead()){
+					
+					library_checker.dispatch(()->{
+						
+						List<String>			id_list 	= new ArrayList<>( results.size());
+						SubscriptionResultImpl	last_result = null;
+						
+						for ( SubscriptionResultImpl result: results ){
+												
+							int res = SubscriptionUtils.getHashStatus( result );
+							
+							if ( 	res == SubscriptionUtils.HS_LIBRARY ||
+									res == SubscriptionUtils.HS_ARCHIVE || 
+									res == SubscriptionUtils.HS_HISTORY ){
+								
+								last_result = result;
+								
+								id_list.add( result.getID());
+							}
+						}
+						
+						int hits = id_list.size();
+						
+						if ( hits == 1 ){
+							
+							last_result.setRead( true );
+							
+						}else if ( hits > 1 ){
+							
+							boolean[]	read = new boolean[hits];
+							
+							Arrays.fill(read, true );
+							
+							subs.getHistory().markResults( id_list.toArray(new String[hits]), read );
+						}
+					});
+					
+					break;
+				}
+			}
+		}
+	}
+	
+	private void
+	checkGloballyMarkedRead(
+		SubscriptionImpl					subs,
+		Collection<SubscriptionResultImpl>	results )
+	{
+		synchronized( this ){
+			
+			getGMAR( false );
+			
+			if ( last_gmar != null && !gmar_cache.isEmpty()){
+				
+				List<String> mark_rids = new ArrayList<>();
+				
+				for ( SubscriptionResultImpl result: results ){
+					
+					if ( result.isDeleted()){
+						
+						continue;
+					}
+					
+					String rid = null;
+					
+					String hash = result.getAssetHash();
+					
+					if ( hash != null ){
+						
+						rid = gmar_cache.get( hash );
+				
+					}else{
+						
+						Map<Integer,Object>	properties = result.toPropertyMap();
+
+						String 	name = (String)properties.get( SearchResult.PR_NAME );
+						Long	size = (Long)properties.get( SearchResult.PR_SIZE );
+						
+						if ( name != null && size != null ){
+							
+							String ns = name + ":" + size;
+							
+							rid = gmar_cache.get( ns );
+						}
+					}
+					
+					if ( rid != null ){
+						
+						SubscriptionResult sr = last_gmar.getHistory().getResult( rid );
+						
+						if ( sr != null && !sr.isDeleted()){
+							
+							if ( !result.getRead()){
+								
+								mark_rids.add( result.getID());
+							}
+						}
+					}
+				}
+				
+				if ( !mark_rids.isEmpty()){
+					
+					boolean[] temp = new boolean[mark_rids.size()];
+					
+					Arrays.fill( temp, true );
+					
+					subs.getHistory().markResults( mark_rids.toArray(new String[temp.length]), temp);
+				}
+			}
+		}
+	}
+	
+	private boolean		js_plugin_install_tried;
+
+	protected void
+	evalScript(
+		SubscriptionImpl				subs,
+		String							script,
+		List<SubscriptionResultImpl>	subs_results,
+		String							intent_key )
+	{
+		if ( subs_results.isEmpty()){
+			
+			return;
+		}
+		
+		String script_type = "";
+
+		script = script.trim();
+		
+		if ( script.length() >=10 ){
+			
+			String start = script.substring(0,10).toLowerCase( Locale.US );
+		
+			if ( start.startsWith( "javascript" ) || start.startsWith( "plugin" )){
+				
+				int	p1 = script.indexOf( '(' );
+	
+				int	p2 = script.lastIndexOf( ')' );
+	
+				if ( p1 != -1 && p2 != -1 ){
+	
+					script = script.substring( p1+1, p2 ).trim();
+	
+					if ( script.startsWith( "\"" ) && script.endsWith( "\"" )){
+	
+						script = script.substring( 1, script.length()-1 );
+					}
+	
+						// allow people to escape " if it makes them feel better
+	
+					script = script.replaceAll( "\\\\\"", "\"" );
+	
+					script_type = start.startsWith( "javascript" )?ScriptProvider.ST_JAVASCRIPT:ScriptProvider.ST_PLUGIN;
+				}
+			}
+		}
+
+		if ( script_type == "" ){
+
+			String error = "Unrecognised script type: " + script;
+					
+			Debug.out( error  );
+
+			return;
+		}
+
+		boolean	provider_found = false;
+
+		List<ScriptProvider> providers = CoreFactory.getSingleton().getPluginManager().getDefaultPluginInterface().getUtilities().getScriptProviders();
+
+		for ( ScriptProvider p: providers ){
+
+			if ( p.getScriptType() == script_type ){
+
+				provider_found = true;
+									
+				Map<String,Object>	bindings = new HashMap<>();
+	
+				String intent = intent_key + "(\"" + subs.getName() + "\",\"" + subs_results.get(0).getID() + (subs_results.size()==1?"":"...") + "\")";
+
+				bindings.put( "intent", intent );
+
+				bindings.put( "subscription", subs );
+
+				bindings.put( "subscription_results", subs_results );
+
+				try{
+					Object result = p.eval( script, bindings );
+	
+				}catch( Throwable e ){
+
+					Debug.out( e );
+				}
+			}
+		}
+
+		if ( script_type == ScriptProvider.ST_JAVASCRIPT && !provider_found ){
+
+			if ( !js_plugin_install_tried ){
+
+				js_plugin_install_tried = true;
+
+				PluginUtils.installJavaScriptPlugin();
+			}
+		}
+	}
+	
+	
 	private void
 	loadConfig()
 	{
@@ -7719,6 +8169,8 @@ SubscriptionManagerImpl
 
 			if ( l_subs != null ){
 
+				Map<String,SubscriptionImpl>	loaded = new HashMap<>();
+				
 				for (int i=0;i<l_subs.size();i++){
 
 					Map	m = (Map)l_subs.get(i);
@@ -7726,17 +8178,7 @@ SubscriptionManagerImpl
 					try{
 						SubscriptionImpl sub = new SubscriptionImpl( this, m );
 
-						int index = Collections.binarySearch(subscriptions, sub, new Comparator<Subscription>() {
-							@Override
-							public int compare(Subscription arg0, Subscription arg1) {
-								return arg0.getID().compareTo(arg1.getID());
-							}
-						});
-						if (index < 0) {
-							index = -1 * index - 1; // best guess
-
-							subscriptions.add( index, sub );
-						}
+						loaded.put( sub.getID(), sub );
 
 						if ( sub.isMine()){
 
@@ -7750,6 +8192,8 @@ SubscriptionManagerImpl
 						log( "Failed to import subscription from " + m, e );
 					}
 				}
+				
+				subscription_map.putAll( loaded );
 			}
 		}
 
@@ -7761,9 +8205,10 @@ SubscriptionManagerImpl
 
 	protected void
 	configDirty(
-		SubscriptionImpl		subs )
+		SubscriptionImpl		subs,
+		int						reason )
 	{
-		changeSubscription( subs );
+		changeSubscription( subs, reason );
 
 		configDirty();
 	}
@@ -7771,15 +8216,8 @@ SubscriptionManagerImpl
 	protected void
 	configDirty()
 	{
-		synchronized( this ){
-
-			if ( config_dirty ){
-
-				return;
-			}
-
-			config_dirty = true;
-
+		if ( config_dirty.compareAndSet( false, true )){
+		
 			new DelayedEvent(
 				"Subscriptions:save", 5000,
 				new AERunnable()
@@ -7790,7 +8228,7 @@ SubscriptionManagerImpl
 					{
 						synchronized( SubscriptionManagerImpl.this ){
 
-							if ( !config_dirty ){
+							if ( !config_dirty.get()){
 
 								return;
 							}
@@ -7809,9 +8247,9 @@ SubscriptionManagerImpl
 
 		synchronized( this ){
 
-			config_dirty = false;
+			config_dirty.set( false );
 
-			if ( subscriptions.size() == 0 ){
+			if ( subscription_map.isEmpty()){
 
 				FileUtil.deleteResilientConfigFile( CONFIG_FILE );
 
@@ -7823,12 +8261,8 @@ SubscriptionManagerImpl
 
 				map.put( "subs", l_subs );
 
-				Iterator	it = subscriptions.iterator();
-
-				while( it.hasNext()){
-
-					SubscriptionImpl sub = (SubscriptionImpl)it.next();
-
+				for ( SubscriptionImpl sub: subscription_map.getReadOnlyMap().values()){
+					
 					try{
 						l_subs.add( sub.toMap());
 
@@ -7928,132 +8362,6 @@ SubscriptionManagerImpl
 		}finally{
 
 			writer.exdent();
-		}
-	}
-
-	private static class
-	searchMatcher
-	{
-		private String[]	bits;
-		private int[]		bit_types;
-		private Pattern[]	bit_patterns;
-
-		protected
-		searchMatcher(
-			String		term )
-		{
-			bits = RegExUtil.PAT_SPLIT_SPACE.split(term.toLowerCase() );
-
-			bit_types 		= new int[bits.length];
-			bit_patterns 	= new Pattern[bits.length];
-
-			for (int i=0;i<bits.length;i++){
-
-				String bit = bits[i] = bits[i].trim();
-
-				if ( bit.length() > 0 ){
-
-					char	c = bit.charAt(0);
-
-					if ( c == '+' ){
-
-						bit_types[i] = 1;
-
-						bit = bits[i] = bit.substring(1);
-
-					}else if ( c == '-' ){
-
-						bit_types[i] = 2;
-
-						bit = bits[i] = bit.substring(1);
-					}
-
-					if ( bit.startsWith( "(" ) && bit.endsWith((")"))){
-
-						bit = bit.substring( 1, bit.length()-1 );
-
-						try{
-							bit_patterns[i] = Pattern.compile( bit, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
-
-						}catch( Throwable e ){
-						}
-					}else if ( bit.contains( "|" )){
-
-						try{
-							bit_patterns[i] = Pattern.compile( bit, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
-
-						}catch( Throwable e ){
-						}
-					}
-				}
-			}
-		}
-
-		public boolean
-		matches(
-			String		str )
-		{
-			// term is made up of space separated bits - all bits must match
-			// each bit can be prefixed by + or -, a leading - means 'bit doesn't match'. + doesn't mean anything
-			// each bit (with prefix removed) can be "(" regexp ")"
-			// if bit isn't regexp but has "|" in it it is turned into a regexp so a|b means 'a or b'
-
-			str = str.toLowerCase();
-
-			boolean	match 			= true;
-			boolean	at_least_one 	= false;
-
-			for (int i=0;i<bits.length;i++){
-
-				String bit = bits[i];
-
-				if ( bit.length() > 0 ){
-
-					boolean	hit;
-
-					if ( bit_patterns[i] == null ){
-
-						hit = str.contains( bit );
-
-					}else{
-
-						hit = bit_patterns[i].matcher( str ).find();
-					}
-
-					int	type = bit_types[i];
-
-					if ( hit ){
-
-						if ( type == 2 ){
-
-							match = false;
-
-							break;
-
-						}else{
-
-							at_least_one = true;
-
-						}
-					}else{
-
-						if ( type == 2 ){
-
-							at_least_one = true;
-
-						}else{
-
-							match = false;
-
-							break;
-						}
-					}
-				}
-			}
-
-			boolean res = match && at_least_one;
-
-			return( res );
 		}
 	}
 
@@ -8198,5 +8506,135 @@ SubscriptionManagerImpl
 		subs.requestAttention();
 		
 		return( subs );
+	}
+	
+	private SubscriptionImpl		last_gmar;
+	private Map<String,String>		gmar_cache	= new HashMap<>();
+	
+	private SubscriptionImpl
+	getGMAR(
+		boolean	create_if_missing )
+	{
+			// lock held by callers
+		
+		if ( last_gmar != null && last_gmar.isRemoved()){
+			
+			last_gmar 	= null;
+			
+			gmar_cache.clear();
+		}
+		
+		String gmar_id 	= COConfigurationManager.getStringParameter( "subscriptions.gmar.id", null );
+
+		SubscriptionImpl gmar = gmar_id==null?null:getSubscriptionByID( gmar_id );
+					
+		if ( gmar == null && create_if_missing ){
+			
+			try{
+				gmar = createSingletonRSS( MessageText.getString( "subs.globally.marked.as.read" ), new URL( "subscription:?type=gmar" ), -1, false );
+				
+				COConfigurationManager.setParameter( "subscriptions.gmar.id", gmar.getID());
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
+				
+		if ( gmar != null && gmar != last_gmar ){
+			
+			last_gmar = gmar;
+			
+			for ( SubscriptionResult result: gmar.getResults( false )){
+				
+				String hash = result.getAssetHash();
+				
+				if ( hash != null ){
+					
+					gmar_cache.put( hash, result.getID());
+					
+				}
+					
+				Map<Integer,Object>	properties = result.toPropertyMap();
+
+				String 	name = (String)properties.get( SearchResult.PR_NAME );
+				Long	size = (Long)properties.get( SearchResult.PR_SIZE );
+				
+				if ( name != null && size != null ){
+					
+					String ns = name + ":" + size;
+					
+					gmar_cache.put( ns, result.getID());
+				}
+			}
+		}
+		
+		return( gmar );
+	}
+	
+	@Override
+	public void 
+	markReadInAllSubscriptions(
+		SearchSubsResultBase[] results )
+	{		
+		Set<String> hashes = new HashSet<>();
+		
+		Set<String>	name_sizes = new HashSet<>();
+				
+		synchronized( this ){
+			
+			SubscriptionImpl gmar = getGMAR( true );
+			
+			List<SubscriptionResultImpl> gmar_results = new ArrayList<>( results.length );
+			
+			for ( SearchSubsResultBase result: results ){
+			
+				byte[] hash = result.getHash();
+				
+				String hash_str = hash==null?null:Base32.encode( hash );
+				
+				if ( hash_str != null ){
+										
+					hashes.add( hash_str );
+				}
+				
+				
+				String  name 	= result.getName();
+				long	size	= result.getSize();
+				
+				String ns = name + ":" + size;
+				
+				name_sizes.add( ns );
+								
+				if ( gmar != null ){
+					
+					SubscriptionResultImpl sr =	new SubscriptionResultImpl(	gmar.getHistory(),result );
+						
+					gmar_results.add( sr );
+					
+					if ( hash_str != null ){
+
+						gmar_cache.put( hash_str, sr.getID());
+					}
+					
+					gmar_cache.put( ns, sr.getID());
+				}
+			}
+			
+			if ( gmar_results.size() > 0 ){
+				
+				gmar.getHistory().reconcileResults( null, gmar_results.toArray( new SubscriptionResultImpl[0] ), true );
+			}
+		}
+		
+		for ( SubscriptionImpl subs: getSubscriptions( true )){
+				
+			if ( subs.isSearchTemplate() || subs.isSubscriptionTemplate()){
+					
+				continue;
+			}
+				
+			subs.getHistory().markResults( hashes, name_sizes );
+		}
 	}
 }

@@ -645,9 +645,22 @@ DHTDBImpl
 		DHTTransportContact 	originator,
 		HashWrapper				key )
 	{
+		return( remove( originator, key, (short)0));
+	}
+	
+	@Override
+	public DHTDBValue
+	remove(
+		DHTTransportContact 	originator,
+		HashWrapper				key,
+		short					flags )
+	{
 			// local remove
 
 		try{
+			
+			DHTDBValue	result;
+			
 			this_mon.enter();
 
 			DHTDBMapping mapping = stored_values.get( key );
@@ -669,13 +682,39 @@ DHTDBImpl
 						mapping.destroy();
 					}
 
-					return( res.getValueForDeletion( getNextValueVersion()));
+					result = res.getValueForDeletion( getNextValueVersion());
+				}else{
+					
+					result = null;
 				}
-
-				return( null );
+			}else{
+				
+				result = null;
 			}
 
-			return( null );
+			if ( result == null ){
+				
+				if ((flags & DHT.FLAG_PUT_AND_FORGET) != 0 ){
+					
+						// wouldn't expect to find a local value for this, make one up
+			
+					DHTDBValueImpl temp =
+							new DHTDBValueImpl(
+									SystemTime.getCurrentTime(),
+									new byte[1],
+									getNextValueVersion(),
+									local_contact,
+									local_contact,
+									true,
+									flags,
+									(byte)0, 
+									DHT.REP_FACT_DEFAULT );
+					
+					result = temp.getValueForDeletion( getNextValueVersion());
+				}
+			}
+			
+			return( result );
 
 		}finally{
 
@@ -3534,14 +3573,14 @@ DHTDBImpl
 				 * per neighbour (factors of 100), so an approach based on number of registrations
 				 * is non-trivial (assuming future scaling of the DHT, what do we consider crap?)
 				 * A further approach would be to query the claimed originators of values (obviously
-				 * a low bandwith approach, e.g. query 3 values from the contact with highest number
+				 * a low bandwidth approach, e.g. query 3 values from the contact with highest number
 				 * of forwarded values). This requires originators to support long term knowledge of
 				 * what they've published (we don't want to blacklist a neighbour because an originator
 				 * has deleted a value/been restarted). We also then have to consider how to deal with
 				 * non-responses to queries (assuming an affirmative Yes -> value has been forwarded
 				 * correnctly, No -> probably crap). We can't treat non-replies as No. Thus a bad
 				 * neighbour only has to forward crap with originators that aren't AZ nodes (very
-				 * easy to do!) to break this aproach.
+				 * easy to do!) to break this approach.
 				 *
 				 *
 				it2 = mapping.getIndirectValues();

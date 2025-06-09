@@ -370,6 +370,9 @@ JSONEngine
 
 						try{
 							boolean addResult = true;
+							
+							Set<Integer>	fields_mapped = new HashSet<>();
+							
 							for(int j = 0 ; j < mappings.length ; j++) {
 								String fieldFrom = mappings[j].getName();
 								if(fieldFrom == null) {
@@ -448,6 +451,12 @@ JSONEngine
 
 								if(fieldContent == null) {
 									continue;
+								}else if ( fieldContent.isEmpty()){
+										// support multiple mappings for the same entry such that
+										// earlier ones take priority over later empty ones
+									if ( fields_mapped.contains( fieldTo )){
+										continue;
+									}
 								}
 
 								Pattern filter = mappings[j].getPostFilterPattern(searchQuery);
@@ -459,12 +468,16 @@ JSONEngine
 									}
 								}
 
+								if (!fieldContent.isEmpty()){
+									fields_mapped.add( fieldTo );
+								}
+								
 								switch(fieldTo) {
 									case FIELD_NAME :
 										result.setNameFromHTML(fieldContent);
 										break;
 									case FIELD_SIZE :
-										result.setSizeFromHTML(fieldContent);
+										result.setSizeFromHTML(fieldContent, 0);
 										break;
 									case FIELD_PEERS :
 										result.setNbPeersFromHTML(fieldContent);
@@ -472,9 +485,58 @@ JSONEngine
 									case FIELD_SEEDS :
 										result.setNbSeedsFromHTML(fieldContent);
 										break;
-									case FIELD_CATEGORY :
-										result.setCategoryFromHTML(fieldContent);
+									case FIELD_CATEGORY :{
+											// see if we've been given an array of cats
+										
+										List<String>	cats = new ArrayList<>();
+									
+										if ( fieldContent.startsWith( "[" )){
+											
+											Object fieldContentObj = jsonEntry.get(fieldFrom);
+											
+											if ( fieldContentObj instanceof List ){
+												
+												List<Object> ocats = (List<Object>)fieldContentObj;
+												
+												for ( Object ocat: ocats ){
+																										
+													if ( ocat instanceof String ){
+													
+														cats.add((String)ocat);
+														
+													}else if ( ocat instanceof Map ){
+														
+														Map<String,Object> mcat = (Map<String,Object>)ocat;
+														
+														Object oname = mcat.get( "name" );
+														
+														if ( oname instanceof String ){
+															
+															cats.add((String)oname);
+														}
+													}
+												}
+											}
+										}
+										
+										if ( cats.isEmpty()){
+							
+											result.setCategoryFromHTML(fieldContent);
+											
+										}else{
+											
+											result.setCategoryFromHTML(cats.get(0));
+											
+											if ( cats.size() > 1 ){
+												
+												for ( String cat: cats ){
+													
+													result.addTagFromHTML( cat );
+												}
+											}
+										}
 										break;
+									}
 									case FIELD_DATE :
 										result.setPublishedDateFromHTML(fieldContent);
 										break;

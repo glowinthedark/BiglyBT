@@ -23,6 +23,7 @@ package com.biglybt.core.subs;
 import java.net.URL;
 import java.util.Map;
 
+import com.biglybt.core.subs.util.SearchSubsResultBase;
 import com.biglybt.pifimpl.local.utils.UtilitiesImpl;
 
 public interface
@@ -68,6 +69,12 @@ SubscriptionManager
 
 		throws SubscriptionException;
 
+	public Subscription
+	createSubscriptionTemplate(
+		String		name )
+	
+		throws SubscriptionException;
+	
 	public Subscription
 	createFromURI(
 		String		uri )
@@ -222,6 +229,13 @@ SubscriptionManager
 	public boolean
 	getActivateSubscriptionOnChange();
 
+	public void
+	setMarkResultsInLibraryRead(
+		boolean		b );
+	
+	public boolean
+	getMarkResultsInLibraryRead();
+	
 	public String
 	getRSSLink();
 
@@ -261,4 +275,8 @@ SubscriptionManager
 			String		creator_ref )
 
 			throws Exception;
+	
+	public void
+	markReadInAllSubscriptions(
+		SearchSubsResultBase[]		results );
 }

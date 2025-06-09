@@ -40,6 +40,7 @@ import com.biglybt.ui.swt.components.BufferedLabel;
 import com.biglybt.ui.swt.components.Legend;
 import com.biglybt.ui.swt.components.graphics.PingGraphic;
 import com.biglybt.ui.swt.components.graphics.SpeedGraphic;
+import com.biglybt.ui.swt.mainwindow.ClipboardCopy;
 import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.pif.UISWTView;
 import com.biglybt.ui.swt.pif.UISWTViewEvent;
@@ -224,12 +225,12 @@ public class DHTView
   }
 
   private void initialiseGeneralGroup() {
-    Group gGeneral = new Group(panel,SWT.NONE);
+    Group gGeneral = Utils.createSkinnedGroup(panel,SWT.NONE);
     Messages.setLanguageText(gGeneral, "DHTView.general.title" );
 
     GridData data = new GridData();
     data.verticalAlignment = SWT.BEGINNING;
-    data.widthHint = 360;
+    data.widthHint = 400;
     gGeneral.setLayoutData(data);
 
     GridLayout layout = new GridLayout();
@@ -319,7 +320,7 @@ public class DHTView
   }
 
   private void initialiseDBGroup() {
-    Group gDB = new Group(panel,SWT.NONE);
+    Group gDB = Utils.createSkinnedGroup(panel,SWT.NONE);
     Messages.setLanguageText(gDB,"DHTView.db.title");
 
     GridData data = new GridData(GridData.FILL_HORIZONTAL);
@@ -382,11 +383,11 @@ public class DHTView
   }
 
   private void initialiseTransportDetailsGroup() {
-    Group gTransport = new Group(panel,SWT.NONE);
+    Group gTransport = Utils.createSkinnedGroup(panel,SWT.NONE);
     Messages.setLanguageText(gTransport,"DHTView.transport.title");
 
     GridData data = new GridData(GridData.FILL_VERTICAL);
-    data.widthHint = 360;
+    data.widthHint = 400;
     data.verticalSpan = 2;
     gTransport.setLayoutData(data);
 
@@ -480,7 +481,7 @@ public class DHTView
   }
 
   private void initialiseOperationDetailsGroup() {
-    Group gOperations = new Group(panel,SWT.NONE);
+    Group gOperations = Utils.createSkinnedGroup(panel,SWT.NONE);
     Messages.setLanguageText(gOperations,"DHTView.operations.title");
     gOperations.setLayoutData(new GridData(SWT.FILL,SWT.BEGINNING,true,false));
 
@@ -554,7 +555,7 @@ public class DHTView
   }
 
   private void initialiseActivityGroup() {
-    Group gActivity = new Group(panel,SWT.NONE);
+    Group gActivity = Utils.createSkinnedGroup(panel,SWT.NONE);
     Messages.setLanguageText(gActivity,"DHTView.activity.title");
     gActivity.setLayoutData(new GridData(SWT.FILL,SWT.FILL,true,true));
     gActivity.setLayout(new GridLayout());
@@ -651,6 +652,33 @@ public class DHTView
       }
     });
 
+	Menu menu = new Menu(activityTable);
+
+	ClipboardCopy.addCopyToClipMenu(
+			menu,
+			new ClipboardCopy.copyToClipProvider(){
+				
+				@Override
+				public String getText(){
+					StringBuffer b = new StringBuffer( activities.length * 256 );
+					
+					for ( DHTControlActivity act: activities ){
+						b.append( "\"");
+						b.append( MessageText.getString("DHTView.activity.status." + act.isQueued()));
+						b.append( "\", \"" );
+						b.append( MessageText.getString("DHTView.activity.type." + act.getType()));
+						b.append( "\", \"" );;
+						b.append( ByteFormatter.nicePrint(act.getTarget()));
+						b.append( "\", \"" );
+						b.append( act.getDescription());
+						b.append( "\"\n" );
+					}
+						
+					return( b.toString());
+				}
+			});	
+	
+    activityTable.setMenu( menu );
   }
 
 

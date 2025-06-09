@@ -22,6 +22,8 @@
 
 package com.biglybt.core.subs;
 
+import java.util.List;
+
 import com.biglybt.core.metasearch.FilterableResult;
 import com.biglybt.core.subs.impl.SubscriptionResultFilterImpl;
 
@@ -56,6 +58,20 @@ SubscriptionResultFilter
 		long	min );
 	
 	public long
+	getMaxSeeds();
+	
+	public void
+	setMaxSeeds(
+		long	max );
+	
+	public long
+	getMinPeers();
+	
+	public void
+	setMinPeers(
+		long	min );
+	
+	public long
 	getMaxAgeSecs();
 	
 	public void
@@ -76,6 +92,12 @@ SubscriptionResultFilter
 	setWithoutWords(
 		String[]	words );
 	
+	public List<Subscription>
+	getDependsOn();
+	
+	public long
+	getDependenciesVersion();
+	
 	public void
 	save()
 
@@ -87,5 +109,8 @@ SubscriptionResultFilter
 	public boolean
 	isFiltered(
 		FilterableResult	result );
+	
+	public String
+	getString();
 	
 }

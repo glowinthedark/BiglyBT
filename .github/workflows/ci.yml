@@ -1,0 +1,40 @@
+
+name: Java CI with Maven
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        java-version: [ '8', '11', '17' ]
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ matrix.java-version }}
+        distribution: 'temurin'
+        cache: maven
+    - name: Package with Maven
+      id: maven_package
+      run: mvn package --file pom.xml
+#   - name: Stage JAR file artifact
+#     run: mkdir staging && cp uis/target/BiglyBT.jar staging/
+#     if: steps.maven_package.outcome == 'success'
+#   - name: Publish artifact
+#     if: steps.maven_package.outcome == 'success'
+#     uses: actions/upload-artifact@v3
+#     with:
+#       name: BiglyBT_${{ runner.os }}_JDK_${{ matrix.java-version }}
+#       path: staging
+#

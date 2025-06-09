@@ -46,7 +46,7 @@ CryptoHandlerECC
 	private static final Long	DEFAULT_TIMEOUT		= Long.MAX_VALUE;
 
 
-	private static final int	TIMEOUT_DEFAULT_SECS		= 60*60;
+	private static final int	TIMEOUT_DEFAULT_SECS		= 12*60*60;
 
 
 	final CryptoManagerImpl		manager;
@@ -889,7 +889,7 @@ CryptoHandlerECC
 	static class InternalECIES
 		extends JCEIESCipher.ECIES
 	{
-			// we use this class to obtain compatability with BC
+			// we use this class to obtain compatibility with BC
 
 		public void
 		internalEngineInit(

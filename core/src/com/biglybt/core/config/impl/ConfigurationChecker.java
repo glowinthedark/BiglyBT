@@ -663,11 +663,13 @@ ConfigurationChecker
 	      changed = true;
 	    }
 
+	    /* Relaxed restriction on this: https://github.com/BiglySoftware/BiglyBT/issues/2110
 	    int minQueueingShareRatio = COConfigurationManager.getIntParameter("StartStopManager_iFirstPriority_ShareRatio");
 	    if (minQueueingShareRatio < 500) {
 	      COConfigurationManager.setParameter("StartStopManager_iFirstPriority_ShareRatio", 500);
 	      changed = true;
 	    }
+	    */
 
 	    int iSeedingMin = COConfigurationManager.getIntParameter("StartStopManager_iFirstPriority_SeedingMinutes");
 	    if (iSeedingMin < 90 && iSeedingMin != 0) {
@@ -708,13 +710,12 @@ ConfigurationChecker
 	     * Special Patch for OSX users
 	     */
 	    if (Constants.isOSX) {
-	      boolean sound = COConfigurationManager.getBooleanParameter("Play Download Finished",true);
+
 	      // Command + Q destroys the window, then notifies SWT, making it
 	      // hard to do a confirmation exit.
 	      boolean confirmExit = COConfigurationManager.getBooleanParameter("confirmationOnExit");
 
-	      if ( sound || confirmExit ) {
-	        COConfigurationManager.setParameter("Play Download Finished",false);
+	      if ( confirmExit ) {
 	        COConfigurationManager.setParameter("confirmationOnExit",false);
 	        changed = true;
 	      }

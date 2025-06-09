@@ -238,15 +238,18 @@ ConfigurationManager
     load(CONFIG_FILENAME);
 
     try {
-      String[] keys = propertiesMap.keySet().toArray(new String[0]);
-      for (String key : keys) {
-      	if (key == null) {
-      		continue;
-      	}
-  			if (key.startsWith("SideBar.Expanded.AutoOpen.") || key.startsWith("NameColumn.wrapText.")) {
-  				removeParameter(key);
-  			}
-  		}
+    	String[] keys = propertiesMap.keySet().toArray(new String[0]);
+    	for (String key : keys) {
+    		if (key == null) {
+    			continue;
+    		}
+    			// remove old potentially non-ascii keys
+    		if ( 	key.startsWith("SideBar.Expanded.") || 
+    				key.startsWith("NameColumn.wrapText.")) {
+    			
+    			removeParameter(key);
+    		}
+    	}
     } catch (Exception e) {
     	// not sure if I can do Debug.out here.. could be in that evil
     	// preinitialization loop of dooom
@@ -1366,7 +1369,7 @@ ConfigurationManager
 
 		if ( value instanceof String ){
 
-			if (((String)value).toLowerCase( Locale.US ).endsWith( ".b32.i2p" )){
+			if ( AENetworkClassifier.categoriseAddress((String)value) != AENetworkClassifier.AT_PUBLIC ){
 
 				return( true );
 			}

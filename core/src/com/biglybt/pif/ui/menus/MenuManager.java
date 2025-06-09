@@ -107,6 +107,9 @@ public interface MenuManager {
 	 */
 	public static final String MENU_TAG_CONTEXT = "tag_content";
 
+	public static final String MENU_SUBSCRIPTION_RESULT_CONTEXT = "subscription_result_context";
+
+	
 	/**
 	 * Creates a menu item for the appropriate menu.
 	 * <P>
@@ -115,7 +118,7 @@ public interface MenuManager {
 	 * @param menuID The <tt>MENU_</tt> identifier as defined above.
 	 * @param resource_key ID of the menu, which is also used to retrieve the
 	 *                     textual name from the plugin language file.
-	 * @return The newly created menu item.
+	 * @return The newly created menu item with style {@link MenuItem#STYLE_PUSH}
 	 */
     public MenuItem addMenuItem(String menuID, String resource_key);
 

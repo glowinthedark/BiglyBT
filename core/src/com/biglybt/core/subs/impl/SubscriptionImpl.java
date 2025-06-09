@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.net.URL;
 import java.security.KeyPair;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.biglybt.util.MapUtils;
 import org.gudy.bouncycastle.util.encoders.Base64;
@@ -36,6 +37,7 @@ import com.biglybt.core.lws.LightWeightSeedAdapter;
 import com.biglybt.core.lws.LightWeightSeedManager;
 import com.biglybt.core.metasearch.Engine;
 import com.biglybt.core.metasearch.MetaSearchManagerFactory;
+import com.biglybt.core.metasearch.impl.web.rss.RSSEngine;
 import com.biglybt.core.security.CryptoECCUtils;
 import com.biglybt.core.subs.*;
 import com.biglybt.core.torrent.TOTorrent;
@@ -102,6 +104,8 @@ SubscriptionImpl
 	private boolean			is_public;		// whether or not we publish associations
 	private boolean			is_anonymous;	// whether or not the subscription is anon
 
+	private volatile int	subscription_type = -1;
+	
 	private Map				singleton_details;
 
 	private byte[]			hash;
@@ -148,8 +152,6 @@ SubscriptionImpl
 
 	private String			referer;
 
-	private CopyOnWriteList	listeners = new CopyOnWriteList();
-
 	private Map				verify_cache_details;
 	private boolean			verify_cache_result;
 
@@ -158,6 +160,65 @@ SubscriptionImpl
 	private long			tag_id = -1;
 	private int				view_options;
 	private String			parent;
+	private List<String>	depends_on;
+	private String			exec_on_new_result;
+	
+	private volatile long	latest_unread_result_time = -1;
+	
+	private AtomicLong		md_mutator = new AtomicLong( RandomUtils.nextAbsoluteLong());
+
+	private static final int LT_SUBSCRIPTION_CHANGED		= 1;
+	private static final int LT_SUBSCRIPTION_DOWNLOADED		= 2;
+
+	private static ListenerManager<SubscriptionListener>	listener_aggregator =
+		ListenerManager.createAsyncManager(
+			"Subscription:a",
+			new ListenerManagerDispatcher<SubscriptionListener>()
+			{
+				@Override
+				public void
+				dispatch(
+					SubscriptionListener 		listener,
+					int 						type,
+					Object 						_value )
+				{
+					Object[]	value = (Object[])_value;
+					
+					Subscription subs = (Subscription)value[0];
+					
+					switch( type ){
+
+						case LT_SUBSCRIPTION_CHANGED:{
+
+							listener.subscriptionChanged( subs, (Integer)value[1] );
+
+							break;
+						}
+						case LT_SUBSCRIPTION_DOWNLOADED:{
+
+							listener.subscriptionDownloaded( subs );
+							
+							break;
+						}
+					}
+				}
+			});
+
+	
+	private final ListenerManager<SubscriptionListener>	listeners 	= ListenerManager.createManager(
+			"Subscription:l",
+			new ListenerManagerDispatcher<SubscriptionListener>()
+			{
+				@Override
+				public void
+				dispatch(
+					SubscriptionListener		listener,
+					int							type,
+					Object						value )
+				{
+					listener_aggregator.dispatch( listener, type, value );
+				}
+			});
 
 	protected static String
 	getSkeletonJSON(
@@ -387,7 +448,7 @@ SubscriptionImpl
 
 			Map	map = new HashMap();
 
-			map.put( "name", name.getBytes( "UTF-8" ));
+			map.put( "name", name.getBytes( Constants.UTF_8 ));
 
 			map.put( "public_key", public_key );
 
@@ -459,12 +520,12 @@ SubscriptionImpl
 
 			if ( creator_ref != null ){
 
-				map.put( "cref", creator_ref.getBytes( "UTF-8" ));
+				map.put( "cref", creator_ref.getBytes( Constants.UTF_8 ));
 			}
 
 			if ( category != null ){
 
-				map.put( "cat", category.getBytes( "UTF-8" ));
+				map.put( "cat", category.getBytes( Constants.UTF_8 ));
 			}
 
 			if ( tag_id != -1 ){
@@ -479,9 +540,26 @@ SubscriptionImpl
 
 			if ( parent != null ){
 
-				map.put( "par", parent.getBytes( "UTF-8" ));
+				map.put( "par", parent.getBytes( Constants.UTF_8 ));
+			}
+			
+			if ( depends_on != null ){
+				
+				List<byte[]> dep = new ArrayList<>();
+				
+				map.put( "dep", dep);
+				
+				for ( String s: depends_on ){
+					
+					dep.add( s.getBytes( Constants.UTF_8 ));
+				}
 			}
 
+			if ( exec_on_new_result != null ){
+				
+				map.put( "eonr", exec_on_new_result.getBytes( Constants.UTF_8 ));
+			}
+			
 			return( map );
 		}
 	}
@@ -492,7 +570,7 @@ SubscriptionImpl
 
 		throws IOException
 	{
-		name				= new String((byte[])map.get( "name"), "UTF-8" );
+		name				= new String((byte[])map.get( "name"), Constants.UTF_8 );
 		public_key			= (byte[])map.get( "public_key" );
 		private_key			= (byte[])map.get( "private_key" );
 		version				= ((Long)map.get( "version" )).intValue();
@@ -530,7 +608,7 @@ SubscriptionImpl
 
 		if ( b_local_name != null ){
 
-			local_name = new String( b_local_name, "UTF-8" );
+			local_name = new String( b_local_name, Constants.UTF_8 );
 		}
 
 		List	l_assoc = (List)map.get( "assoc" );
@@ -559,14 +637,14 @@ SubscriptionImpl
 
 		if ( b_cref != null ){
 
-			creator_ref = new String( b_cref, "UTF-8" );
+			creator_ref = new String( b_cref, Constants.UTF_8 );
 		}
 
 		byte[] b_cat = (byte[])map.get( "cat" );
 
 		if ( b_cat != null ){
 
-			category = new String( b_cat, "UTF-8" );
+			category = new String( b_cat, Constants.UTF_8 );
 		}
 
 		Long l_tag_id = (Long)map.get( "tag" );
@@ -587,7 +665,26 @@ SubscriptionImpl
 
 		if ( b_parent != null ){
 
-			parent = new String( b_parent, "UTF-8" );
+			parent = new String( b_parent, Constants.UTF_8 );
+		}
+		
+		List<byte[]> b_depends_on = (List<byte[]>)map.get( "dep" );
+		
+		if ( b_depends_on != null ){
+			
+			depends_on = new ArrayList<String>( b_depends_on.size());
+			
+			for ( byte[] b: b_depends_on ){
+				
+				depends_on.add( new String( b, Constants.UTF_8 ));
+			}
+		}
+		
+		byte[] b_eonr = (byte[])map.get( "eonr" );
+
+		if ( b_eonr != null ){
+
+			exec_on_new_result = new String( b_eonr, Constants.UTF_8 );
 		}
 	}
 
@@ -735,10 +832,136 @@ SubscriptionImpl
 	}
 
 	@Override
+	public List<Subscription>
+	getDependsOn()
+	{
+		List<Subscription> result = new ArrayList<>();
+		
+		if ( depends_on != null ){
+			
+			for ( String id: depends_on ){
+				
+				try{
+					Subscription sub = manager.getSubscriptionByID( id );
+					
+					if ( sub != null && !result.contains( sub )){
+						
+						result.add( sub );
+					}
+				}catch( Throwable e ){
+					
+				}
+			}
+		}
+		
+		return( result );	
+	}
+	
+	@Override
+	public void
+	setDependsOn(
+		List<Subscription>	subs )
+	{
+		if ( subs == null || subs.isEmpty()){
+			
+			depends_on = null;
+			
+		}else{
+			
+			depends_on = new ArrayList<String>( subs.size());
+			
+			for ( Subscription s: subs ){
+				
+				if ( s == this ){
+					
+					continue;
+				}
+				
+				String id = s.getID();
+				
+				if ( !depends_on.contains( id )){
+				
+					depends_on.add( id );
+				}
+			}
+		}
+		
+		manager.configDirty( this, SubscriptionListener.CR_METADATA );
+		
+		fireChanged( SubscriptionListener.CR_METADATA );
+	}
+
+	@Override
+	public String
+	getExecuteOnNewResult()
+	{
+		return( exec_on_new_result );	
+	}
+	
+	@Override
+	public void
+	setExecuteOnNewResult(
+		String		eonr )
+	{
+		if ( eonr == null || eonr.isEmpty()){
+			
+			exec_on_new_result = null;
+			
+		}else{
+			
+			exec_on_new_result = eonr;
+		}
+		
+		manager.configDirty( this, SubscriptionListener.CR_METADATA );
+		
+		fireChanged( SubscriptionListener.CR_METADATA );
+	}
+	
+	@Override
+	public boolean
+	isSubscriptionTemplate()
+	{
+		return( getSubscriptionType() == 2 );
+	}
+	
+	private int
+	getSubscriptionType()
+	{
+		if ( subscription_type == -1 ){
+
+			if ( getName(false).startsWith( "Search Template:" )){
+				
+				subscription_type = 1;
+				
+			}else{
+				
+				subscription_type = 0;
+			
+				try{
+					Engine engine = getEngine();
+			
+					if ( engine instanceof RSSEngine ){
+				
+						if (((RSSEngine)engine).getSearchUrl().startsWith( "subscription:?type=template" )){
+							
+							subscription_type = 2;
+						}
+					}
+				}catch( Throwable e ){
+		
+					Debug.printStackTrace(e);
+				}
+			}
+		}
+			
+		return( subscription_type );
+	}
+	
+	@Override
 	public boolean
 	isSearchTemplate()
 	{
-		return( getName(false).startsWith( "Search Template:" ));
+		return( getSubscriptionType() == 1 );
 	}
 
 	protected Map
@@ -760,7 +983,7 @@ SubscriptionImpl
 
 			singleton_sp_attempted = true;
 
-			manager.configDirty( this );
+			manager.configDirty( this, SubscriptionListener.CR_METADATA );
 		}
 	}
 
@@ -807,7 +1030,7 @@ SubscriptionImpl
 	{
 		local_name = str;
 
-		manager.configDirty( this );
+		manager.configDirty( this, SubscriptionListener.CR_METADATA );
 
 		fireChanged(SubscriptionListener.CR_METADATA);
 	}
@@ -1160,7 +1383,7 @@ SubscriptionImpl
 
 		try{
 
-			String	engine_str = new String( Base64.encode( BEncoder.encode( engine.exportToBencodedMap())), "UTF-8" );
+			String	engine_str = new String( Base64.encode( BEncoder.encode( engine.exportToBencodedMap())), Constants.UTF_8 );
 
 			engine_map.put( "content", engine_str );
 
@@ -1189,7 +1412,7 @@ SubscriptionImpl
 
 				try{
 
-					Map map = BDecoder.decode( Base64.decode( engine_str.getBytes( "UTF-8" )));
+					Map map = BDecoder.decode( Base64.decode( engine_str.getBytes( Constants.UTF_8 )));
 
 					return( MetaSearchManagerFactory.getSingleton().getMetaSearch().importFromBEncodedMap(map));
 
@@ -2175,42 +2398,43 @@ SubscriptionImpl
 		fireChanged(SubscriptionListener.CR_METADATA);
 	}
 
+	@Override
+	public long
+	getMetadataMutationIndicator()
+	{
+		return( md_mutator.get());
+	}
+	
 	protected void
 	fireChanged(
 		int		reason )
 	{
-		manager.configDirty( this );
-
-		Iterator it = listeners.iterator();
-
-		while( it.hasNext()){
-
-			try{
-				((SubscriptionListener)it.next()).subscriptionChanged( this, reason );
-
-			}catch( Throwable e ){
-
-				Debug.printStackTrace(e);
-			}
+		fireChanged( reason, true );
+	}
+	
+	protected void
+	fireChanged(
+		int			reason,
+		boolean		persistent )
+	{
+		if ( reason == SubscriptionListener.CR_METADATA ){
+			
+			md_mutator.incrementAndGet();
 		}
+		
+		if ( persistent ){
+		
+			manager.configDirty( this, reason );
+		}
+
+		listeners.dispatch( LT_SUBSCRIPTION_CHANGED, new Object[]{ this, reason });
 	}
 
 	protected void
 	fireDownloaded()
 	{
 
-		Iterator it = listeners.iterator();
-
-		while( it.hasNext()){
-
-			try{
-				((SubscriptionListener)it.next()).subscriptionDownloaded( this );
-
-			}catch( Throwable e ){
-
-				Debug.printStackTrace(e);
-			}
-		}
+		listeners.dispatch( LT_SUBSCRIPTION_DOWNLOADED, new Object[]{ this });
 	}
 
 	@Override
@@ -2218,7 +2442,7 @@ SubscriptionImpl
 	addListener(
 		SubscriptionListener	l )
 	{
-		listeners.add( l );
+		listeners.addListener( l );
 	}
 
 	@Override
@@ -2226,11 +2450,11 @@ SubscriptionImpl
 	removeListener(
 		SubscriptionListener	l )
 	{
-		listeners.remove( l );
+		listeners.removeListener( l );
 	}
 
 	@Override
-	public SubscriptionHistory
+	public SubscriptionHistoryImpl
 	getHistory()
 	{
 		return( history );
@@ -2343,8 +2567,39 @@ SubscriptionImpl
 		return( getHistory().getResults( include_deleted ));
 	}
 
+	protected void
+	setNewestUnreadResultTime(
+		long t )
+	{
+		latest_unread_result_time = t;
+	}
+	
+	private static AsyncDispatcher disp = new AsyncDispatcher( "SubsResultLoader" );
+	
+	public long
+	getNewestUnreadResultTime()
+	{
+		if ( latest_unread_result_time == -1 ){
+	
+			latest_unread_result_time = 0;
+			
+			disp.dispatch(()->{
+				getHistory().getResults( false );
+			});	
+		}
+		
+		return( latest_unread_result_time );
+	}
+	
 	@Override
-	public SubscriptionResultFilter
+	public long 
+	getNextUpdateTime()
+	{
+		return( manager.getScheduler().getNextUpdateTime( this ));
+	}
+	
+	@Override
+	public SubscriptionResultFilterImpl
 	getFilters()
 
 		throws SubscriptionException

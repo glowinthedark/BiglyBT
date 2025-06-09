@@ -20,6 +20,7 @@ package com.biglybt.ui.swt.shells.opentorrent;
 import java.io.File;
 
 import com.biglybt.core.torrent.impl.TorrentOpenFileOptions;
+import com.biglybt.core.util.StringInterner;
 import com.biglybt.pif.ui.tables.*;
 
 public class TableColumnOTOF_Path
@@ -49,8 +50,8 @@ implements TableCellRefreshListener, TableColumnExtraInfoListener
   		return;
   	}
   	TorrentOpenFileOptions tfi = (TorrentOpenFileOptions) ds;
-  	String s = tfi.getDestPathName();
-  	String parentDir = tfi.parent.getParentDir();
+  	String s = tfi.getDestPathName().toString();
+  	String parentDir = tfi.getTorrentOptions().getParentDir();
 
 	if ( 	s.startsWith(parentDir+File.separator) &&
 			!parentDir.endsWith( File.separator ) && 	// could be C:\
@@ -58,7 +59,8 @@ implements TableCellRefreshListener, TableColumnExtraInfoListener
 
   		s = s.substring(parentDir.length()+1);
   	}
-  	cell.setText(s);
+	
+  	cell.setText(new StringInterner.DirKey(s));
   }
 
 }

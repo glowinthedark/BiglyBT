@@ -37,16 +37,18 @@ import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.global.GlobalManager;
 import com.biglybt.core.global.GlobalManagerListener;
+import com.biglybt.core.global.GlobalMangerProgressListener;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
-import com.biglybt.core.security.SESecurityManager;
 import com.biglybt.core.util.*;
 import com.biglybt.core.versioncheck.VersionCheckClient;
 import com.biglybt.pif.*;
+import com.biglybt.pif.ipc.IPCInterface;
 import com.biglybt.pif.platform.PlatformManagerException;
+import com.biglybt.pif.utils.ScriptProvider;
 import com.biglybt.pifimpl.local.launch.PluginLauncherImpl;
 import com.biglybt.pifimpl.local.ui.UIManagerImpl;
 import com.biglybt.pifimpl.local.update.UpdateManagerImpl;
@@ -202,6 +204,20 @@ PluginInitializer
 					"azintrss",
 					"true",
 					"false"},
+			{	 PluginManagerDefaults.PID_SIMPLE_API,
+					/** {@link com.biglybt.plugin.simpleapi.SimpleAPIPlugin} */
+					"com.biglybt.plugin.simpleapi.SimpleAPIPlugin",
+					"azintsimpleapi",
+					"azintsimpleapi",
+					"true",
+					"false"},
+			{	 PluginManagerDefaults.PID_NET_TEST,
+						/** {@link com.biglybt.plugin.net.test.NetTestPlugin} */
+						"com.biglybt.plugin.net.test.NetTestPlugin",
+						"azintnettest",
+						"azintnettest",
+						"true",
+						"false"},
         };
 
   /*
@@ -443,6 +459,122 @@ PluginInitializer
 
   	AEDiagnostics.addWeakEvidenceGenerator( this );
 
+  	ScriptProvider provider = 
+			new ScriptProvider()
+			{
+				@Override
+				public String
+				getProviderName()
+				{
+					return( "plugin" );
+				}
+			
+				@Override
+				public String
+				getScriptType()
+				{
+					return( ST_PLUGIN );
+				}
+			
+				@Override
+				public boolean
+				canEvalBatch(
+					String					script )
+				{
+					String[] bits = script.split( ",", 2 );
+					
+					if ( bits.length != 2 ){
+						
+						return( false );
+					}
+					
+					String pid = bits[0].trim();
+					
+					if ( pid.endsWith( "+" )){
+						
+						pid = pid.substring( 0, pid.length()-1);
+						
+						pid = getFullPID( pid );
+
+						PluginInterface plugin_interface = getPluginManager().getPluginInterfaceByID( pid );
+					
+						if ( plugin_interface != null ){
+						
+							return( plugin_interface.getIPC().canInvoke("evalBatchScript" , new Object[]{ new HashMap()}));
+						}
+					}
+					
+					return( false );
+				}
+				
+				@Override
+				public Object
+				eval(
+					String					script,
+					Map<String,Object>		bindings )
+					
+					throws Exception
+				{
+					String[] bits = script.split( ",", 2 );
+					
+					if ( bits.length != 2 ){
+						
+						throw( new Exception( "Malformed script" ));
+					}
+					
+					String pid = bits[0].trim();
+										
+					boolean is_batch = pid.endsWith( "+" );
+					
+					if ( is_batch ){
+						
+						pid = pid.substring( 0, pid.length()-1);
+					}
+					
+					pid = getFullPID( pid );
+
+					PluginInterface plugin_interface = getPluginManager().getPluginInterfaceByID( pid );
+					
+					if ( plugin_interface == null ){
+						
+						throw( new Exception( "Plugin script: plugin id " + pid + " not installed/loaded" ));
+					}
+					
+					Map<String,Object> args = new HashMap<>( bindings );
+					
+					args.put( "script", bits[1].trim());
+					
+					Object[] a_args = new Object[]{ args };
+					
+					IPCInterface ipc = plugin_interface.getIPC();
+					
+					if ( is_batch && ipc.canInvoke("evalBatchScript", a_args )){
+						
+						return( ipc.invoke( "evalBatchScript", a_args ));
+						
+					}else{
+					
+						return( ipc.invoke( "evalScript", a_args ));
+					}
+				}
+				
+				private String
+				getFullPID(
+					String	pid )
+				{
+						// shorthand
+					
+					if ( pid.equals( "simpleapi" )){
+						
+						return( "azintsimpleapi" );
+					}
+					
+					return( pid );
+				}
+			};
+				
+	getDefaultInterfaceSupport().getUtilities().registerScriptProvider( provider );
+		
   	this.core.addLifecycleListener(
 	    	new CoreLifecycleAdapter()
 			{
@@ -2040,23 +2172,48 @@ PluginInitializer
 
   @Override
   public void
-  destroyInitiated()
+  destroyInitiated(
+	GlobalMangerProgressListener progress ) 
   {
-	  List plugin_interfaces;
+	  List<PluginInterfaceImpl> plugin_interfaces;
 
 	  synchronized( s_plugin_interfaces ){
 
-		  plugin_interfaces = new ArrayList( s_plugin_interfaces );
+		  plugin_interfaces = new ArrayList<>( s_plugin_interfaces );
 	  }
 
-	  for (int i=0;i<plugin_interfaces.size();i++){
+	  	// reverse order - really only to ensure that built in ones get stopped before slower ones
+	  	// in particular the I2P Helper plugin can take a long time to stop and we would prefer that
+	  	// the start-stop rules plugin (built-in so loaded later) stops early
+	  	// Also it does make sense to stop them in the opposite order, kinda
 
-		  ((PluginInterfaceImpl)plugin_interfaces.get(i)).closedownInitiated();
+	  Collections.reverse( plugin_interfaces );
+	  
+	  for ( PluginInterfaceImpl pi: plugin_interfaces ){
+
+		  if ( progress != null ){
+			  
+			  progress.reportCurrentTask( MessageText.getString( "ManagerItem.stopping" ) + " " + pi.getPluginName());
+		  }
+		  
+		  try{
+			  pi.closedownInitiated();
+			  
+		  }catch( Throwable e ){
+			  
+			  Debug.out( e );
+		  }
 	  }
 
 	  if ( default_plugin != null ){
 
-		  default_plugin.closedownInitiated();
+		  try{
+			  default_plugin.closedownInitiated();
+			  
+		  }catch( Throwable e ){
+			  
+			  Debug.out( e );
+		  }
 	  }
   }
 
@@ -2064,21 +2221,35 @@ PluginInitializer
   public void
   destroyed()
   {
-	  List plugin_interfaces;
+	  List<PluginInterfaceImpl> plugin_interfaces;
 
 	  synchronized( s_plugin_interfaces ){
 
-		  plugin_interfaces = new ArrayList( s_plugin_interfaces );
+		  plugin_interfaces = new ArrayList<>( s_plugin_interfaces );
 	  }
 
-	  for (int i=0;i<plugin_interfaces.size();i++){
+	  Collections.reverse( plugin_interfaces );
+	  
+	  for ( PluginInterfaceImpl pi: plugin_interfaces ){
 
-		  ((PluginInterfaceImpl)plugin_interfaces.get(i)).closedownComplete();
+		  try{
+			  pi.closedownComplete();
+			  
+		  }catch( Throwable e ){
+			  
+			  Debug.out( e );
+		  }
 	  }
 
 	  if ( default_plugin != null ){
 
-		  default_plugin.closedownComplete();
+		  try{
+			  default_plugin.closedownComplete();
+			  
+		  }catch( Throwable e ){
+			  
+			  Debug.out( e );
+		  }
 	  }
   }
 

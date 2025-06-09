@@ -1,20 +1,20 @@
 /*
- * Copyright (C) Azureus Software, Inc, All Rights Reserved.
+ * Copyright (C) Bigly Software.  All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * as published by the Free Software Foundation; either version 2
  * of the License, or (at your option) any later version.
+ *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- *
  */
-
 package com.biglybt.plugin.startstoprules.defaultplugin;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -36,6 +36,14 @@ RankCalculatorSlotReserver
 	private final static AtomicInteger	uuid_gen = new AtomicInteger( 1 );
 	
 	private final int uid = uuid_gen.getAndIncrement();
+	
+	@Override
+	public int 
+	compareToIgnoreStopped(
+		DefaultRankCalculator obj) 
+	{
+		return( compareTo( obj ));
+	}
 	
 	@Override
 	public int 
@@ -182,13 +190,13 @@ RankCalculatorSlotReserver
 	public boolean
 	isFirstPriority()
 	{
-		return( true );
+		return( false );
 	}
 	
 	public boolean
 	getCachedIsFP()
 	{
-		return( true );
+		return( false );
 	}
 	
 	public int
@@ -237,6 +245,19 @@ RankCalculatorSlotReserver
 	getSizeExcludingDND()
 	{
 		return( 0 );
+	}
+	
+	public long
+	getRemainingExcludingDND()
+	{
+		return( 0 );
+	}
+	
+	@Override
+	public int[] 
+	getFilePriorityStats()
+	{
+		return( null );
 	}
 	
 	public DownloadScrapeResult
@@ -293,6 +314,12 @@ RankCalculatorSlotReserver
 		return( new TagFeatureRateLimit[0] );
 	}
 	
+	public TagFeatureRateLimit[]
+	getTagsWithCDLimits()
+	{
+		return( new TagFeatureRateLimit[0] );
+	}
+	
 	public RankCalculatorSlotReserver
 	getReservedSlot()
 	{
@@ -308,7 +335,8 @@ RankCalculatorSlotReserver
 	
 	@Override
 	public boolean 
-	activationRequest()
+	activationRequest(
+		Runnable to_do )
 	{
 		return( false );
 	}
@@ -436,6 +464,22 @@ RankCalculatorSlotReserver
 		return( getName());
 	}
 	
+	@Override
+	public void 
+	setUserData(
+		Object key, 
+		Object value) 
+	{
+	}
+	
+	@Override
+	public Object 
+	getUserData(
+		Object key)
+	{
+		return( null );
+	}
+		
 	public void
 	destroy()
 	{

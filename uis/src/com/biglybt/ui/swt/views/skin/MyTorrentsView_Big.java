@@ -19,7 +19,6 @@
 package com.biglybt.ui.swt.views.skin;
 
 import com.biglybt.core.Core;
-import org.eclipse.swt.widgets.Composite;
 
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.pif.download.Download;
@@ -32,21 +31,18 @@ import com.biglybt.ui.swt.views.MyTorrentsView;
 import com.biglybt.core.torrent.PlatformTorrentUtils;
 import com.biglybt.ui.common.table.TableColumnCore;
 import com.biglybt.ui.common.table.TableRowCore;
+import com.biglybt.ui.common.table.TableView;
 
 public class MyTorrentsView_Big
 	extends MyTorrentsView
 {
 	private final int torrentFilterMode;
-	private int defaultRowHeight;
 
 	public MyTorrentsView_Big(Core _core, int torrentFilterMode,
-			Object dataSource, TableColumnCore[] basicItems, BubbleTextBox txtFilter,
-			Composite cCatsTags) {
-		super( true );
-		defaultRowHeight = 40;
+			Object dataSource, TableColumnCore[] basicItems, BubbleTextBox txtFilter ){
+		super(SB_Transfers.getTableIdFromFilterMode(torrentFilterMode, true, dataSource) + "View", true );
 		this.torrentFilterMode = torrentFilterMode;
 		this.filterBox = txtFilter;
-		this.cCategoriesAndTags = cCatsTags;
 		Class<?> forDataSourceType;
 		switch (torrentFilterMode) {
 			case SBC_LibraryView.TORRENTS_COMPLETE:
@@ -62,8 +58,12 @@ public class MyTorrentsView_Big
 				forDataSourceType = Download.class;
 				break;
 		}
-		
-		init( _core, SB_Transfers.getTableIdFromFilterMode(torrentFilterMode, true, dataSource), forDataSourceType, basicItems );
+
+		TableView<DownloadManager> tv = init(_core,
+				SB_Transfers.getTableIdFromFilterMode(torrentFilterMode, true,
+						dataSource),
+				forDataSourceType, basicItems);
+		tv.setRowDefaultHeightEM(2);
 	}
 
 
@@ -93,10 +93,4 @@ public class MyTorrentsView_Big
 		boolean neverPlay = DownloadTypeIncomplete.class.equals(getForDataSourceType());
 		SBC_LibraryTableView.doDefaultClick(rows, stateMask, neverPlay, origin );
 	}
-
-	@Override
-	protected int getRowDefaultHeight() {
-		return defaultRowHeight;
-	}
-
 }

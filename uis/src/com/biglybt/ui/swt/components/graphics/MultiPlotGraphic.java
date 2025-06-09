@@ -1,6 +1,5 @@
 /*
  * File    : SpeedGraphic.java
- * Created : 15 d�c. 2003}
  * By      : Olivier
  *
  * This program is free software; you can redistribute it and/or modify
@@ -20,8 +19,10 @@
 package com.biglybt.ui.swt.components.graphics;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -46,7 +47,6 @@ import com.biglybt.core.util.TimerEvent;
 import com.biglybt.core.util.TimerEventPerformer;
 import com.biglybt.core.util.TimerEventPeriodic;
 import com.biglybt.ui.swt.Utils;
-import com.biglybt.ui.swt.mainwindow.Colors;
 
 /**
  * @author Olivier
@@ -98,6 +98,7 @@ MultiPlotGraphic
 
 	private SimpleDateFormat	timeFormatter = new SimpleDateFormat("HH:mm", Locale.US );
 
+	private long[]				explicitTimes;
 
 	private
 	MultiPlotGraphic(
@@ -112,7 +113,7 @@ MultiPlotGraphic
 
 		maxEntries		= num_entries;
 		
-		init( null );
+		init( null, null );
 
 	    COConfigurationManager.addAndFireParameterListeners(
 	    	new String[]{ "Graphics Update", "Stats Graph Dividers" }, this );
@@ -120,7 +121,8 @@ MultiPlotGraphic
 	
 	private void
 	init(
-		int[][]	history )
+		int[][]	history,
+		long[]	times )
 	{
 		nbValues		= 0;
 		all_values		= new int[value_sources.length][maxEntries];
@@ -154,6 +156,8 @@ MultiPlotGraphic
 			}
 		}
 
+		explicitTimes = times;
+		
 		update_outstanding = true;
 	}
 
@@ -200,6 +204,9 @@ MultiPlotGraphic
 	  	drawCanvas.addPaintListener(new PaintListener() {
 				@Override
 				public void paintControl(PaintEvent e) {
+					if ( bufferImage == null || bufferImage.isDisposed()){
+						drawChart( true );
+					}
 					if (bufferImage != null && !bufferImage.isDisposed()) {
 						Rectangle bounds = bufferImage.getBounds();
 						if (bounds.width >= ( e.width + e.x ) && bounds.height >= ( e.height + e.y )) {
@@ -319,7 +326,15 @@ MultiPlotGraphic
 	reset(
 		int[][]		history )
 	{
-		init( history );
+		reset( history, null );
+	}
+	
+	public void
+	reset(
+		int[][]		history,
+		long[]		times )
+	{
+		init( history, times );
 
 		Utils.execSWTThread(
 			new Runnable()
@@ -539,6 +554,17 @@ MultiPlotGraphic
 		drawCanvas.update();
 	}
 
+	public int
+	getVisibleEntryCount()
+	{
+		if ( drawCanvas == null || drawCanvas.isDisposed()){
+			
+			return( 0 );
+		}
+		
+		return( Math.max( 0, drawCanvas.getClientArea().width - 71 ));
+	}
+	
 	protected void
 	drawChart(
 		boolean sizeChanged)
@@ -553,35 +579,27 @@ MultiPlotGraphic
 		try{
 			this_mon.enter();
 
-			drawScale( sizeChanged );
-
-			if ( bufferScale == null || bufferScale.isDisposed()){
-
-				return;
-			}
-
-			Rectangle bounds = drawCanvas.getClientArea();
-
-			if ( bounds.isEmpty()){
-				return;
-			}
-
-				//If bufferedImage is not null, dispose it
-
-			if (bufferImage != null && !bufferImage.isDisposed()){
-
+			if ( bufferImage != null && !bufferImage.isDisposed()){
+				
 				bufferImage.dispose();
 			}
+			
+		    bufferImage = null;
 
+			Rectangle bounds = drawCanvas.getClientArea();
+			
+			if ( bounds.isEmpty()){
+				
+				return;
+			}
+			
 			bufferImage = new Image(drawCanvas.getDisplay(), bounds);
 
-			gcImage = new GC(bufferImage);
-
-			gcImage.drawImage(bufferScale, 0, 0);
+			gcImage = new GC( bufferImage );
 
 			gcImage.setAntialias( SWT.ON );
 			gcImage.setTextAntialias( SWT.ON );
-
+			
 			Set<ValueSource>	invisible_sources = new HashSet<>();
 
 			for ( int i=0;i<value_sources.length;i++){
@@ -594,6 +612,8 @@ MultiPlotGraphic
 				}
 			}
 
+			List<Object[]>	time_strs = new ArrayList<>();
+			
 			int[] oldTargetValues = new int[all_values.length];
 
 			int[] maxs = new int[all_values.length];
@@ -602,6 +622,8 @@ MultiPlotGraphic
 			
 			int next_secs = 60;
 
+			int last_xpos = -1;
+			
 			for (int x = 0; x < bounds.width - 71; x++){
 
 				int position = currentPosition - x - 1;
@@ -620,27 +642,55 @@ MultiPlotGraphic
 
 				if ( has_value ){
 
-					int	this_age = (x*update_period_millis)/1000;;
-					
-					if ( this_age >= next_secs ){
+					if ( explicitTimes == null ){
 						
-						next_secs += 60;
+						int	this_age = (x*update_period_millis)/1000;;
 						
-						long time = now - (this_age*1000);
+						if ( this_age >= next_secs ){
+							
+							next_secs += 60;
+							
+							long time = now - (this_age*1000);
+							
+							String str = timeFormatter.format( new Date( time ));
+													
+							Point p = gcImage.stringExtent( str );
+							
+							int xDraw = bounds.width - 71 - x;
+	
+							int xPos = xDraw-p.x/2;
+							
+							if ( xPos >= 0 ){
+							
+								if ( last_xpos < 0 ||  xPos + p.x < last_xpos ){
+									
+									time_strs.add( new Object[]{ str, xPos });
+									
+									last_xpos = xPos;
+								}
+							}
+						}
+					}else{
 						
-						String str = timeFormatter.format( new Date( time ));
-												
-						Point p = gcImage.stringExtent( str );
+						long time = explicitTimes[x];
 						
-						int xDraw = bounds.width - 71 - x;
-
-						int xPos = xDraw-p.x/2;
-						
-						if ( xPos >= 0 ){
-						
-							gcImage.setForeground(Colors.grey );
-
-							gcImage.drawText( str, xPos, 0, true );
+						if ( time > 0 ){
+							
+							String str = formater.formatTime( time );
+							
+							if ( str != null && !str.isEmpty()){
+								
+								Point p = gcImage.stringExtent( str );
+								
+								int xDraw = bounds.width - 71 - x;
+								
+								int xPos = xDraw-p.x/2;
+								
+								if ( xPos >= 0 ){
+																
+									time_strs.add( new Object[]{ str, xPos });
+								}
+							}
 						}
 					}
 				}
@@ -666,8 +716,9 @@ MultiPlotGraphic
 			Set<ValueSource>	bold_sources = new HashSet<>();
 			Set<ValueSource>	dotted_sources = new HashSet<>();
 
-			int max = 0;
-
+			int max			= 0;
+			int trim_max	= 0;
+			
 			for ( int i=0;i<maxs.length;i++){
 
 				ValueSource source = value_sources[i];
@@ -687,12 +738,21 @@ MultiPlotGraphic
 					dotted_sources.add( source );
 				}
 
-				if ( !source.isTrimmable()){
+				if ( source.isTrimmable()){
 
+					trim_max = Math.max( trim_max, maxs[i] );
+					
+				}else{
+					
 					max = Math.max( max, maxs[i] );
 				}
 			}
 
+			if ( max == 0 ){
+				
+				max = trim_max;
+			}
+			
 			int max_primary = max;
 
 			for ( int i=0;i<maxs.length;i++){
@@ -733,8 +793,32 @@ MultiPlotGraphic
 				max = (( max + kInB - 1 )/kInB)*kInB;
 			}
 
+				// got to set the max before creating scale otherwise we miss a cycle...
+			
 			scale.setMax( max );
+			
+			drawScale(sizeChanged);
 
+			if ( bufferScale == null || bufferScale.isDisposed()){
+				
+				return;
+			}
+	
+		    gcImage.drawImage(bufferScale,0,0);
+
+		    if ( !time_strs.isEmpty()){
+		    	
+				gcImage.setForeground( colorGrey );
+	
+			    for ( Object[] entry: time_strs ){
+			    	
+			    	String	str		= (String)entry[0];
+			    	int		xPos	= (Integer)entry[1];
+			    	
+					gcImage.drawText( str, xPos, 0, true );
+			    }
+		    }
+		    
 			int[]	prev_x = new int[value_sources.length];
 			int[]	prev_y = new int[value_sources.length];
 
@@ -882,29 +966,36 @@ MultiPlotGraphic
 							
 							if ( show_label ){
 
-								int	average_val = computeAverage( chartIdx, currentPosition - 6 );
+								int position = currentPosition-1;
+								
+								if ( position < 0 ){
 
-								int average_mod = average_val;
+									position += maxEntries;
+								}
+								
+								int	last_val = all_values[chartIdx][ position ];
 
-								if ( average_mod > max ){
+								int last_mod = last_val;
 
-									average_mod = max;
+								if ( last_mod > max ){
+
+									last_mod = max;
 								}
 
-								int height = bounds.height - scale.getScaledValue( average_mod) - 2;
+								int height = bounds.height - scale.getScaledValue( last_mod) - 2;
 
 								gcImage.setAlpha( 255 );
 
 								gcImage.setForeground( source.getLineColor());
 
-								gcImage.drawText(formater.format( average_val ), bounds.width - 65, height - 12, false);
+								gcImage.drawText(formater.format( last_mod ), bounds.width - 65, height - 12, SWT.DRAW_TRANSPARENT);
 
 								Color bg = gcImage.getBackground();
 
 								if (( style & ValueSource.STYLE_DOWN ) != 0 ){
 
 									int	x = bounds.width - 72;
-									int y = height - 12;
+									int y = height-3;
 
 									gcImage.setBackground( source.getLineColor());
 
@@ -915,7 +1006,7 @@ MultiPlotGraphic
 								}else  if (( style & ValueSource.STYLE_UP ) != 0 ){
 
 									int	x = bounds.width - 72;
-									int y = height - 12;
+									int y = height - 3;
 
 									gcImage.setBackground( source.getLineColor());
 
@@ -926,7 +1017,7 @@ MultiPlotGraphic
 								}else  if (( style & ValueSource.STYLE_BLOB ) != 0 ){
 
 									int	x = bounds.width - 72;
-									int y = height - 12;
+									int y = height - 3;
 
 									gcImage.setBackground( source.getLineColor());
 
@@ -952,23 +1043,6 @@ MultiPlotGraphic
 
 			this_mon.exit();
 		}
-	}
-
-	private int
-	computeAverage(
-		int	line_index,
-		int position )
-	{
-		long sum = 0;
-		for(int i = -5 ; i < 6 ; i++) {
-			int pos = position + i;
-			pos %= maxEntries;
-			if (pos < 0)
-				pos += maxEntries;
-			sum += all_values[line_index][pos];
-		}
-		return(int)(sum / 11);
-
 	}
 
 	@Override

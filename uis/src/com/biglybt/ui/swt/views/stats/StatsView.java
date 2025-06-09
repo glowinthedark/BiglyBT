@@ -190,6 +190,7 @@ public class StatsView
 			
 			if ( Constants.isCVSVersion()){
 	
+				/* disabled as no use
 				vm.registerView(VIEW_ID,
 						new UISWTViewBuilderCore(DHTView.MSGID_PREFIX + ".cvs", null,
 								DHTView.class).setInitialDatasource(DHTView.DHT_TYPE_CVS));
@@ -198,7 +199,8 @@ public class StatsView
 						new UISWTViewBuilderCore(VivaldiView.MSGID_PREFIX + ".cvs",
 								null, VivaldiView.class).setInitialDatasource(
 										VivaldiView.DHT_TYPE_CVS));
-	
+				*/
+				
 				vm.registerView(VIEW_ID,
 						new UISWTViewBuilderCore(DHTView.MSGID_PREFIX + ".biglybt",
 								null, DHTView.class).setInitialDatasource(
@@ -224,6 +226,9 @@ public class StatsView
 		vm.registerView(VIEW_ID, new UISWTViewBuilderCore(
 				XferStatsView.MSGID_PREFIX, null, XferStatsView.class));
 
+		vm.registerView(VIEW_ID, new UISWTViewBuilderCore(
+				CountersView.MSGID_PREFIX, null, CountersView.class));
+
 		vm.setCoreViewsRegistered(VIEW_ID);
 	}
 
@@ -232,7 +237,7 @@ public class StatsView
 		if (tabbedMDI == null || tabbedMDI.isDisposed())
 			return;
 
-		MdiEntrySWT entry = tabbedMDI.getCurrentEntry();
+		MdiEntrySWT entry = tabbedMDI.getSelectedEntry();
 		if (entry != null) {
 			entry.updateUI( false );
 		}

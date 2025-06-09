@@ -17,6 +17,7 @@
 package com.biglybt.ui.swt.utils;
 
 import java.lang.reflect.Method;
+import java.util.*;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.DisposeEvent;
@@ -24,6 +25,8 @@ import org.eclipse.swt.events.DisposeListener;
 import org.eclipse.swt.graphics.*;
 import org.eclipse.swt.widgets.*;
 
+import com.biglybt.core.util.Constants;
+import com.biglybt.core.util.Debug;
 import com.biglybt.ui.swt.Utils;
 
 /**
@@ -36,7 +39,7 @@ public class FontUtils
 	private static final String[] MONO_FONT_NAMES = {
 		"Monaco",
 		"Consolas",
-		"Lucidia Console",
+		"Lucida Console",
 		"Courier",
 		"Courier New",
 		"Monospace"
@@ -69,8 +72,90 @@ public class FontUtils
 		}
 	}
 
+	private static Map<String,Object[]>	fontCache = new HashMap<>();
+	
+	public static Font
+	cache(
+		Font	f )
+	{
+		String key = getKey( f );
+		
+		Object[] existing = fontCache.get(key );
+		
+		if ( existing == null ){
+			
+			fontCache.put( key, new Object[]{ f, 0 });
+			
+			return( f );
+			
+		}else{
+	
+			existing[1] = ((Integer)existing[1]) + 1;
+			
+			f.dispose();
+			
+			return((Font)existing[0]);
+		}
+	}
+	
+	public static void
+	uncache(
+		Font...	fonts )
+	{
+		for ( Font f: fonts ){
+			
+			String key = getKey( f );
+			
+			Object[] existing = fontCache.get(key );
+
+			if ( existing == null ){
+				
+				Debug.out( "font not cached" );
+			}else{
+			
+				int count = (Integer)existing[1];
+				
+				if ( count > 0 ){
+					
+					existing[1] = count;
+					
+				}else{
+					
+					fontCache.remove( key );
+					
+					((Font)existing[0]).dispose();
+				}
+			}
+		}
+	}
+	
+	private static String
+	getKey(
+		Font	f )
+	{
+		FontData[] ds = f.getFontData();
+		
+		StringBuilder key = new StringBuilder( 32 );
+		
+		for ( FontData d: ds ){
+			
+			key.append( d.getName());
+			key.append( "/" );
+			key.append( d.getStyle());
+			key.append( "/" );
+			key.append( getHeight(d));
+		}
+		
+		return( key.toString());
+	}
+	
 	public static Font getFontWithHeight(Font baseFont, int heightInPixels,
 			int style) {
+		return getFontWithHeight(baseFont, heightInPixels, style, true);
+	}
+
+	private static Font getFontWithHeight(Font baseFont, int heightInPixels,
+			int style, boolean runAgain) {
 		boolean destroyBaseFont = style != SWT.DEFAULT;
 		if (destroyBaseFont) {
 			baseFont = getFontWithStyle(baseFont, style, 1.0f);
@@ -81,7 +166,20 @@ public class FontUtils
 		if (destroyBaseFont) {
 			baseFont.dispose();
 		}
-		return font;
+			// new font might still be bigger than requested height due to Fonts being fonts
+		
+		if ( runAgain ){
+	
+			Font font2 = getFontWithHeight(font, heightInPixels, style, false);
+			
+			font.dispose();
+			
+			return( font2 );
+			
+		}else{
+			
+			return( font );
+		}
 	}
 
 		// Used by azemp plugin
@@ -116,6 +214,7 @@ public class FontUtils
 		GC gc = new GC(font.getDevice());
 		try {
 			gc.setFont(font);
+			gc.setTextAntialias(SWT.ON);
 			return gc.textExtent(Utils.GOOD_STRING).y;
 		} finally {
 			gc.dispose();
@@ -149,14 +248,18 @@ public class FontUtils
 	}
 
 	public static float getHeight(FontData[] fd) {
+		return( getHeight( fd[0] ));
+	}
+
+	public static float getHeight(FontData fd) {
 		if (mFontData_GetHeightF != null) {
 			try {
-				return ((Number) mFontData_GetHeightF.invoke(fd[0], new Object[] {})).floatValue();
+				return ((Number) mFontData_GetHeightF.invoke(fd, new Object[] {})).floatValue();
 			} catch (Throwable ignore) {
 			}
 		}
 
-		return fd[0].getHeight();
+		return fd.getHeight();
 	}
 
 	public static Font getFontWithStyle(Font baseFont, int style,
@@ -261,22 +364,25 @@ public class FontUtils
 					return;
 				}
 
-				if (h > 10 && (Utils.isGTK3 || Utils.isDarkAppearanceNative())) {
+				if (h > 10 && (Utils.isGTK3 || ( Constants.isOSX && Utils.isDarkAppearanceNative()))) {
 					// GTK3 and OSX dark mode has border included in clientArea
 					h -= 6;
 				}
 				//System.out.println("h=" + h + ";lh=" + lineHeightPX + ";" + getFontHeightInPX(text.getFont()) );
 
 				if ( h == lastHeight ){
-					//return;
+					return;
 				}
 
 				float pctAdjust = h / (float) lineHeightPX;
 				//System.out.println("h=" + h + ";lh=" + lineHeightPX + "; " + pctAdjust);
 
 				lastHeight = h;
+				
 				Font font = FontUtils.getFontPercentOf(text.getFont(), pctAdjust);
-				font = ensureFontFitsHeight(font, h);
+				
+				font = cache( ensureFontFitsHeight(font, h));
+				
 				text.setFont(font);
 
 				if ( lastFont == null ){
@@ -288,16 +394,21 @@ public class FontUtils
 							if (text != null) {
 								text.setFont(null);
 							}
-							Utils.disposeSWTObjects(lastFont);
+							uncache( lastFont );
+							lastFont = null;
 						}
 					});
 
 				}else{
-					Utils.disposeSWTObjects(lastFont);
+					uncache( lastFont );
 				}
 				
 				if (runOnFontSizeChange != null) {
-					runOnFontSizeChange.run();
+					try{
+						runOnFontSizeChange.run();
+					}catch( Throwable e ){
+						Debug.out( e );
+					}
 				}
 
 				lastFont = font;
@@ -333,6 +444,7 @@ public class FontUtils
 	public static double getCharacterWidth(Font f) {
 		GC gc = new GC(f.getDevice());
 		gc.setFont(f);
+		gc.setTextAntialias(SWT.ON);
 		FontMetrics metrics = gc.getFontMetrics();
 		double d;
 		try {
@@ -373,11 +485,33 @@ public class FontUtils
 		try {
 			GC gc = new GC(device);
 			gc.setFont(font);
+			gc.setTextAntialias(SWT.ON);
 			width = gc.textExtent(text).x;
 			gc.dispose();
 		} catch (Exception ex) {
 			width = text.length() * 5;
 		}
 		return width;
+	}
+	
+	public static void
+	setBold(
+		Control	control )
+	{
+		Font existing = control.getFont();
+		
+		if ( existing == null ){
+			
+			Debug.out( "no existing font" );
+			
+			return;
+			
+		}else{
+			Font f = cache( getFontWithStyle( existing, SWT.BOLD, 1.0f ));
+		
+			control.setFont( f );
+			
+			control.addListener( SWT.Dispose, (ev)->{ uncache( f ); });
+		}
 	}
 }

@@ -117,7 +117,9 @@ public interface IMenuConstants
 	public static final String MENU_ID_WINDOW_CLOSE = "MainWindow.menu.file.closewindow";
 
 	public static final String MENU_ID_CLOSE_TAB = "MainWindow.menu.file.closetab";
-
+	
+	public static final String MENU_ID_CLOSE_CURRENT_VIEW = "MainWindow.menu.file.closeview";
+	
 	public static final String MENU_ID_CLOSE_ALL_DETAIL = "MainWindow.menu.closealldetails";
 
 	public static final String MENU_ID_CLOSE_ALL_DL_BARS = "MainWindow.menu.closealldownloadbars";
@@ -143,6 +145,8 @@ public interface IMenuConstants
 	public static final String MENU_ID_ALL_PEERS = "MainWindow.menu.view.allpeers";
 	
 	public static final String MENU_ID_ALL_PIECES = "MainWindow.menu.view.allpieces";
+	
+	public static final String MENU_ID_ALL_BLOCKS = "MainWindow.menu.view.allblocks";
 
 	public static final String MENU_ID_CLIENT_STATS = "MainWindow.menu.view.clientstats";
 

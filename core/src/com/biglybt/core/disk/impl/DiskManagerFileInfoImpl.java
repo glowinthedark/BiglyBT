@@ -36,6 +36,7 @@ import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.*;
+import com.biglybt.core.util.StringInterner.FileKey;
 import com.biglybt.core.util.average.AverageFactory;
 import com.biglybt.core.util.average.AverageFactory.LazyMovingImmediateAverageAdapter;
 import com.biglybt.core.util.average.AverageFactory.LazyMovingImmediateAverageState;
@@ -49,8 +50,8 @@ public class
 DiskManagerFileInfoImpl
 	implements DiskManagerFileInfo, CacheFileOwner
 {
-  private File					root_dir;
-  private final String	relative_file;
+  private File							root_dir;
+  private final StringInterner.FileKey	relative_file;
 
   final int			file_index;
   CacheFile		cache_file;
@@ -65,18 +66,20 @@ DiskManagerFileInfoImpl
 
   protected boolean 	skipped_internal 	= false;
 
+  private volatile Boolean	skipping;
+  
   private String last_error = null;
   
   private volatile CopyOnWriteList<DiskManagerFileInfoListener>	listeners;	// save mem and allocate if needed later
 
   public
   DiskManagerFileInfoImpl(
-	DiskManagerHelper	_disk_manager,
-  	File				_root_dir,
-  	String				_relative_file,
-  	int					_file_index,
-	TOTorrentFile		_torrent_file,
-	int					_storage_type )
+	DiskManagerHelper		_disk_manager,
+  	File					_root_dir,
+  	StringInterner.FileKey	_relative_file,
+  	int						_file_index,
+	TOTorrentFile			_torrent_file,
+	int						_storage_type )
 
   	throws CacheFileManagerException
   {
@@ -90,7 +93,8 @@ DiskManagerFileInfoImpl
 
     int	cache_st = DiskManagerUtil.convertDMStorageTypeToCache( _storage_type );
 
-  	cache_file = CacheFileManagerFactory.getSingleton().createFile( this, FileUtil.newFile( root_dir, relative_file), cache_st, false );
+  	cache_file = CacheFileManagerFactory.getSingleton().createFile( 
+  					this, new StringInterner.FileKey( root_dir, relative_file.toString()), cache_st, false );
 
   	if ( cache_st == CacheFile.CT_COMPACT || cache_st == CacheFile.CT_PIECE_REORDER_COMPACT ){
 
@@ -108,7 +112,7 @@ DiskManagerFileInfoImpl
 	}
 	
   	@Override
-	  public String
+	public String
   	getCacheFileOwnerName()
   	{
   		return( diskManager.getInternalName());
@@ -125,7 +129,7 @@ DiskManagerFileInfoImpl
 	public File
 	getCacheFileControlFileDir()
 	{
-		return( diskManager.getDownloadState().getStateFile( ));
+		return( diskManager.getDownloadState().getStateDir());
 	}
 
 	@Override
@@ -133,6 +137,14 @@ DiskManagerFileInfoImpl
 	getCacheMode()
 	{
 		return( diskManager.getCacheMode());
+	}
+	
+	@Override
+	public FileKey 
+	getCacheFileLink(
+		FileKey file )
+	{
+		return( diskManager.getDownloadState().getFileLink( file_index, file ));
 	}
 
   @Override
@@ -230,7 +242,7 @@ DiskManagerFileInfoImpl
   getFile(
 	boolean	follow_link )
 	{
-		File file = FileUtil.newFile(root_dir, relative_file);
+		File file = FileUtil.newFile(root_dir, relative_file.toString());
 
 		if (!follow_link) {
 
@@ -238,7 +250,7 @@ DiskManagerFileInfoImpl
 		}
 
 		// Same as getLink(), except saves redundant getFile(false) call
-		File	res = diskManager.getDownloadState().getFileLink(file_index, file);
+		File	res = diskManager.getDownloadState().getFileLink(file_index);
 		
 		return res == null ? file : res;
 	}
@@ -253,7 +265,8 @@ DiskManagerFileInfoImpl
 	@Override
 	public boolean
 	setLink(
-		File	link_destination )
+		File	link_destination,
+		boolean	no_delete )
 	{
 		last_error = "download must be stopped";
 		
@@ -270,8 +283,11 @@ DiskManagerFileInfoImpl
 	@Override
 	public boolean
 	setLinkAtomic(
-		File	link_destination )
+		File		link_destination,
+		boolean		no_delete )
 	{
+		last_error = "download must be stopped";
+		
 		Debug.out( "setLink: download must be stopped" );
 
 		return( false );
@@ -281,8 +297,11 @@ DiskManagerFileInfoImpl
 	public boolean
 	setLinkAtomic(
 		File						link_destination,
+		boolean						no_delete,
 		FileUtil.ProgressListener	pl )
 	{
+		last_error = "download must be stopped";
+		
 		Debug.out( "setLink: download must be stopped" );
 
 		return( false );
@@ -292,7 +311,7 @@ DiskManagerFileInfoImpl
 	public File
 	getLink()
 	{
-		return( diskManager.getDownloadState().getFileLink( file_index, getFile( false )));
+		return( diskManager.getDownloadState().getFileLink( file_index));
 	}
 
 	@Override
@@ -308,12 +327,6 @@ DiskManagerFileInfoImpl
 	getStorageType()
 	{
 		return( DiskManagerUtil.convertDMStorageTypeFromString( diskManager.getStorageType(file_index)));
-	}
-
-	protected boolean
-	isLinked()
-	{
-		return( getLink() != null );
 	}
 
   /**
@@ -398,199 +411,62 @@ DiskManagerFileInfoImpl
   @Override
   public void setSkipped(boolean skipped) {
 
-	int	existing_st = getStorageType();
-
-	  // currently a non-skipped file must be linear
-
-	if ( !skipped && existing_st == ST_COMPACT ){
-		if ( !setStorageType( ST_LINEAR )){
-			return;
-		}
-	}
-
-	if ( !skipped && existing_st == ST_REORDER_COMPACT ){
-		if ( !setStorageType( ST_REORDER )){
-			return;
-		}
-	}
-
-	setSkippedInternal( skipped );
-	
-	diskManager.skippedFileSetChanged( this );
+	  synchronized( DiskManagerUtil.skip_lock ){
+	  
+		  try{
+			skipping = skipped;
+			  
+			int	existing_st = getStorageType();
 		
-	boolean[] toCheck = new boolean[diskManager.getFileSet().nbFiles()];
+			  // currently a non-skipped file must be linear
 		
-	toCheck[file_index] = true;
+			if ( !skipped && existing_st == ST_COMPACT ){
+				if ( !setStorageType( ST_LINEAR )){
+					return;
+				}
+			}
 		
-	DiskManagerUtil.doFileExistenceChecksAfterSkipChange(diskManager.getFileSet(), toCheck, skipped, diskManager.getDownloadState().getDownloadManager());
+			if ( !skipped && existing_st == ST_REORDER_COMPACT ){
+				if ( !setStorageType( ST_REORDER )){
+					return;
+				}
+			}
+		
+			setSkippedInternal( skipped );
+			
+			diskManager.skippedFileSetChanged( this );
+				
+			boolean[] toCheck = new boolean[diskManager.getFileSet().nbFiles()];
+				
+			toCheck[file_index] = true;
+				
+			DiskManagerUtil.doFileExistenceChecksAfterSkipChange(diskManager.getFileSet(), toCheck, skipped, diskManager.getDownloadState().getDownloadManager());
+			
+		  }finally{
+			  
+			  skipping = null;
+		  }
+	  }
   }
 
+  @Override
+  public Boolean isSkipping(){
+	  return( skipping );
+  }
 	protected void
 	setSkippedInternal(
 		boolean	_skipped )
 	{
-		skipped_internal = _skipped;
-
-		DownloadManager dm = getDownloadManager();
-
-		if ( dm != null && !dm.isDestroyed()){
-
-			DownloadManagerState dm_state =  diskManager.getDownloadState();
-
-    		String dnd_sf = dm_state.getAttribute( DownloadManagerState.AT_DND_SUBFOLDER );
-
-     		if ( dnd_sf != null ){
-
-    			File	link = getLink();
-
-				File 	file = getFile( false );
-
-        		if ( _skipped ){
-
-        			if ( link == null || link.equals( file )){
-
-    					File parent = file.getParentFile();
-
-    					if ( parent != null ){
-
-    						File new_parent = FileUtil.newFile( parent, dnd_sf );
-
-    							// add prefix if not already present
-
-							String prefix = dm_state.getAttribute( DownloadManagerState.AT_DND_PREFIX );
-
-							String file_name = file.getName();
-
-							if ( prefix != null && !file_name.startsWith( prefix )){
-
-								file_name = prefix + file_name;
-							}
-
-    						File new_file = FileUtil.newFile( new_parent, file_name );
-
-    						if ( !new_file.exists()){
-
-        						if ( !new_parent.exists()){
-
-        							new_parent.mkdirs();
-        						}
-
-        						if ( new_parent.canWrite()){
-
-	        						boolean ok;
-
-	    							try{
-	    								dm_state.setFileLink( file_index, file, new_file );
-
-										cache_file.moveFile( new_file, null );
-
-										ok = true;
-
-									}catch( Throwable e ){
-
-										ok = false;
-
-										Debug.out( e );
-									}
-
-	        						if ( !ok ){
-
-	        							dm_state.setFileLink( file_index, file, link );
-	        						}
-        						}
-    						}
-    					}
-        			}
-        		}else{
-
-        			if ( link != null && !file.exists()){
-
-    					File parent = file.getParentFile();
-
-    					if ( parent != null && parent.canWrite()){
-
-    						File new_parent = parent.getName().equals( dnd_sf )?parent:FileUtil.newFile( parent, dnd_sf );
-
-    							// use link name to handle incomplete file suffix if set
-
-    						File new_file = FileUtil.newFile( new_parent, link.getName());
-
-    						if ( new_file.equals( link )){
-
-    							boolean	ok;
-
-								try{
-									String file_name = file.getName();
-
-									String prefix = dm_state.getAttribute( DownloadManagerState.AT_DND_PREFIX );
-
-									boolean prefix_removed = false;
-
-									if ( prefix != null && file_name.startsWith(prefix)){
-
-										file_name = file_name.substring( prefix.length());
-
-										prefix_removed = true;
-									}
-
-									String incomp_ext = dm_state.getAttribute( DownloadManagerState.AT_INCOMP_FILE_SUFFIX );
-
-									if  ( 	incomp_ext != null && incomp_ext.length() > 0 &&
-											getDownloaded() != getLength()){
-
-											// retain the prefix if enabled and we have a suffix
-
-										if ( prefix == null ){
-
-											prefix = "";
-										}
-
-										File new_link = FileUtil.newFile( file.getParentFile(), prefix + file_name + incomp_ext );
-
-										dm_state.setFileLink( file_index, file, new_link );
-
-										cache_file.moveFile( new_link, null );
-
-									}else if ( prefix_removed ){
-
-										File new_link = FileUtil.newFile( file.getParentFile(), file_name );
-
-										dm_state.setFileLink( file_index, file, new_link );
-
-										cache_file.moveFile( new_link, null );
-
-									}else{
-
-										dm_state.setFileLink( file_index, file, null );
-
-										cache_file.moveFile( file, null );
-									}
-
-									File[] files = new_parent.listFiles();
-
-    								if ( files != null && files.length == 0 ){
-
-    									new_parent.delete();
-    								}
-
-									ok = true;
-
-								}catch( Throwable e ){
-
-									ok = false;
-
-									Debug.out( e );
-								}
-
-    							if ( !ok ){
-
-    								dm_state.setFileLink( file_index, file, link );
-        						}
-    						}
-    					}
-        			}
-        		}
-    		}
+		synchronized( DiskManagerUtil.skip_lock ){
+			
+			skipped_internal = _skipped;
+	
+			DownloadManager dm = getDownloadManager();
+	
+			if ( dm != null && !dm.isDestroyed()){
+	
+				DiskManagerUtil.setSkippedInternalSupport( dm, this, cache_file,_skipped );
+			}
 		}
 	}
 
@@ -871,14 +747,7 @@ DiskManagerFileInfoImpl
 			public void
 			run()
 			{
-				TOTorrentFile[]	tfs = torrent_file.getTorrent().getFiles();
-
-				long	torrent_offset = 0;
-
-				for (int i=0;i<file_index;i++){
-
-					torrent_offset += tfs[i].getLength();
-				}
+				long	torrent_offset = torrent_file.getOffsetInTorrent();
 
 				file_start 	= torrent_offset;
 				file_end	= file_start + torrent_file.getLength();

@@ -36,6 +36,7 @@ import java.util.zip.ZipException;
 
 import javax.net.ssl.*;
 
+import com.biglybt.core.CoreFactory;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.proxy.AEProxyFactory;
 import com.biglybt.core.proxy.AEProxyFactory.PluginProxy;
@@ -70,9 +71,10 @@ ResourceDownloaderURLImpl
 	private boolean			download_initiated;
 	private long			size		 	= -2;	// -1 -> unknown
 
-	private boolean       	force_no_proxy = false;
-	private Proxy			force_proxy;
-	private boolean			auto_plugin_proxy;
+	private boolean       		force_no_proxy = false;
+	private Proxy				force_proxy;
+	private boolean				auto_plugin_proxy;
+	private Map<String,Object>	auto_plugin_proxy_options;
 
 	private final byte[] 	post_data;
 
@@ -152,8 +154,12 @@ ResourceDownloaderURLImpl
 		force_proxy = proxy;
 	}
 
-	protected void setAutoPluginProxy(){
-		auto_plugin_proxy = true;
+	protected void 
+	setAutoPluginProxy(
+		Map<String,Object>		options )
+	{
+		auto_plugin_proxy			= true;
+		auto_plugin_proxy_options	= options;
 	}
 
 	protected URL
@@ -259,7 +265,7 @@ ResourceDownloaderURLImpl
 
 				if ( auto_plugin_proxy || isAnonymous()){
 
-					plugin_proxy = AEProxyFactory.getPluginProxy( "downloading resource", url );
+					plugin_proxy = AEProxyFactory.getPluginProxy( "downloading resource", url, auto_plugin_proxy_options );
 
 					if ( plugin_proxy == null ){
 
@@ -508,7 +514,20 @@ ResourceDownloaderURLImpl
 									}
 								}
 
-								ssl_socket_factory = SESecurityManager.installServerCertificates( url );
+								URL cert_url = url;
+								
+								if ( plugin_proxy != null ){
+									
+									try{
+									
+										cert_url = new URL( plugin_proxy.getTarget());
+										
+									}catch( Throwable f ){
+										
+									}
+								}
+								
+								ssl_socket_factory = SESecurityManager.installServerCertificates( cert_url );
 
 								if ( ssl_socket_factory != null ){
 
@@ -610,7 +629,7 @@ ResourceDownloaderURLImpl
 			c.setForceProxy( force_proxy );
 		}
 		if ( auto_plugin_proxy){
-			c.setAutoPluginProxy();
+			c.setAutoPluginProxy( auto_plugin_proxy_options );
 		}
 		return( c );
 	}
@@ -674,7 +693,7 @@ ResourceDownloaderURLImpl
 				this_mon.exit();
 			}
 
-			try{
+			try{				
 				URL	outer_url = new URL( original_url.toString().replaceAll( " ", "%20" ));
 
 					// some authentications screw up without an explicit port number here
@@ -777,7 +796,7 @@ redirect_label:
 
 						if ( auto_plugin_proxy || isAnonymous()){
 
-							plugin_proxy_auto = AEProxyFactory.getPluginProxy( "downloading resource", current_url );
+							plugin_proxy_auto = AEProxyFactory.getPluginProxy( "downloading resource", current_url, auto_plugin_proxy_options );
 
 							if ( plugin_proxy_auto == null ){
 
@@ -795,7 +814,7 @@ redirect_label:
 						try{
 							SSLSocketFactory ssl_socket_factory = null;
 
-							for ( int connect_loop=0;connect_loop<3;connect_loop++ ){
+							for ( int connect_loop=0;connect_loop<4;connect_loop++ ){
 
 								File					temp_file	= null;
 
@@ -1398,8 +1417,20 @@ redirect_label:
 											}
 										}
 
-
-										ssl_socket_factory = SESecurityManager.installServerCertificates( current_url );
+										URL cert_url = current_url;
+										
+										if ( current_plugin_proxy != null ){
+											
+											try{
+											
+												cert_url = new URL( current_plugin_proxy.getTarget());
+												
+											}catch( Throwable f ){
+												
+											}
+										}
+										
+										ssl_socket_factory = SESecurityManager.installServerCertificates( cert_url );
 
 										if ( ssl_socket_factory != null ){
 

@@ -24,6 +24,7 @@ import java.util.function.Consumer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.*;
 import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.*;
 import org.eclipse.swt.widgets.*;
 import com.biglybt.core.download.DownloadManager;
@@ -114,23 +115,32 @@ public class AdvRenameWindow
 						
 			txtInput.setText( str );
 			
-			int	pos = str.lastIndexOf( '.' );
+			if ( dm.getDownloadState().getFlag( DownloadManagerState.FLAG_METADATA_DOWNLOAD )){
 			
-			if ( pos <= 0 ){
+					// name is made up in this case, ignore suffix
 				
 				txtInput.selectAll();
 				
 			}else{
 				
-				String ext = str.substring( pos+1 );
+				int	pos = str.lastIndexOf( '.' );
 				
-				if ( ext.contains( " " )){
+				if ( pos <= 0 ){
 					
 					txtInput.selectAll();
 					
 				}else{
-				
-					txtInput.setSelection( 0, pos );
+					
+					String ext = str.substring( pos+1 );
+					
+					if ( ext.contains( " " )){
+						
+						txtInput.selectAll();
+						
+					}else{
+					
+						txtInput.setSelection( 0, pos );
+					}
 				}
 			}
 			
@@ -202,8 +212,11 @@ public class AdvRenameWindow
 		
 			// separator
 		
-		Label separator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
+		Control separator = Utils.createSkinnedLabelSeparator(shell, SWT.HORIZONTAL);
+		//Label separator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
 		
+		Composite padding = new Composite( shell, SWT.None );
+				
 			// buttons
 		
 		Composite cButtons = new Composite(shell, SWT.NONE);
@@ -348,7 +361,7 @@ public class AdvRenameWindow
 		fd.top = new FormAttachment(lblMessage, 5);
 		fd.left = new FormAttachment(0, 3);
 		fd.right = new FormAttachment(100, -3);
-		fd.width = 300;
+		//fd.width = 300;
 		txtInput.setLayoutData(fd);
 
 			// display value
@@ -361,17 +374,18 @@ public class AdvRenameWindow
 		fd = new FormData();
 		fd.top = new FormAttachment(btnDisplayUse, 0, SWT.CENTER );
 		fd.left = new FormAttachment(btnDisplayName, 40);
+		fd.right = new FormAttachment(btnDisplayPad, 0);
 		btnDisplayValue.setLayoutData(fd);
 	
 		fd = new FormData();
-		fd.left = new FormAttachment(btnDisplayValue, 0);
+		//fd.left = new FormAttachment(btnDisplayValue, 0);
 		fd.right = new FormAttachment(btnDisplayUse, -8);
 		btnDisplayPad.setLayoutData(fd);
 	
 		fd = new FormData();
 		fd.top = new FormAttachment(txtInput, 5 );
 		fd.right = new FormAttachment(100, -3);
-		fd.width = btnTorrentUse.computeSize( SWT.DEFAULT, SWT.DEFAULT ).x;
+		//fd.width = btnTorrentUse.computeSize( SWT.DEFAULT, SWT.DEFAULT ).x;
 		btnDisplayUse.setLayoutData(fd);	
 		
 			// save path
@@ -384,17 +398,18 @@ public class AdvRenameWindow
 		fd = new FormData();
 		fd.top = new FormAttachment(btnSavePathUse, 0, SWT.CENTER );
 		fd.left = new FormAttachment(btnDisplayValue, 0, SWT.LEFT );
+		fd.right = new FormAttachment(btnSavePathPad, 0);
 		btnSavePathValue.setLayoutData(fd);
 	
 		fd = new FormData();
-		fd.left = new FormAttachment(btnSavePathValue, 0);
+		//fd.left = new FormAttachment(btnSavePathValue, 0);
 		fd.right = new FormAttachment(btnSavePathUse, -8);
 		btnSavePathPad.setLayoutData(fd);
 
 		fd = new FormData();
 		fd.top = new FormAttachment(btnDisplayUse, 5 );
 		fd.right = new FormAttachment(100, -3);
-		fd.width = btnTorrentUse.computeSize( SWT.DEFAULT, SWT.DEFAULT ).x;
+		//fd.width = btnTorrentUse.computeSize( SWT.DEFAULT, SWT.DEFAULT ).x;
 		btnSavePathUse.setLayoutData(fd);
 		
 			// torrent
@@ -407,17 +422,18 @@ public class AdvRenameWindow
 		fd = new FormData();
 		fd.top = new FormAttachment(btnTorrentUse, 0, SWT.CENTER );
 		fd.left = new FormAttachment(btnSavePathValue, 0, SWT.LEFT );
+		fd.right = new FormAttachment(btnTorrentPad, 0);
 		btnTorrentValue.setLayoutData(fd);
 	
 		fd = new FormData();
-		fd.left = new FormAttachment(btnTorrentValue, 0);
+		//fd.left = new FormAttachment(btnTorrentValue, 0);
 		fd.right = new FormAttachment(btnTorrentUse, -8);
 		btnTorrentPad.setLayoutData(fd);
 
 		fd = new FormData();
 		fd.top = new FormAttachment(btnSavePathUse, 5 );
 		fd.right = new FormAttachment(100, -3);
-		fd.width = btnTorrentUse.computeSize( SWT.DEFAULT, SWT.DEFAULT ).x;
+		//fd.width = btnTorrentUse.computeSize( SWT.DEFAULT, SWT.DEFAULT ).x;
 		btnTorrentUse.setLayoutData(fd);
 
 		
@@ -429,34 +445,80 @@ public class AdvRenameWindow
 		if ((renameDecisions & RENAME_DISPLAY) > 0) {
 			btnDisplayName.setSelection(true);
 		}
-		if ((renameDecisions & RENAME_SAVEPATH) > 0) {
-			btnSavePath.setSelection(true);
+		
+		if ( dm.canMoveDataFiles()){
+			if ((renameDecisions & RENAME_SAVEPATH) > 0) {
+				btnSavePath.setSelection(true);
+			}
+			if ((renameDecisions & RENAME_TORRENT) > 0) {
+				btnTorrent.setSelection(true);
+			}
+		}else{
+			btnSavePath.setEnabled( false );
+			btnTorrent.setEnabled( false );
 		}
-		if ((renameDecisions & RENAME_TORRENT) > 0) {
-			btnTorrent.setSelection(true);
-		}
+		
+			// padding
+		
+		fd = new FormData();
+		fd.top = new FormAttachment(btnTorrentUse, 0);
+		fd.left = new FormAttachment(0, 0);
+		fd.right = new FormAttachment(100, 0);
+		fd.bottom = new FormAttachment(separator, 0);
+		fd.height = 0;
+		padding.setLayoutData(fd);
 		
 			// separator
 		
 		fd = new FormData();
-		fd.top = new FormAttachment(btnTorrentUse, 2);
+		//fd.top = new FormAttachment(btnTorrentUse, 2);
 		fd.left = new FormAttachment(0, 3);
 		fd.right = new FormAttachment(100, -3);
+		fd.bottom = new FormAttachment(cButtons, -3);
 		separator.setLayoutData(fd);
 		
 			// buttons
 		
 		fd = new FormData();
-		fd.top = new FormAttachment(separator, 5);
+		// fd.top = new FormAttachment(separator, 5);
 		fd.right = new FormAttachment(100, -3);
 		fd.bottom = new FormAttachment(100, -3);
 		cButtons.setLayoutData(fd);
 
 		Utils.makeButtonsEqualWidth( Arrays.asList(btnReset, btnOk,btnCancel ));
 
-		shell.pack();
-		Utils.centreWindow(shell);
-		shell.open();
+		Point computedSize = shell.computeSize(SWT.DEFAULT,SWT.DEFAULT);
+		
+		int width	= Math.max( 400, computedSize.x );
+				
+		int height	= Math.max( 100, computedSize.y );
+
+		boolean hasMetrics = Utils.hasShellMetricsConfig( "AdvRenameWindow.metrics" );
+		
+		Utils.linkShellMetricsToConfig( shell, "AdvRenameWindow.metrics" );
+		
+		if ( !hasMetrics ){
+						
+			shell.setSize( width, computedSize.y );
+			
+			Utils.centreWindow(shell);
+			
+		}else{
+			
+			Point existingSize = shell.getSize();
+			
+			if ( existingSize.x != width || existingSize.y < height ){
+				
+				existingSize.x = width;
+				existingSize.y = Math.max( existingSize.y, height );
+				
+				shell.setSize( existingSize );
+			}
+		}
+		
+		Utils.verifyShellRect( shell, true);
+		
+	    shell.open();
 	}
 
 	public void
@@ -466,11 +528,7 @@ public class AdvRenameWindow
 	}
 	
 	private void waitUntilDone() {
-		while (shell != null && !shell.isDisposed()) {
-			if (!shell.getDisplay().readAndDispatch()) {
-				shell.getDisplay().sleep();
-			}
-		}
+		Utils.readAndDispatchLoop(shell);
 	}
 
 	private void doRename() {
@@ -487,44 +545,48 @@ public class AdvRenameWindow
 		if ((renameDecisions & RENAME_DISPLAY) > 0) {
 			dm.getDownloadState().setDisplayName(newDisplayName);
 		}
-		if ((renameDecisions & RENAME_SAVEPATH) > 0) {
-			try {
+		if ( dm.canMoveDataFiles()){
+			
+			if ((renameDecisions & RENAME_SAVEPATH) > 0) {
+				try {
 
-				try{
-					if ( dm.getTorrent().isSimpleTorrent()){
+					try{
+						if ( dm.getTorrent().isSimpleTorrent()){
 
-				    	String dnd_sf = dm.getDownloadState().getAttribute( DownloadManagerState.AT_INCOMP_FILE_SUFFIX );
+							String dnd_sf = dm.getDownloadState().getAttribute( DownloadManagerState.AT_INCOMP_FILE_SUFFIX );
 
-				    	if ( dnd_sf != null ){
+							if ( dnd_sf != null ){
 
-				    		dnd_sf = dnd_sf.trim();
+								dnd_sf = dnd_sf.trim();
 
-				    		String existing_name = dm.getSaveLocation().getName();
+								String existing_name = dm.getSaveLocation().getName();
 
-				    		if ( existing_name.endsWith( dnd_sf )){
+								if ( existing_name.endsWith( dnd_sf )){
 
-				    			if ( !newSavePath.endsWith( dnd_sf )){
+									if ( !newSavePath.endsWith( dnd_sf )){
 
-				    				newSavePath += dnd_sf;
-				    			}
-				    		}
-				    	}
+										newSavePath += dnd_sf;
+									}
+								}
+							}
+						}
+					}catch( Throwable e ){
 					}
-				}catch( Throwable e ){
+					dm.renameDownload(newSavePath);
+				} catch (Exception e) {
+					Logger.log(new LogAlert(dm, LogAlert.REPEATABLE,
+							"Download data rename operation failed", e));
 				}
-				dm.renameDownload(newSavePath);
-			} catch (Exception e) {
-				Logger.log(new LogAlert(dm, LogAlert.REPEATABLE,
-						"Download data rename operation failed", e));
 			}
-		}
-		if ((renameDecisions & RENAME_TORRENT) > 0) {
-			try {
-				dm.renameTorrentSafe(newTorrentName);
-  		} catch (Exception e) {
-  			Logger.log(new LogAlert(dm, LogAlert.REPEATABLE,
-  					"Torrent rename operation failed", e));
-  		}
+			
+			if ((renameDecisions & RENAME_TORRENT) > 0) {
+				try {
+					dm.renameTorrentSafe(newTorrentName);
+				} catch (Exception e) {
+					Logger.log(new LogAlert(dm, LogAlert.REPEATABLE,
+							"Torrent rename operation failed", e));
+				}
+			}
 		}
 	}
 }

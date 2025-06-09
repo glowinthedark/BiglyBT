@@ -25,6 +25,7 @@ import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.config.impl.TransferSpeedValidator;
+import com.biglybt.core.networkmanager.Transport;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.util.*;
 import com.biglybt.pif.PluginInterface;
@@ -224,7 +225,7 @@ ExternalSeedReaderImpl
 	log(
 		String	str )
 	{
-		plugin.log( str );
+		plugin.log( torrent.getName() + ": " + getName() + ": " + str );
 	}
 
 	protected String
@@ -420,7 +421,7 @@ ExternalSeedReaderImpl
 
 							if ( stats.getDownloadAverage() < STALLED_PEER_SPEED ){
 
-								existing_peer.close( "Replacing slow peer with web-seed", false, false );
+								existing_peer.close( "Replacing slow peer with web-seed", Transport.CR_PEER_CHURN, false, false );
 
 								existing_peer_count--;
 							}
@@ -434,7 +435,7 @@ ExternalSeedReaderImpl
 
 					if ( peer_manager.getPendingPeers( getIP()).length == 0 ){
 
-						log( getName() + ": activating as transient seed and nothing blocking it" );
+						log( "activating as transient seed and nothing blocking it" );
 
 						return( true );
 					}
@@ -445,7 +446,7 @@ ExternalSeedReaderImpl
 
 			if ( !use_avail_to_activate ){
 
-				log( getName() + ": activating as availability-based activation disabled" );
+				log( "activating as availability-based activation disabled" );
 
 				return( true );
 			}
@@ -458,7 +459,7 @@ ExternalSeedReaderImpl
 
 					if ( availability < ws_min_availability){
 
-						log( getName() + ": activating as availability is poor (<" + ws_min_availability + ")" );
+						log( "activating as availability is poor (<" + ws_min_availability + ")" );
 
 						return( true );
 					}
@@ -470,7 +471,7 @@ ExternalSeedReaderImpl
 
 					if ( peer_manager.getStats().getDownloadAverage() < min_speed ){
 
-						log( getName() + ": activating as speed is slow (<" + DisplayFormatters.formatByteCountToKiBEtcPerSec( min_speed ) + ")" );
+						log( "activating as speed is slow (<" + DisplayFormatters.formatByteCountToKiBEtcPerSec( min_speed ) + ")" );
 
 						return( true );
 					}
@@ -485,14 +486,14 @@ ExternalSeedReaderImpl
 
 				if ( ar.getResponseType() == DownloadAnnounceResult.RT_ERROR ){
 
-					log( getName() + ": activating as tracker unavailable" );
+					log( "activating as tracker unavailable" );
 
 					return( true );
 				}
 
 				if ( ar.getSeedCount() == 0 ){
 
-					log( getName() + ": activating as no seeds" );
+					log( "activating as no seeds" );
 
 					return( true );
 				}
@@ -570,7 +571,7 @@ ExternalSeedReaderImpl
 
 			if ( deactivate ){
 
-				log( getName() + ": deactivating as " + reason );
+				log( "deactivating as " + reason );
 
 				return( true );
 			}
@@ -673,7 +674,7 @@ ExternalSeedReaderImpl
 	deactivate(
 		String	reason )
 	{
-		plugin.log( getName() + ": deactivating (" + reason  + ")" );
+		log( "deactivating (" + reason  + ")" );
 
 		checkActivation( null, null );
 	}
@@ -921,17 +922,17 @@ ExternalSeedReaderImpl
 	}
 
 	@Override
-	public int
-	getPercentDoneOfCurrentIncomingRequest()
+	public int[]
+	getCurrentIncomingRequestProgress()
 	{
 		ExternalSeedReaderRequest	cr = current_request;
 
 		if ( cr == null ){
 
-			return( -1 );
+			return( null );
 		}
 
-		return( cr.getPercentDoneOfCurrentIncomingRequest());
+		return( cr.getCurrentMessageProgress());
 	}
 
 	@Override

@@ -30,8 +30,11 @@ import com.biglybt.pifimpl.local.ui.config.*;
 import com.biglybt.platform.PlatformManager;
 import com.biglybt.platform.PlatformManagerCapabilities;
 import com.biglybt.platform.PlatformManagerFactory;
-
+import com.biglybt.ui.UIFunctions;
+import com.biglybt.ui.UIFunctionsManager;
+import com.biglybt.ui.UIFunctionsUserPrompter;
 import com.biglybt.pif.ui.UIInstance;
+import com.biglybt.pif.ui.config.BooleanParameter;
 import com.biglybt.pif.ui.config.ConfigSection;
 import com.biglybt.pif.ui.config.Parameter;
 import com.biglybt.pif.ui.config.ParameterListener;
@@ -41,8 +44,9 @@ import static com.biglybt.core.config.ConfigKeys.File.*;
 public class ConfigSectionFile
 	extends ConfigSectionImpl
 {
-
-	public static final String REFID_TORRENT_ADD_AUTO_SKIP = "torrent-add-auto-skip";
+	public static final String REFID_DEFAULT_DIR_OPTIONS 		= "default-dir-options";
+	public static final String REFID_TORRENT_ADD_AUTO_SKIP 		= "torrent-add-auto-skip";
+	public static final String REFID_TORRENT_ADD_AUTO_PRIORITY	= "torrent-add-auto-priority";
 
 	public ConfigSectionFile() {
 		super(ConfigSection.SECTION_FILES, ConfigSection.SECTION_ROOT);
@@ -68,6 +72,12 @@ public class ConfigSectionFile
 		pathParameter.setDialogTitleKey("ConfigView.dialog.choosedefaultsavepath");
 		pathParameter.setDialogTitleKey("ConfigView.section.file.defaultdir.ask");
 
+		BooleanParameterImpl alwaysFolder = new BooleanParameterImpl(
+				BCFG_ALWAYS_CREATE_TORRENT_SUB_FOLDER,
+				"ConfigView.section.file.always.create.sub.folder");
+		add(alwaysFolder, Parameter.MODE_INTERMEDIATE, listDefaultDir);
+		
+		
 		// def dir: autoSave
 
 		String[] openValues = {
@@ -92,6 +102,13 @@ public class ConfigSectionFile
 		paramShowSep.setAllowedUiTypes(UIInstance.UIT_SWT);
 		add(paramShowSep, listDefaultDir);
 
+		BooleanParameterImpl paramAlwaysSidebar = new BooleanParameterImpl(BCFG_UI_ADDTORRENT_OPENOPTIONS_ALWAYS_SIDEBAR,
+				"ConfigView.section.file.showopentorrentoptions.always.sidebar");
+		paramAlwaysSidebar.setAllowedUiTypes(UIInstance.UIT_SWT);
+		add(paramAlwaysSidebar, listDefaultDir);
+
+		paramShowSep.addDisabledOnSelection( paramAlwaysSidebar );
+			
 		IntParameterImpl autoClose = new IntParameterImpl(
 				ICFG_UI_ADDTORRENT_OPENOPTIONS_AUTO_CLOSE_SECS,
 				"ConfigView.label.showopentorrentoptions.autoclose");
@@ -129,8 +146,10 @@ public class ConfigSectionFile
 				SCFG_SAVE_TO_LIST);
 		btnClearHistory.setEnabled(dirList.size() > 0);
 
-		add(new ParameterGroupImpl("ConfigView.section.file.defaultdir.section",
-				listDefaultDir));
+		ParameterGroupImpl pgDefaultDir = 
+			new ParameterGroupImpl("ConfigView.section.file.defaultdir.section",listDefaultDir);
+		pgDefaultDir.setReferenceID( REFID_DEFAULT_DIR_OPTIONS );	
+		add(pgDefaultDir);
 
 		////////////////////
 
@@ -156,7 +175,7 @@ public class ConfigSectionFile
 
 		BooleanParameterImpl pieceReorder = new BooleanParameterImpl(
 				BCFG_ENABLE_REORDER_STORAGE_MODE, "ConfigView.label.piecereorder");
-		add(pieceReorder, Parameter.MODE_INTERMEDIATE);
+		add(pieceReorder, Parameter.MODE_ADVANCED);
 
 		IntParameterImpl minMB = new IntParameterImpl(
 				ICFG_REORDER_STORAGE_MODE_MIN_MB, "ConfigView.label.piecereorderminmb");
@@ -201,6 +220,24 @@ public class ConfigSectionFile
 			minMB.setEnabled(reorder && pieceReorder.getValue());
 
 			incremental.setEnabled(inc);
+			
+			if ( param != null && pieceReorder.getValue() ){
+				
+				UIFunctions uiFunctions = UIFunctionsManager.getUIFunctions();
+				
+				UIFunctionsUserPrompter promptErr = uiFunctions.getUserPrompter(
+						MessageText.getString(
+								"label.option.deprecated"),
+						MessageText.getString(
+								"ConfigView.section.file.reorder.warn.msg"),
+						new String[] {
+							MessageText.getString("Button.ok")
+				}, 0);
+				if (promptErr != null) {
+					promptErr.setIconResource(UIFunctionsUserPrompter.ICON_WARNING);
+					promptErr.open(null);
+				}
+			}
 		};
 
 		for (Parameter p : new Parameter[] {
@@ -251,16 +288,21 @@ public class ConfigSectionFile
 		add(minmerge, Parameter.MODE_INTERMEDIATE);
 		minmerge.setIndent(1, true);
 
-		mergeSameSize.addEnabledOnSelection(minmerge);
-		
-		
+		mergeSameSize.addEnabledOnSelection(minmerge);		
 		
 		// check on complete
 		BooleanParameterImpl checkPiecesOnCompletion = new BooleanParameterImpl(
 				BCFG_CHECK_PIECES_ON_COMPLETION, "ConfigView.label.checkOncompletion");
 		add(checkPiecesOnCompletion, Parameter.MODE_INTERMEDIATE);
 
-		// check on complete
+		BooleanParameterImpl checkPiecesOnCompletionBeforeMove = new BooleanParameterImpl(
+				BCFG_CHECK_PIECES_ON_COMPLETION_BEFORE_MOVE, "ConfigView.label.checkOncompletionBeforeMove");
+		add(checkPiecesOnCompletionBeforeMove, Parameter.MODE_INTERMEDIATE);
+		checkPiecesOnCompletionBeforeMove.setIndent(1, true);
+		
+		checkPiecesOnCompletion.addEnabledOnSelection(checkPiecesOnCompletionBeforeMove);
+		
+		// check on seeding
 		BooleanParameterImpl seedingPieceCheckRecheck = new BooleanParameterImpl(
 				BCFG_SEEDING_PIECE_CHECK_RECHECK_ENABLE,
 				"ConfigView.label.checkOnSeeding");
@@ -311,54 +353,61 @@ public class ConfigSectionFile
 
 		MFDRE.addEnabledOnSelection(MFDRInterval);
 	
-		// use resume
+		// upload only on disk write error
+		
+		BooleanParameterImpl uploadOnlyOnError = new BooleanParameterImpl(
+				BCFG_UPLOAD_ONLY_ON_WRITE_ERROR_ENABLE,
+				"ConfigView.label.upload.only.on.write.error");
+		add(uploadOnlyOnError, Parameter.MODE_INTERMEDIATE);
+				
+		// resume
 
-		// resume data
-		BooleanParameterImpl bpUseResume = new BooleanParameterImpl(BCFG_USE_RESUME,
-				"ConfigView.label.usefastresume");
-		add(bpUseResume, Parameter.MODE_INTERMEDIATE);
-
-		List<Parameter> listResumeGroup = new ArrayList<>();
+		List<Parameter> listResume = new ArrayList<>();
 
 		IntParameterImpl paramSaveInterval = new IntParameterImpl(
 				ICFG_SAVE_RESUME_INTERVAL, "ConfigView.label.saveresumeinterval");
-		add(paramSaveInterval, Parameter.MODE_INTERMEDIATE, listResumeGroup);
+		add(paramSaveInterval, Parameter.MODE_INTERMEDIATE, listResume);
 		paramSaveInterval.setSuffixLabelKey("ConfigView.text.minutes");
 
 		BooleanParameterImpl recheck_all = new BooleanParameterImpl(
 				BCFG_ON_RESUME_RECHECK_ALL,
 				"ConfigView.section.file.resume.recheck.all");
-		add(recheck_all, Parameter.MODE_INTERMEDIATE, listResumeGroup);
+		add(recheck_all, Parameter.MODE_INTERMEDIATE, listResume);
 
 		// save peers
 
 		BooleanParameterImpl save_peers = new BooleanParameterImpl(
 				BCFG_FILE_SAVE_PEERS_ENABLE,
 				"ConfigView.section.file.save.peers.enable");
-		add(save_peers, Parameter.MODE_INTERMEDIATE, listResumeGroup);
+		add(save_peers, Parameter.MODE_INTERMEDIATE, listResume);
 
 		// save peers max
 
 		IntParameterImpl savePeersMax = new IntParameterImpl(
 				ICFG_FILE_SAVE_PEERS_MAX, "ConfigView.section.file.save.peers.max");
-		add(savePeersMax, Parameter.MODE_INTERMEDIATE, listResumeGroup);
+		add(savePeersMax, Parameter.MODE_INTERMEDIATE, listResume);
 		savePeersMax.setSuffixLabelKey(
 				"ConfigView.section.file.save.peers.pertorrent");
 
-		ParameterGroupImpl pgResumeGroup = new ParameterGroupImpl(null,
-				listResumeGroup);
+		ParameterGroupImpl pgResumeGroup = new ParameterGroupImpl("v3.MainWindow.button.resume",
+				listResume);
 		add("pgResumeGroup", pgResumeGroup);
-		pgResumeGroup.setIndent(1, false);
+		//pgResumeGroup.setIndent(1, false);
 
-		bpUseResume.addEnabledOnSelection(pgResumeGroup);
 		save_peers.addEnabledOnSelection(savePeersMax);
 
-		// disable interim state save 
+			// disable interim state save 
 		BooleanParameterImpl bDisableSveInterim = new BooleanParameterImpl(BCFG_DISABLE_SAVE_INTERIM_DOWNLOAD_STATE,
 				"ConfigView.label.disableinterimstatesave");
 		add(bDisableSveInterim, Parameter.MODE_ADVANCED );
 		
-			// skip complete download file existance checks 
+			// skip incomplete download file existence checks 
+		
+		BooleanParameterImpl bSkipIncompDLFileChecks = new BooleanParameterImpl(BCFG_SKIP_INCOMP_DL_FILE_CHECKS,
+			"ConfigView.label.skipIncompDLFileChecks");
+		add(bSkipIncompDLFileChecks, Parameter.MODE_ADVANCED );
+
+			// skip complete download file existence checks 
 		
 		BooleanParameterImpl bSkipCompDLFileChecks = new BooleanParameterImpl(BCFG_SKIP_COMP_DL_FILE_CHECKS,
 				"ConfigView.label.skipCompDLFileChecks");
@@ -374,15 +423,15 @@ public class ConfigSectionFile
 				BCFG_PRIORITY_EXTENSIONS_IGNORE_CASE, "ConfigView.label.ignoreCase");
 		add(priorityExtensionsIgnoreCase, Parameter.MODE_INTERMEDIATE);
 
-		ParameterGroupImpl pgPriorityExt = new ParameterGroupImpl(null,
-				priorityExtensions, priorityExtensionsIgnoreCase);
+		ParameterGroupImpl pgPriorityExt = new ParameterGroupImpl(null,	priorityExtensions, priorityExtensionsIgnoreCase);
+		pgPriorityExt.setReferenceID(REFID_TORRENT_ADD_AUTO_PRIORITY);
 		add("pgPriorityExt", pgPriorityExt, listExt);
 		pgPriorityExt.setNumberOfColumns(2);
 
 		add(new StringParameterImpl(SCFG_FILE_AUTO_SEQUENTIAL_EXTS,
 				"ConfigView.label.sequential.exts"), Parameter.MODE_INTERMEDIATE,
 				listExt);
-
+		
 		// quick view
 
 		StringParameterImpl quickViewExts = new StringParameterImpl(
@@ -395,9 +444,10 @@ public class ConfigSectionFile
 
 		ParameterGroupImpl pgQV = new ParameterGroupImpl(null, quickViewExts,
 				quickViewMaxKB);
+		
 		add("pgQV", pgQV, listExt);
 		pgQV.setNumberOfColumns(2);
-
+		
 		// rename incomplete files
 
 		BooleanParameterImpl rename_incomplete = new BooleanParameterImpl(
@@ -416,7 +466,7 @@ public class ConfigSectionFile
 		pgExtRename.setNumberOfColumns(2);
 		add("pgExtRename", pgExtRename, listExt);
 
-		// put 'dnd' files in subdir
+			// put 'dnd' files in subdir
 
 		BooleanParameterImpl enable_subfolder = new BooleanParameterImpl(
 				BCFG_ENABLE_SUBFOLDER_FOR_DND_FILES,
@@ -434,17 +484,72 @@ public class ConfigSectionFile
 		pgExtSubFolder.setNumberOfColumns(2);
 		add("pgExtSubFolder", pgExtSubFolder, listExt);
 
-		// dnd prefix
+			// put 'dnd' files in alternative location
+	
+		BooleanParameterImpl enable_dndaltloc = new BooleanParameterImpl(
+				BCFG_ENABLE_ALT_LOC_FOR_DND_FILES,
+				"ConfigView.section.file.altloc.dnd");
+		add(enable_dndaltloc, Parameter.MODE_INTERMEDIATE);
+	
+		DirectoryParameterImpl dndaltloc_name = new DirectoryParameterImpl(
+				SCFG_ALT_LOC_FOR_DND_FILES, null);
+		add(dndaltloc_name, Parameter.MODE_INTERMEDIATE);
+	
+		enable_dndaltloc.addEnabledOnSelection(dndaltloc_name);
+		
+		ParameterListener dnd_fol_listener = (n)->{
+			boolean sub = enable_subfolder.getValue();
+			boolean loc = enable_dndaltloc.getValue();
+			
+			if ( sub && loc ){
+			
+				if ( n == null ){
+					
+					enable_dndaltloc.setValue( false );
+					
+				}else if ( n == enable_subfolder ){
+					
+					enable_dndaltloc.setValue( false );
+				}else{
+					
+					enable_subfolder.setValue( false );
+				}
+			}
+		};
+		
+		enable_subfolder.addListener( dnd_fol_listener );
+		enable_dndaltloc.addAndFireListener( dnd_fol_listener );
+	
+		ParameterGroupImpl pgDndAltLoc = new ParameterGroupImpl(null,
+				enable_dndaltloc, dndaltloc_name);
+		pgDndAltLoc.setNumberOfColumns(2);
+		add("pgDndAltLoc", pgDndAltLoc, listExt);
+	
+			// dnd prefix
 
 		BooleanParameterImpl enable_dndprefix = new BooleanParameterImpl(
 				BCFG_USE_INCOMPLETE_FILE_PREFIX,
 				"ConfigView.section.file.dnd.prefix.enable");
 		add(enable_dndprefix, Parameter.MODE_INTERMEDIATE, listExt);
 
-		ParameterListener prefixListener = param -> enable_dndprefix.setEnabled(
-				enable_subfolder.getValue() || rename_incomplete.getValue());
+		ParameterListener prefixListener = 
+			param ->{
+				boolean enabled = enable_subfolder.getValue() || enable_dndaltloc.getValue() ||
+									rename_incomplete.getValue();
+			
+				if ( !enabled ){
+					
+					enable_dndprefix.setValue( false );
+				}
+				
+				enable_dndprefix.setEnabled( enabled );
+			};
+			
+				
+			
 		enable_subfolder.addListener(prefixListener);
 		rename_incomplete.addListener(prefixListener);
+		enable_dndaltloc.addListener(prefixListener);
 		prefixListener.parameterChanged(null);
 
 		ParameterGroupImpl pgFileExt = new ParameterGroupImpl(
@@ -453,9 +558,21 @@ public class ConfigSectionFile
 
 		// download history
 
-		add(new BooleanParameterImpl(BCFG_DOWNLOAD_HISTORY_ENABLED,
-				"ConfigView.label.record.dl.history"));
+		List<Parameter> listDownloadHistory = new ArrayList<>();
 
+		
+		BooleanParameter dlh_enable = add(new BooleanParameterImpl(BCFG_DOWNLOAD_HISTORY_ENABLED,
+				"ConfigView.label.record.dl.history"), listDownloadHistory );
+
+		BooleanParameter dlh_no_dup = add(new BooleanParameterImpl(BCFG_DOWNLOAD_HISTORY_DONT_ADD_DUP,
+				"ConfigView.label.dl.history.no.dup"), listDownloadHistory );
+		
+		dlh_enable.addEnabledOnSelection(dlh_no_dup);
+
+		ParameterGroupImpl pgDownloadHistory = new ParameterGroupImpl( "downloadhistoryview.view.heading", listDownloadHistory );
+		
+		add("pgDownloadHistory", pgDownloadHistory );
+		
 		// ignore group
 
 		List<Parameter> listIgnoredFiles = new ArrayList<>();
@@ -544,6 +661,12 @@ public class ConfigSectionFile
 		paramDeleteTorrentFile.setAllowedUiTypes(UIInstance.UIT_SWT);
 		add(paramDeleteTorrentFile, Parameter.MODE_INTERMEDIATE, listDeletion);
 
+		BooleanParameterImpl paramDeleteAllDefault = new BooleanParameterImpl(
+				BCFG_DEF_DELETEALLSELECTED, "ConfigView.section.file.delete.all.selected");
+		paramDeleteAllDefault.setAllowedUiTypes(UIInstance.UIT_SWT);
+		add(paramDeleteAllDefault, Parameter.MODE_INTERMEDIATE, listDeletion);
+
+		
 		try {
 			final PlatformManager platform = PlatformManagerFactory.getPlatformManager();
 

@@ -18,8 +18,16 @@
 
 package com.biglybt.core.config;
 
+import com.biglybt.core.config.impl.ConfigurationDefaults;
+
 public final class ConfigKeys {
 	public static final String ICFG_USER_MODE = "User Mode";
+
+	public static final String	CA_NOTHING		= "Nothing";
+	public static final String	CA_QUIT_VUZE	= "QuitVuze";
+	public static final String	CA_SLEEP		= "Sleep";
+	public static final String	CA_HIBERNATE	= "Hibernate";
+	public static final String	CA_SHUTDOWN		= "Shutdown";
 
 	public static class BackupRestore {
 		public static final String BCFG_BACKUP_AUTO_ENABLE = "br.backup.auto.enable";
@@ -31,6 +39,7 @@ public final class ConfigKeys {
 		public static final String BCFG_BACKUP_NOTIFY = "br.backup.notify";
 		public static final String BCFG_RESTORE_AUTOPAUSE = "br.restore.autopause";
 		public static final String BCFG_BACKUP_PLUGINS = "br.restore.doplugins";
+		public static final String BCFG_BACKUP_PAUSE_DOWNLOADS = "br.backup.pause.downloads";
 	}
 
 	public static class Connection {
@@ -108,14 +117,17 @@ public final class ConfigKeys {
 		public static final String BCFG_PROXY_CHECK_ON_START = "Proxy.Check.On.Start";
 		public static final String BCFG_PROXY_SOCKS_SHOW_ICON = "Proxy.SOCKS.ShowIcon";
 		public static final String BCFG_PROXY_SOCKS_SHOW_ICON_FLAG_INCOMING = "Proxy.SOCKS.ShowIcon.FlagIncoming";
+		public static final String SCFG_CONNECTION_TEST_DOMAIN = "Connection.Test.Domain";
 	}
 
 	public static class File {
 		public static final String BCFG_DEFAULT_DIR_BEST_GUESS = "DefaultDir.BestGuess";
 		public static final String SCFG_DEFAULT_SAVE_PATH = "Default save path";
-		public static final String BCFG_UI_ADDTORRENT_OPENOPTIONS_SEP = "ui.addtorrent.openoptions.sep";
-		public static final String BCFG_DEFAULT_DIR_AUTO_SAVE_AUTO_RENAME = "DefaultDir.AutoSave.AutoRename";
+		public static final String BCFG_ALWAYS_CREATE_TORRENT_SUB_FOLDER = "Always Create Torrent Sub-Folder";
+		public static final String BCFG_UI_ADDTORRENT_OPENOPTIONS_SEP = ConfigurationDefaults.CFG_TORRENTADD_OPENOPTIONS_SEP;
+		public static final String BCFG_UI_ADDTORRENT_OPENOPTIONS_ALWAYS_SIDEBAR = "ui.addtorrent.openoptions.always.sidebar";
 		public static final String ICFG_UI_ADDTORRENT_OPENOPTIONS_AUTO_CLOSE_SECS = "ui.addtorrent.openoptions.auto.close.secs";
+		public static final String BCFG_DEFAULT_DIR_AUTO_SAVE_AUTO_RENAME = "DefaultDir.AutoSave.AutoRename";
 		public static final String BCFG_DEFAULT_DIR_AUTO_UPDATE = "DefaultDir.AutoUpdate";
 		public static final String ICFG_SAVE_TO_LIST_MAX_ENTRIES = "saveTo_list.max_entries";
 		public static final String SCFG_SAVE_TO_LIST = "saveTo_list";
@@ -131,15 +143,17 @@ public final class ConfigKeys {
 		public static final String ICFG_MERGE_SAME_SIZE_FILES_TOLERANCE = "Merge Same Size Files Tolerance";
 		public static final String ICFG_MERGE_SAME_SIZE_FILES_MIN_PIECES = "Merge Same Size Files Min Pieces";
 		public static final String BCFG_CHECK_PIECES_ON_COMPLETION = "Check Pieces on Completion";
+		public static final String BCFG_CHECK_PIECES_ON_COMPLETION_BEFORE_MOVE = "Check Pieces on Completion Before Move";
 		public static final String BCFG_SEEDING_PIECE_CHECK_RECHECK_ENABLE = "Seeding Piece Check Recheck Enable";
+		public static final String BCFG_UPLOAD_ONLY_ON_WRITE_ERROR_ENABLE = "Switch To Upload Only On Write Error Enable";
 		public static final String BCFG_FILE_STRICT_LOCKING = "File.strict.locking";
 		public static final String ICFG_MAX_FILE_LINKS_SUPPORTED = "Max File Links Supported";
 		public static final String BCFG_INSUFFICIENT_SPACE_DOWNLOAD_RESTART = "Insufficient Space Download Restart Enable";
 		public static final String ICFG_INSUFFICIENT_SPACE_DOWNLOAD_RESTART_MINS = "Insufficient Space Download Restart Period";
 		public static final String BCFG_MISSING_FILE_DOWNLOAD_RESTART = "Missing File Download Restart Enable";
 		public static final String BCFG_SKIP_COMP_DL_FILE_CHECKS = "Skip Complete Download File Checks";
+		public static final String BCFG_SKIP_INCOMP_DL_FILE_CHECKS = "Skip Incomplete Download File Checks";
 		public static final String ICFG_MISSING_FILE_DOWNLOAD_RESTART_MINS = "Missing File Download Restart Period";
-		public static final String BCFG_USE_RESUME = "Use Resume";
 		public static final String ICFG_SAVE_RESUME_INTERVAL = "Save Resume Interval";
 		public static final String BCFG_ON_RESUME_RECHECK_ALL = "On Resume Recheck All";
 		public static final String BCFG_FILE_SAVE_PEERS_ENABLE = "File.save.peers.enable";
@@ -153,9 +167,12 @@ public final class ConfigKeys {
 		public static final String SCFG_RENAME_INCOMPLETE_FILES_EXTENSION = "Rename Incomplete Files Extension";
 		public static final String BCFG_ENABLE_SUBFOLDER_FOR_DND_FILES = "Enable Subfolder for DND Files";
 		public static final String SCFG_SUBFOLDER_FOR_DND_FILES = "Subfolder for DND Files";
+		public static final String BCFG_ENABLE_ALT_LOC_FOR_DND_FILES = "Enable Alternative Location for DND Files";
+		public static final String SCFG_ALT_LOC_FOR_DND_FILES = "Alternative Location for DND Files";
 		/** Despite name, this is the DND file prefix when SCFG_SUBFOLDER_FOR_DND_FILES is true */
 		public static final String BCFG_USE_INCOMPLETE_FILE_PREFIX = "Use Incomplete File Prefix";
 		public static final String BCFG_DOWNLOAD_HISTORY_ENABLED = "Download History Enabled";
+		public static final String BCFG_DOWNLOAD_HISTORY_DONT_ADD_DUP = "Download History Dont Add Duplicate";
 		public static final String BCFG_FILES_AUTO_TAG_ENABLE = "Files Auto Tag Enable";
 		public static final String ICFG_FILES_AUTO_TAG_COUNT = "Files Auto Tag Count";
 		public static final String SCFG_FILE_AUTO_TAG_NAME_DEFAULT = "File Auto Tag Name Default";
@@ -169,6 +186,7 @@ public final class ConfigKeys {
 		public static final String SCFG_FILE_CHARACTER_CONVERSIONS = "File.Character.Conversions";
 		public static final String ICFG_TB_CONFIRM_DELETE_CONTENT = "tb.confirm.delete.content";
 		public static final String BCFG_DEF_DELETETORRENT = "def.deletetorrent";
+		public static final String BCFG_DEF_DELETEALLSELECTED = "def.deleteallselected";
 		public static final String BCFG_MOVE_DELETED_DATA_TO_RECYCLE_BIN = "Move Deleted Data To Recycle Bin";
 		public static final String BCFG_FILE_DELETE_INCLUDE_FILES_OUTSIDE_SAVE_DIR = "File.delete.include_files_outside_save_dir";
 		public static final String BCFG_DELETE_PARTIAL_FILES_ON_LIBRARY_REMOVAL = "Delete Partial Files On Library Removal";
@@ -184,6 +202,7 @@ public final class ConfigKeys {
 		public static final String SCFG_FILE_MOVE_DOWNLOAD_REMOVED_MOVE_TORRENT_PATH = "File.move.download.removed.move_torrent_path";
 		public static final String BCFG_FILE_MOVE_DOWNLOAD_REMOVED_ONLY_IN_DEFAULT = "File.move.download.removed.only_in_default";
 		public static final String BCFG_FILE_MOVE_DOWNLOAD_REMOVED_MOVE_PARTIAL = "File.move.download.removed.move_partial";
+		public static final String BCFG_FILE_MOVE_ADD_SUB_FOLDER = "File.move.add.sub.dir";
 		public static final String BCFG_FILE_USE_TEMP_AND_MOVE_ENABLE = "file.use.temp.path.and.move.enable";
 		public static final String BCFG_FILE_MOVE_ORIGIN_DELETE_FAIL_IS_WARNING = "Fail To Delete Origin File After Move Is Warning";
 		public static final String SCFG_FILE_USE_TEMP_AND_MOVE_PATH = "file.use.temp.path.and.move.path";
@@ -195,7 +214,10 @@ public final class ConfigKeys {
 		public static final String BCFG_DISKMANAGER_PERF_CACHE_TRACE = "diskmanager.perf.cache.trace";
 		public static final String ICFG_DISKMANAGER_HASHCHECKING_STRATEGY = "diskmanager.hashchecking.strategy";
 		public static final String BCFG_DISKMANAGER_HASHCHECKING_SMALLESTFIRST = "diskmanager.hashchecking.smallestfirst";
+		public static final String BCFG_DISKMANAGER_ALLOC_SMALLESTFIRST = "diskmanager.alloc.smallestfirst";
+		public static final String BCFG_DISKMANAGER_MOVE_SMALLESTFIRST = "diskmanager.move.smallestfirst";
 		public static final String BCFG_DISKMANAGER_ONE_OP_PER_FS = "diskmanager.one.op.per.fs";
+		public static final String BCFG_DISKMANAGER_ONE_OP_PER_FS_CONC_READ = "diskmanager.one.op.per.fs.conc.read";
 		public static final String BCFG_DISKMANAGER_HASHCHECKING_MAX_ACTIVE = "diskmanager.hashchecking.maxactive";
 		public static final String BCFG_DISKMANAGER_PERF_CACHE_ENABLE = "diskmanager.perf.cache.enable";
 		public static final String ICFG_DISKMANAGER_PERF_CACHE_SIZE = "diskmanager.perf.cache.size";
@@ -209,6 +231,7 @@ public final class ConfigKeys {
 		//public static final String BCFG_START_WATCHED_TORRENTS_STOPPED = "Start Watched Torrents Stopped";
 		public static final String ICFG_WATCH_TORRENT_FOLDER_ADD_MODE = "Watch Torrents Add Mode";
 		public static final String BCFG_WATCH_TORRENT_ALWAYS_RENAME = "Watch Torrent Always Rename";
+		public static final String BCFG_WATCH_TORRENT_USE_TOD = "Watch Torrent Use TOD";
 		public static final String BCFG_TORRENT_MONITOR_CLIPBOARD = "Monitor Clipboard For Torrents";
 		public static final String BCFG_SAVE_TORRENT_FILES = "Save Torrent Files";
 		public static final String SCFG_GENERAL_DEFAULT_TORRENT_DIRECTORY = "General_sDefaultTorrent_Directory";
@@ -254,6 +277,7 @@ public final class ConfigKeys {
 		public static final String SCFG_LOGGING_DIR = "Logging Dir";
 		public static final String ICFG_LOGGING_MAX_SIZE = "Logging Max Size";
 		public static final String SCFG_LOGGING_TIMESTAMP = "Logging Timestamp";
+		public static final String BCFG_LOGGER_DEBUG_FILES_DISABLE = "Logger.DebugFiles.Disable";
 		public static final String BCFG_LOGGER_DEBUG_FILES_FORCE = "Logger.DebugFiles.Enabled.Force";
 		public static final String ICFG_LOGGER_DEBUG_FILES_SIZE_KB = "Logger.DebugFiles.SizeKB";
 	}
@@ -267,6 +291,7 @@ public final class ConfigKeys {
 	public static class Sharing {
 		public static final String SCFG_SHARING_PROTOCOL = "Sharing Protocol";
 		public static final String BCFG_SHARING_TORRENT_PRIVATE = "Sharing Torrent Private";
+		public static final String SCFG_SHARING_TORRENT_VERSION = "Sharing Torrent Version";
 		public static final String BCFG_SHARING_PERMIT_DHT = "Sharing Permit DHT";
 		public static final String BCFG_SHARING_ADD_HASHES = "Sharing Add Hashes";
 		public static final String BCFG_SHARING_DISABLE_RCM = "Sharing Disable RCM";
@@ -289,8 +314,13 @@ public final class ConfigKeys {
 		public static final String BCFG_PAUSE_DOWNLOADS_ON_EXIT = "Pause Downloads On Exit";
 		public static final String BCFG_RESUME_DOWNLOADS_ON_START = "Resume Downloads On Start";
 		public static final String BCFG_STOP_TRIGGERS_AUTO_RESET = "Stop Triggers Auto Reset";
+		public static final String ICFG_STOP_DATE_TIME = "Stop Explicit Date Time";
+		public static final String SCFG_STOP_DATE_TIME_DO = "Stop Explicit Do";
+		public static final String SCFG_STOP_DATE_TIME_SCRIPT = "Stop Explicit Script";
 		public static final String BCFG_PROMPT_TO_ABORT_SHUTDOWN = "Prompt To Abort Shutdown";
+		public static final String ICFG_STOP_FORCE_TERMINATE_AFTER = "Force Terminate After Mins";
 		public static final String ICFG_AUTO_RESTART_WHEN_IDLE = "Auto Restart When Idle";
+		public static final String BCFG_AUTO_RESTART_WHEN_IDLE_PROMPT = "Auto Restart When Idle Prompt";
 		public static final String SCFG_ON_DOWNLOADING_COMPLETE_DO = "On Downloading Complete Do";
 		public static final String SCFG_ON_DOWNLOADING_COMPLETE_SCRIPT = "On Downloading Complete Script";
 		public static final String SCFG_ON_SEEDING_COMPLETE_DO = "On Seeding Complete Do";
@@ -415,8 +445,10 @@ public final class ConfigKeys {
 		public static final String BCFG_PEERCONTROL_HIDE_PIECE = "peercontrol.hide.piece";
 		public static final String BCFG_PEERCONTROL_HIDE_PIECE_DS = "peercontrol.hide.piece.ds";
 		public static final String BCFG_PRIORITIZE_FIRST_PIECE = "Prioritize First Piece";
+		public static final String ICFG_PRIORITIZE_FIRST_MB = "Prioritize First MB";
 		public static final String BCFG_PRIORITIZE_FIRST_PIECE_FORCE = "Prioritize First Piece Force";
 		public static final String BCFG_PRIORITIZE_MOST_COMPLETED_FILES = "Prioritize Most Completed Files";
+		public static final String ICFG_SET_FILE_PRIORITY_REM_PIECE = "Set File Priority Remaining Pieces";
 		public static final String SCFG_IGNORE_PEER_PORTS = "Ignore.peer.ports";
 		public static final String BCFG_LAN_SPEED_ENABLED = "LAN Speed Enabled";
 		public static final String ICFG_MAX_LAN_UPLOAD_SPEED_K_BS = "Max LAN Upload Speed KBs";
@@ -443,5 +475,7 @@ public final class ConfigKeys {
 	
 	public static class Tag {
 		public static final String BCFG_TRACKER_AUTO_TAG_INTERESTING_TRACKERS = "Auto Tag Interesting Trackers";
+		public static final String ICFG_TAG_AUTO_FULL_REAPPLY_PERIOD_SECS = "Tag Auto Full Reapply Period Secs";
+		public static final String BCFG_TAG_SHOW_SWARM_TAGS_IN_OVERVIEW = "Show Swarm Tags In Overview";
 	}
 }

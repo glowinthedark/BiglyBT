@@ -31,12 +31,13 @@ import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.*;
-import com.biglybt.core.disk.DiskManager.GettingThere;
+import com.biglybt.core.disk.DiskManager.DownloadEndedProgress;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.ipfilter.*;
 import com.biglybt.core.logging.*;
 import com.biglybt.core.networkmanager.LimitedRateGroup;
 import com.biglybt.core.networkmanager.NetworkConnectionBase;
+import com.biglybt.core.networkmanager.Transport;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.networkmanager.admin.NetworkAdminASN;
 import com.biglybt.core.networkmanager.admin.NetworkAdminASNListener;
@@ -46,6 +47,7 @@ import com.biglybt.core.networkmanager.impl.tcp.TCPNetworkManager;
 import com.biglybt.core.networkmanager.impl.udp.UDPNetworkManager;
 import com.biglybt.core.peer.*;
 import com.biglybt.core.peer.impl.*;
+import com.biglybt.core.peer.impl.transport.PEPeerTransportProtocol;
 import com.biglybt.core.peer.util.PeerIdentityDataID;
 import com.biglybt.core.peer.util.PeerIdentityManager;
 import com.biglybt.core.peer.util.PeerUtils;
@@ -67,6 +69,7 @@ import com.biglybt.core.peermanager.unchoker.UnchokerFactory;
 import com.biglybt.core.peermanager.unchoker.UnchokerUtil;
 import com.biglybt.core.peermanager.uploadslots.UploadHelper;
 import com.biglybt.core.peermanager.uploadslots.UploadSlotManager;
+import com.biglybt.core.peermanager.utils.PeerClassifier;
 import com.biglybt.core.tag.TaggableResolver;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentException;
@@ -123,12 +126,13 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	private static final long RESERVED_PIECE_TIMEOUT_MILLIS = 120 * 1000;
 
-	private static final Object DUP_PEER_CC_KEY = new Object();
-	private static final Object DUP_PEER_AS_KEY = new Object();
+	private static final Object CON_HEALTH_DONE_KEY = new Object();
+	private static final Object DUP_PEER_CC_KEY 	= new Object();
+	private static final Object DUP_PEER_AS_KEY 	= new Object();
 
 	// config
 
-	private static boolean disconnect_seeds_when_seeding;
+	private static boolean global_disconnect_seeds_when_seeding;
 	private static boolean enable_seeding_piece_rechecks;
 	private static int stalled_piece_timeout;
 	private static boolean fast_unchoke_new_peers;
@@ -137,7 +141,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	private static boolean udp_fallback_for_failed_connection;
 	private static boolean udp_fallback_for_dropped_connection;
 	private static boolean udp_probe_enabled;
-	private static boolean hide_a_piece;
+	private static boolean global_hide_a_piece;
+	private static boolean global_hide_a_piece_ds;
 	private static boolean prefer_udp_default;
 	private static int		dual_ipv4_ipv6_connection_action;
 	
@@ -153,14 +158,14 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 				"peercontrol.udp.fallback.connect.fail", 
 				"peercontrol.udp.fallback.connect.drop",
 				"peercontrol.udp.probe.enable", 
-				"peercontrol.hide.piece", 
+				ConfigKeys.Transfer.BCFG_PEERCONTROL_HIDE_PIECE, 
 				"peercontrol.hide.piece.ds",
 				"peercontrol.prefer.udp", 
 				ConfigKeys.Transfer.ICFG_IPv4_IPv6_CONN_ACTION}, 
 				new ParameterListener(){
 					@Override
 					public void parameterChanged(String name){
-						disconnect_seeds_when_seeding = COConfigurationManager.getBooleanParameter("Disconnect Seed");
+						global_disconnect_seeds_when_seeding = COConfigurationManager.getBooleanParameter("Disconnect Seed");
 						enable_seeding_piece_rechecks = COConfigurationManager.getBooleanParameter("Seeding Piece Check Recheck Enable");
 						stalled_piece_timeout = COConfigurationManager.getIntParameter("peercontrol.stalled.piece.write.timeout", 60 * 1000);
 						fast_unchoke_new_peers = COConfigurationManager.getBooleanParameter("Peer.Fast.Initial.Unchoke.Enabled");
@@ -169,13 +174,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 						udp_fallback_for_failed_connection = COConfigurationManager.getBooleanParameter("peercontrol.udp.fallback.connect.fail");
 						udp_fallback_for_dropped_connection = COConfigurationManager.getBooleanParameter("peercontrol.udp.fallback.connect.drop");
 						udp_probe_enabled = COConfigurationManager.getBooleanParameter("peercontrol.udp.probe.enable");
-						hide_a_piece = COConfigurationManager.getBooleanParameter("peercontrol.hide.piece");
-						boolean hide_a_piece_ds = COConfigurationManager.getBooleanParameter("peercontrol.hide.piece.ds");
-
-						if(hide_a_piece && !hide_a_piece_ds){
-
-							disconnect_seeds_when_seeding = false;
-						}
+						global_hide_a_piece = COConfigurationManager.getBooleanParameter(ConfigKeys.Transfer.BCFG_PEERCONTROL_HIDE_PIECE);
+						global_hide_a_piece_ds = COConfigurationManager.getBooleanParameter("peercontrol.hide.piece.ds");
 
 						prefer_udp_default = COConfigurationManager.getBooleanParameter("peercontrol.prefer.udp");
 						
@@ -276,13 +276,14 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	// private int _maxUploads;
 	private int stats_tick_count;
 	private int _seeds, _peers, _remotesTCPNoLan, _remotesUDPNoLan, _remotesUTPNoLan;
+	private int _tcp_peers_transfering;
 	private int _tcpPendingConnections, _tcpConnectingConnections;
 	private long last_remote_time;
 	private long _timeStarted;
-	private long _timeStarted_mono;
+	private long _timeStarted_mono;		// we want this to default to 0
 	private long _timeStartedSeeding = -1;
 	private long _timeStartedSeeding_mono = -1;
-	private long _timeFinished;
+	private long _timeFinished_mono;	// we want this to default to 0
 	private Average _averageReceptionSpeed;
 
 	private long mainloop_loop_count;
@@ -306,8 +307,15 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	private int superSeedModeNumberOfAnnounces;
 	private SuperSeedPiece[] superSeedPieces;
 
+	private boolean global_hide_a_piece_cached;
+	private Boolean local_hide_a_piece_opt;
 	private int hidden_piece;
 
+	private static final int OB_PS_STATS_HISTORY_SIZE = 100;
+	private boolean[][]	ob_ps_stats_history = new boolean[PEPeerSource.PS_SOURCES.length][OB_PS_STATS_HISTORY_SIZE];
+	private int[]		ob_ps_stats			= new int[PEPeerSource.PS_SOURCES.length];
+	private int[]		ob_ps_stats_pos		= new int[PEPeerSource.PS_SOURCES.length];
+	
 	private final AEMonitor this_mon = new AEMonitor("PEPeerControl");
 
 	private long ip_filter_last_update_time;
@@ -322,6 +330,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	private int connections_with_queued_data;
 	private int connections_with_queued_data_blocked;
 	private int connections_unchoked;
+	private int connections_unchoking;
 	private int outbound_message_count;
 
 	private List<PEPeerTransport> sweepList = Collections.emptyList();
@@ -373,6 +382,39 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	private int udp_traversal_count;
 
+	private static final int PENDING_HOLE_PUNCH_MAX = 32;
+
+	private final Map<String, Object[]> pending_hole_punches = new LinkedHashMap<String, Object[]>(
+			PENDING_HOLE_PUNCH_MAX, 0.75f, true){
+		@Override
+		protected boolean removeEldestEntry(Map.Entry<String, Object[]> eldest){
+			return size() > PENDING_HOLE_PUNCH_MAX;
+		}
+	};
+
+	private static final int OUTBOUND_IGNORE_ADDRESSES_MAX = 1024;
+	
+	private final Map<PeerCacheKey, Integer> outbound_ignore_addresses = new LinkedHashMap<PeerCacheKey, Integer>(
+			OUTBOUND_IGNORE_ADDRESSES_MAX, 0.75f, true){
+		@Override
+		protected boolean removeEldestEntry(Map.Entry<PeerCacheKey, Integer> eldest){
+			return size() > OUTBOUND_IGNORE_ADDRESSES_MAX;
+		}
+	};
+
+	private static final int RECONNECT_SEEDING_MIN		= 3*60*1000;
+	private static final int RECONNECT_DOWNLOADING_MIN	= 1*60*1000;
+	
+	private static final int CONNECT_FAIL_HISTORY_MAX = 512;
+	
+	private final Map<PeerCacheKey, Long> connect_fail_history = new LinkedHashMap<PeerCacheKey, Long>(
+			CONNECT_FAIL_HISTORY_MAX, 0.75f, true){
+		@Override
+		protected boolean removeEldestEntry(Map.Entry<PeerCacheKey, Long> eldest){
+			return size() > CONNECT_FAIL_HISTORY_MAX;
+		}
+	};
+
 	private static final int UDP_RECONNECT_MAX = 16;
 
 	private final Map<String, PEPeerTransport> udp_reconnects = new LinkedHashMap<String, PEPeerTransport>(
@@ -383,19 +425,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 	};
 
-	private static final int MAX_SEEDING_SEED_DISCONNECT_HISTORY = 256;
-	private static final int SEEDING_SEED_DISCONNECT_TIMEOUT = 10 * 60 * 1000;
-
-	private final Map<String, Long> seeding_seed_disconnects = new LinkedHashMap<String, Long>(
-			MAX_SEEDING_SEED_DISCONNECT_HISTORY, 0.75f, true){
-		@Override
-		protected boolean removeEldestEntry(Map.Entry<String, Long> eldest){
-			return size() > MAX_SEEDING_SEED_DISCONNECT_HISTORY;
-		}
-	};
-
 	private static final int UDP_RECONNECT_MIN_MILLIS = 10 * 1000;
-	private long last_udp_reconnect;
+	private long last_udp_reconnect_mono = SystemTime.getMonotonousTime();
 
 	private boolean prefer_udp;
 
@@ -512,7 +543,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	private final boolean is_metadata_download;
 	private int metadata_infodict_size;
 
-	private GettingThere finish_in_progress;
+	private DownloadEndedProgress finish_in_progress;
 
 	private long last_seed_disconnect_time;
 
@@ -523,8 +554,16 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	private final MyPeer my_peer = new MyPeer();
 
-	public PEPeerControlImpl(byte[] _peer_id, PEPeerManagerAdapter _adapter, DiskManager _diskManager,
-			int _partition_id){
+	private static final int HP_BLOOM_FILTER_SIZE = 512;
+	private volatile BloomFilter hp_bloom = null;
+	
+	public 
+	PEPeerControlImpl(
+		byte[] _peer_id, 
+		PEPeerManagerAdapter _adapter, 
+		DiskManager _diskManager,
+		int _partition_id )
+	{
 		_myPeerId = _peer_id;
 		adapter = _adapter;
 		disk_mgr = _diskManager;
@@ -581,8 +620,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		pePieces = new PEPieceImpl[_nbPieces];
 
-		hidden_piece = hide_a_piece ? ((int) (Math.abs(adapter.getRandomSeed()) % _nbPieces)) : -1;
-
+		initHiddenPiece();
+		
 		/*
 		 * if ( hidden_piece >= 0 ){
 		 * 
@@ -597,25 +636,24 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		disk_mgr.addListener(new DiskManagerListener(){
 
 			@Override
-			public void stateChanged(int oldState, int newState){
+			public void stateChanged(DiskManager dm, int oldState, int newState){
 				// TODO Auto-generated method stub
 
 			}
 
 			@Override
-			public void pieceDoneChanged(DiskManagerPiece piece){
+			public void pieceDoneChanged(DiskManager dm, DiskManagerPiece piece){
 				// TODO Auto-generated method stub
 
 			}
 
 			@Override
-			public void filePriorityChanged(DiskManagerFileInfo file){
-				// TODO Auto-generated method stub
-
+			public void filePriorityChanged(DiskManager dm, List<DiskManagerFileInfo> files){
+				handleFilePriorityChanged();
 			}
 
 			@Override
-			public void fileCompleted(DiskManagerFileInfo file){
+			public void fileCompleted(DiskManager dm, DiskManagerFileInfo file){
 				checkAutoSequentialFiles(file);
 			}
 		});
@@ -707,7 +745,9 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	}
 
 	@Override
-	public void stopAll(){
+	public void 
+	stopAll()
+	{
 		is_running = false;
 
 		UploadSlotManager.getSingleton().deregisterHelper(upload_helper);
@@ -725,12 +765,13 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			reg.deactivate();
 		}
 
-		closeAndRemoveAllPeers("download stopped", false);
+		closeAndRemoveAllPeers("download stopped", Transport.CR_STOPPED_OR_REMOVED, false);
 
 		// clear pieces
 		for(int i = 0; i < _nbPieces; i++){
-			if(pePieces[i] != null)
+			if(pePieces[i] != null){
 				removePiece(pePieces[i], i);
+			}
 		}
 
 		// 5. Remove listeners
@@ -739,29 +780,39 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		piecePicker.destroy();
 
-		final ArrayList<PEPeerManagerListener> peer_manager_listeners = peer_manager_listeners_cow;
+		for ( PEPeerManagerListener listener: peer_manager_listeners_cow ){
 
-		for(int i = 0; i < peer_manager_listeners.size(); i++){
-
-			((PEPeerManagerListener) peer_manager_listeners.get(i)).destroyed(this);
+			try{
+				listener.destroyed(this);
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
 		}
 
 		sweepList = Collections.emptyList();
 
 		pending_nat_traversals.clear();
 
+		pending_hole_punches.clear();
+		
 		udp_reconnects.clear();
 
+		outbound_ignore_addresses.clear();
+
+		connect_fail_history.clear();
+		
 		hash_handler.stop();
 
 		is_destroyed = true;
 	}
 
 	@Override
-	public void removeAllPeers(String reason){
+	public void removeAllPeers(String reason, int reason_code ){
 		for(PEPeer peer : peer_transports_cow){
 
-			removePeer(peer, reason);
+			removePeer(peer, reason, reason_code);
 		}
 
 		try{
@@ -771,6 +822,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			pending_nat_traversals.clear();
 
+			pending_hole_punches.clear();
+			
 		}finally{
 
 			peer_transports_mon.exit();
@@ -823,12 +876,14 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	}
 
 	@Override
-	public void schedule(){
-		if(finish_in_progress != null){
+	public void 
+	schedule()
+	{
+		if ( finish_in_progress != null ){
 
 			// System.out.println( "Finish in prog" );
 
-			if(finish_in_progress.hasGotThere()){
+			if ( finish_in_progress.isComplete()){
 
 				finish_in_progress = null;
 
@@ -850,7 +905,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			processPieceChecks();
 
-			if(finish_in_progress != null){
+			if ( finish_in_progress != null ){
 
 				// get off the scheduler thread while potentially long running operations
 				// complete
@@ -876,7 +931,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			checkCompletionState(); // pick up changes in completion caused by dnd file changes
 
-			if(finish_in_progress != null){
+			if ( finish_in_progress != null ){
 
 				// get off the scheduler thread while potentially long running operations
 				// complete
@@ -886,27 +941,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			checkSeeds();
 
-			if(seeding_mode){
-
-				if(mainloop_loop_count % MAINLOOP_FIVE_MINUTE_INTERVAL == 0){
-
-					synchronized(seeding_seed_disconnects){
-
-						long now = SystemTime.getMonotonousTime();
-
-						Iterator<Map.Entry<String, Long>> it = seeding_seed_disconnects.entrySet().iterator();
-
-						while(it.hasNext()){
-
-							Map.Entry<String, Long> entry = it.next();
-
-							if(now - entry.getValue() > SEEDING_SEED_DISCONNECT_TIMEOUT){
-
-								it.remove();
-							}
-						}
-					}
-				}
+			if ( seeding_mode ){
 
 				if(mainloop_loop_count % MAINLOOP_FIVE_SECOND_INTERVAL == 0){
 
@@ -1088,11 +1123,11 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			throw(new RuntimeException("invalid class"));
 		}
 
-		final PEPeerTransport transport = (PEPeerTransport) _transport;
+		PEPeerTransport transport = (PEPeerTransport) _transport;
 
-		if(!ip_filter.isInRange(transport.getIp(), getDisplayName(), getTorrentHash())){
+		if ( !isBlocked(transport, getDisplayName(), getTorrentHash())){
 
-			final ArrayList<PEPeerTransport> peer_transports = peer_transports_cow;
+			ArrayList<PEPeerTransport> peer_transports = peer_transports_cow;
 
 			if(!peer_transports.contains(transport)){
 
@@ -1102,11 +1137,12 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			}else{
 				Debug.out("addPeer():: peer_transports.contains(transport): SHOULD NEVER HAPPEN !");
-				transport.closeConnection("already connected");
+				
+				transport.closeConnection("already connected", Transport.CR_DUPLICATE_PEER_ID);
 			}
 		}else{
 
-			transport.closeConnection("IP address blocked by filters");
+			transport.closeConnection("IP address blocked by filters", Transport.CR_IP_BLOCKED);
 		}
 	}
 
@@ -1121,12 +1157,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	}
 
 	@Override
-	public void removePeer(PEPeer _transport){
-		removePeer(_transport, "remove peer");
-	}
-
-	@Override
-	public void removePeer(PEPeer _transport, String reason){
+	public void removePeer(PEPeer _transport, String reason, int reason_code ){
 		if(!(_transport instanceof PEPeerTransport)){
 
 			throw(new RuntimeException("invalid class"));
@@ -1134,10 +1165,10 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		PEPeerTransport transport = (PEPeerTransport) _transport;
 
-		closeAndRemovePeer(transport, reason, true);
+		closeAndRemovePeer(transport, reason, reason_code, true);
 	}
 
-	private void closeAndRemovePeer(PEPeerTransport peer, String reason, boolean log_if_not_found){
+	private void closeAndRemovePeer(PEPeerTransport peer, String reason, int reason_code, boolean log_if_not_found){
 		boolean removed = false;
 
 		// copy-on-write semantics
@@ -1157,7 +1188,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 
 		if(removed){
-			peer.closeConnection(reason);
+			peer.closeConnection(reason, reason_code);
 			peerRemoved(peer); // notify listeners
 		}else{
 			if(log_if_not_found){
@@ -1167,7 +1198,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 	}
 
-	private void closeAndRemoveAllPeers(String reason, boolean reconnect){
+	private void closeAndRemoveAllPeers(String reason, int reason_code, boolean reconnect){
 		List<PEPeerTransport> peer_transports;
 
 		try{
@@ -1185,7 +1216,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			try{
 
-				peer.closeConnection(reason);
+				peer.closeConnection(reason,reason_code);
 
 			}catch(Throwable e){
 
@@ -1210,16 +1241,38 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			for(int i = 0; i < peer_transports.size(); i++){
 				final PEPeerTransport peer = peer_transports.get(i);
 
-				PEPeerTransport reconnected_peer = peer.reconnect(false, false);
+				PEPeerTransport reconnected_peer = peer.reconnect(false, false,null);
 			}
 		}
 	}
 
 	@Override
-	public void addPeer(String ip_address, int tcp_port, int udp_port, boolean use_crypto, Map user_data){
+	public void 
+	addPeer(
+		String ip_address, 
+		int tcp_port, 
+		int udp_port, 
+		boolean use_crypto, 
+		Map user_data)
+	
+		throws Exception
+	{
 		final byte type = use_crypto ? PeerItemFactory.HANDSHAKE_TYPE_CRYPTO : PeerItemFactory.HANDSHAKE_TYPE_PLAIN;
+	
+		String peer_source = PEPeerSource.PS_PLUGIN;
+		
+		if ( user_data != null ){
+			
+			String ps = (String)user_data.get( Peer.PR_PEER_SOURCE );
+			
+			if ( ps != null ){
+				
+				peer_source = ps;
+			}
+		}
+		
 		final PeerItem peer_item = PeerItemFactory.createPeerItem(ip_address, tcp_port,
-				PeerItem.convertSourceID(PEPeerSource.PS_PLUGIN), type, udp_port, PeerItemFactory.CRYPTO_LEVEL_1, 0);
+				PeerItem.convertSourceID( peer_source ), type, udp_port, PeerItemFactory.CRYPTO_LEVEL_1, 0);
 
 		byte crypto_level = PeerItemFactory.CRYPTO_LEVEL_1;
 
@@ -1235,21 +1288,21 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			}
 		}
 
-		if(force || !isAlreadyConnected(peer_item)){
+		String fail_reason = null;
 
-			String fail_reason;
+		if(force || !isAlreadyConnected(peer_item)){
 
 			boolean tcp_ok = TCPNetworkManager.TCP_OUTGOING_ENABLED && tcp_port > 0;
 			boolean udp_ok = UDPNetworkManager.UDP_OUTGOING_ENABLED && udp_port > 0;
 
 			if(tcp_ok && !((prefer_udp || prefer_udp_default) && udp_ok)){
 
-				fail_reason = makeNewOutgoingConnection(PEPeerSource.PS_PLUGIN, ip_address, tcp_port, udp_port, true,
+				fail_reason = makeNewOutgoingConnection( peer_source, ip_address, tcp_port, udp_port, true,
 						use_crypto, crypto_level, user_data); // directly inject the the imported peer
 
 			}else if(udp_ok){
 
-				fail_reason = makeNewOutgoingConnection(PEPeerSource.PS_PLUGIN, ip_address, tcp_port, udp_port, false,
+				fail_reason = makeNewOutgoingConnection( peer_source, ip_address, tcp_port, udp_port, false,
 						use_crypto, crypto_level, user_data); // directly inject the the imported peer
 
 			}else{
@@ -1257,8 +1310,17 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 				fail_reason = "No usable protocol";
 			}
 
-			if(fail_reason != null)
-				Debug.out("Injected peer " + ip_address + ":" + tcp_port + " was not added - " + fail_reason);
+			//if(fail_reason != null)
+			//	Debug.out("Injected peer " + ip_address + ":" + tcp_port + " was not added - " + fail_reason);
+			
+		}else{
+			
+			fail_reason = "Already connected";
+		}
+		
+		if ( fail_reason != null ){
+		
+			throw( new Exception( "Failed to add peer: " + fail_reason ));
 		}
 	}
 
@@ -1388,27 +1450,52 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			return("Peer source '" + peer_source + "' is not enabled");
 		}
 
-		if(seeding_mode && disconnect_seeds_when_seeding){
+		PeerCacheKey key;
+		
+		if ( net_cat == AENetworkClassifier.AT_PUBLIC ){
+			
+			byte[] bytes = HostNameToIPResolver.hostAddressToBytes( address );
+			
+			if ( bytes == null ){
+				
+				key = new PeerUnresolvedCacheKey( address, tcp_port );
+				
+			}else{
+				
+				key = new PeerResolvedCacheKey( bytes, tcp_port );
+			}
+		}else{
+			
+			key = new PeerNonPublicCacheKey( address );
+		}
+		
+		synchronized( outbound_ignore_addresses ){
 
-			String key = address + ":" + tcp_port;
+			Integer rc = outbound_ignore_addresses.get( key );
 
-			synchronized(seeding_seed_disconnects){
-
-				Long prev = seeding_seed_disconnects.get(key);
-
-				if(prev != null){
-
-					if(SystemTime.getMonotonousTime() - prev > SEEDING_SEED_DISCONNECT_TIMEOUT){
-
-						seeding_seed_disconnects.remove(key);
-
-					}else{
-
-						return("Ignore recent seeds when seeding");
+			if ( rc != null ){
+				
+				// System.out.println( "Ignoring " + key + " due to " + rc );
+				
+				return( "Ignoring outbound connection due to previous close_reason: " + rc );
+				
+			}else{
+				
+				if ( peer_source != PEPeerSource.PS_HOLE_PUNCH ){
+					
+					Long ft = connect_fail_history.get( key );
+					
+					if ( ft != null ){
+					
+						if (( SystemTime.getMonotonousTime() - ft ) <= ( seeding_mode?RECONNECT_SEEDING_MIN:RECONNECT_DOWNLOADING_MIN )){
+							
+							return( "Ignoring outbound connection due to previous connect failure" );
+						}
 					}
 				}
 			}
 		}
+	
 		boolean is_priority_connection = false;
 		boolean force = false;
 
@@ -1485,12 +1572,17 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			return;
 		}
 
+		if ( is_metadata_download ){
+			
+			return;
+		}
+		
 		long remaining = 0;
 
 		// for every piece
 		for(int i = 0; i < _nbPieces; i++){
 			final DiskManagerPiece dmPiece = dm_pieces[i];
-			// if piece is completly written, not already checking, and not Done
+			// if piece is completely written, not already checking, and not Done
 			if(dmPiece.isNeedsCheck()){
 
 				// check the piece from the disk
@@ -1592,7 +1684,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 						if(needsMD5CheckOnCompletion(i))
 							badPeerDetected(reservingPeer, i, "Peer is too slow" );
 						else if(pt != null)
-							closeAndRemovePeer(pt, "Reserved piece data timeout; 120 seconds", true);
+							closeAndRemovePeer(pt, "Reserved piece data timeout; 120 seconds", Transport.CR_TIMEOUT_REQUEST, true);
 
 						pePiece.setReservedBy(null);
 					}
@@ -1637,7 +1729,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 								// user
 								// with a SAN that has .5 second write latencies when checking a file at the
 								// same time
-								// this means that when dowloading > 32K/sec things start backing up).
+								// this means that when downloading > 32K/sec things start backing up).
 								// Eventually the
 								// write controller will start blocking the network thread to prevent unlimited
 								// queueing but until that time we need to handle this situation slightly
@@ -1657,14 +1749,20 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 						}
 					}
 				}
-
 			}
 
-			if(hidden_piece >= 0){
+			/*
+			 * Not sure when this code was added but it changes the hidden piece based on availability
+			 * I guess the intent was to work around a hidden piece happening to be stalling a download
+			 * when nobody else had it but us. 
+			 * However, changing the piece borks things and it was never designed to be changed so 
+			 * I'm removing this. If you don't like it talk to parg
+			 
+			if ( hidden_piece >= 0 ){
 
 				int hp_avail = piecePicker.getAvailability(hidden_piece);
 
-				if(hp_avail < (dm_pieces[hidden_piece].isDone() ? 2 : 1)){
+				if (hp_avail < (dm_pieces[hidden_piece].isDone() ? 2 : 1)){
 
 					int[] avails = piecePicker.getAvailability();
 
@@ -1684,16 +1782,16 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 						int backup = -1;
 
-						for(int i = 0; i < avails.length; i++){
+						for (int i = 0; i < avails.length; i++){
 
-							if(avails[i] > 0 && !dm_pieces[i].isDone() && pePieces[i] == null){
+							if ( avails[i] > 0 && !dm_pieces[i].isDone() && pePieces[i] == null ){
 
-								if(backup == -1){
+								if ( backup == -1 ){
 
 									backup = i;
 								}
 
-								if(num == 0){
+								if ( num == 0 ){
 
 									hidden_piece = i;
 
@@ -1706,13 +1804,14 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 							}
 						}
 
-						if(backup != -1){
+						if (backup != -1){
 
 							hidden_piece = backup;
 						}
 					}
 				}
 			}
+			*/
 		}
 	}
 
@@ -1999,7 +2098,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	private void checkFinished(final boolean start_of_day){
 		final boolean all_pieces_done = disk_mgr.getRemainingExcludingDND() == 0;
 
-		if(all_pieces_done){
+		if ( all_pieces_done ){
 
 			seeding_mode = true;
 
@@ -2009,27 +2108,21 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			piecePicker.clearEndGameChunks();
 
-			if(!start_of_day)
+			if ( !start_of_day ){
+				
 				adapter.setStateFinishing();
-
-			_timeFinished = SystemTime.getCurrentTime();
-			final List<PEPeerTransport> peer_transports = peer_transports_cow;
-
-			// remove previous snubbing
-			for(int i = 0; i < peer_transports.size(); i++){
-				final PEPeerTransport pc = peer_transports.get(i);
-				pc.setSnubbed(false);
 			}
+			
+			_timeFinished_mono = SystemTime.getMonotonousTime();
+			
+				// remove previous snubbing
+			
+			for ( PEPeerTransport pc: peer_transports_cow ){
+				
+				pc.setSnubbed( false );
+			}
+			
 			setNbPeersSnubbed(0);
-
-			final boolean checkPieces = COConfigurationManager.getBooleanParameter("Check Pieces on Completion");
-
-			// re-check all pieces to make sure they are not corrupt, but only if we weren't
-			// already complete
-			if(checkPieces && !start_of_day){
-				final DiskManagerCheckRequest req = disk_mgr.createCheckRequest(-1, new Integer(CHECK_REASON_COMPLETE));
-				disk_mgr.enqueueCompleteRecheckRequest(req, this);
-			}
 
 			_timeStartedSeeding = SystemTime.getCurrentTime();
 			_timeStartedSeeding_mono = SystemTime.getMonotonousTime();
@@ -2038,46 +2131,51 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 				disk_mgr.saveResumeData(false);
 
 			}catch(Throwable e){
+				
 				Debug.out("Failed to save resume data", e);
 			}
 
+				// NOTE: setStateSeeding has the side effect of marking the download as complete (calls setAssumedComplete)
+				// which needs to be done BEFORE informing the disk manager that the download has ended as this processes
+				// the 'move on complete' actions which will fail if assumedComplete isn't true
+			
 			adapter.setStateSeeding(start_of_day);
 
-			final AESemaphore waiting_it = new AESemaphore("PEC:DE");
+				// this will kick off any async move operations if needed
+			
+			boolean checkPieces = COConfigurationManager.getBooleanParameter(ConfigKeys.File.BCFG_CHECK_PIECES_ON_COMPLETION);
 
-			new AEThread2("PEC:DE"){
-				@Override
-				public void run(){
-					try{
-						disk_mgr.downloadEnded(new DiskManager.OperationStatus(){
-							@Override
-							public void gonnaTakeAWhile(GettingThere gt){
-								boolean async_set = false;
-
-								synchronized(PEPeerControlImpl.this){
-
-									if(finish_in_progress == null){
-
-										finish_in_progress = gt;
-
-										async_set = true;
-									}
-								}
-
-								if(async_set){
-
-									waiting_it.release();
-								}
-							}
-						});
-					}finally{
-
-						waiting_it.release();
-					}
-				}
-			}.start();
-
-			waiting_it.reserve();
+			boolean checkBeforeMove	= COConfigurationManager.getBooleanParameter(ConfigKeys.File.BCFG_CHECK_PIECES_ON_COMPLETION_BEFORE_MOVE);
+			
+			if ( !checkBeforeMove ){
+				
+				finish_in_progress = disk_mgr.downloadEnded( start_of_day );
+			}
+		
+				// re-check all pieces to make sure they are not corrupt, but only if we weren't
+				// already complete
+				// this is low priority so do it after the move - we want to move to complete quickly to
+				// minimise the chance of something messing with it
+			
+				// UNLESS user explicitly wants this :) The might if the move is to a network drive and 
+				// they don't want the recheck running over the network after the move but would rather have
+				// it done locally first and then moved
+			
+			if ( checkPieces && !start_of_day ){
+				
+				DiskManagerCheckRequest req = disk_mgr.createCheckRequest(-1, new Integer(CHECK_REASON_COMPLETE));
+				
+					// this call is guaranteed to register the recheck operation with the operation scheduler
+					// before returning and therefore it will be in the queue before any potential move
+					// operation is added in downloadEnded
+				
+				disk_mgr.enqueueCompleteRecheckRequest(req, this);
+			}
+			
+			if ( checkBeforeMove ){
+				
+				finish_in_progress = disk_mgr.downloadEnded( start_of_day );
+			}
 
 		}else{
 
@@ -2101,11 +2199,21 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 				_timeStartedSeeding = -1;
 				_timeStartedSeeding_mono = -1;
-				_timeFinished = 0;
+				_timeFinished_mono = 0;
 
-				synchronized(seeding_seed_disconnects){
+				synchronized( outbound_ignore_addresses ){
 
-					seeding_seed_disconnects.clear();
+					Iterator<Integer> it =  outbound_ignore_addresses.values().iterator();
+					
+					while( it.hasNext()){
+						
+						int rc = it.next();
+						
+						if ( rc == Transport.CR_NOT_INTERESTED_UPLOAD_ONLY || rc == Transport.CR_UPLOAD_TO_UPLOAD ){
+							
+							it.remove();
+						}
+					}
 				}
 
 				Logger.log(new LogEvent(disk_mgr.getTorrent(), LOGID, "Turning off seeding mode for PEPeerManager"));
@@ -2128,7 +2236,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	/**
 	 * This method will locate expired requests on peers, will cancel them, and mark
-	 * the peer as snubbed if we haven't received usefull data from them within the
+	 * the peer as snubbed if we haven't received useful data from them within the
 	 * last 60 seconds
 	 */
 	private void checkRequests(){
@@ -2144,7 +2252,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		hash_handler.update();
 
-		final long now = SystemTime.getCurrentTime();
+		long mono_now = SystemTime.getMonotonousTime();
 
 		// for every connection
 		final List<PEPeerTransport> peer_transports = peer_transports_cow;
@@ -2173,7 +2281,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 					boolean noData = timeSinceData < 0 || timeSinceData > dataTimeout;
 
-					long timeSinceOldestRequest = now - request.getTimeCreated(now);
+					long timeSinceOldestRequest = mono_now - request.getTimeCreatedMono();
 
 					// for every expired request
 					for(int j = (timeSinceOldestRequest > requestTimeout && noData) ? 0 : 1; j < expired.size(); j++){
@@ -2327,6 +2435,11 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	}
 
 	@Override
+	public int getNbPeersUnchoking(){
+		return(connections_unchoking);
+	}
+
+	@Override
 	public int[] getAvailability(){
 		return piecePicker.getAvailability();
 	}
@@ -2370,17 +2483,17 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	@Override
 	public void addPeerTransport(PEPeerTransport transport){
-		if(!ip_filter.isInRange(transport.getIp(), getDisplayName(), getTorrentHash())){
+		if(!isBlocked(transport, getDisplayName(), getTorrentHash())){
 			final ArrayList peer_transports = peer_transports_cow;
 
 			if(!peer_transports.contains(transport)){
 				addToPeerTransports(transport);
 			}else{
 				Debug.out("addPeerTransport():: peer_transports.contains(transport): SHOULD NEVER HAPPEN !");
-				transport.closeConnection("already connected");
+				transport.closeConnection("already connected", Transport.CR_DUPLICATE_PEER_ID);
 			}
 		}else{
-			transport.closeConnection("IP address blocked by filters");
+			transport.closeConnection("IP address blocked by filters",Transport.CR_IP_BLOCKED);
 		}
 	}
 
@@ -2501,38 +2614,73 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	// Method that checks if we are connected to another seed, and if so, disconnect
 	// from him.
-	private void checkSeeds(){
-		// proceed on mainloop 1 second intervals if we're a seed and we want to force
-		// disconnects
-		if((mainloop_loop_count % MAINLOOP_ONE_SECOND_INTERVAL) != 0){
+	private void 
+	checkSeeds()
+	{
+			// proceed on mainloop 1 second intervals if we're a seed and we want to force
+			// disconnects
+		
+		if ((mainloop_loop_count % MAINLOOP_ONE_SECOND_INTERVAL) != 0){
+			
 			return;
 		}
 
-		if(!disconnect_seeds_when_seeding){
+		if (!disconnectSeedsWhenSeeding()){
+			
 			return;
 		}
 
-		List<PEPeerTransport> to_close = null;
-
-		final List<PEPeerTransport> peer_transports = peer_transports_cow;
-		for(int i = 0; i < peer_transports.size(); i++){
-			final PEPeerTransport pc = peer_transports.get(i);
-
-			if(pc != null && pc.getPeerState() == PEPeer.TRANSFERING
-					&& ((isSeeding() && pc.isSeed()) || pc.isRelativeSeed())){
-				if(to_close == null)
-					to_close = new ArrayList();
-				to_close.add(pc);
+		List<PEPeerTransport> to_close1 = new ArrayList<>();
+		List<PEPeerTransport> to_close2 = new ArrayList<>();
+		
+		boolean upload_only = isUploadOnly();
+		boolean	seeding		= isSeeding();
+		
+		for ( PEPeerTransport pt: peer_transports_cow ){
+			
+			if ( pt != null && pt.getPeerState() == PEPeer.TRANSFERING ){
+				
+				if ( pt.isRelativeSeed()){
+					
+					to_close1.add( pt );
+					
+				}else if ( pt.isSeed()){
+					
+					if ( seeding ){
+						
+						to_close1.add( pt );
+						
+					}else if ( upload_only ){
+						
+						to_close2.add( pt );
+					}
+				}
 			}
 		}
 
-		if(to_close != null){
-			for(int i = 0; i < to_close.size(); i++){
-				closeAndRemovePeer(to_close.get(i), "disconnect other seed when seeding", false);
+		if ( !to_close1.isEmpty()){
+			
+			for( PEPeerTransport pt: to_close1 ){
+				
+				closeAndRemovePeer( pt, "disconnect other seed when seeding", Transport.CR_UPLOAD_TO_UPLOAD, false );
+			}
+		}
+		
+		if ( !to_close2.isEmpty()){
+			
+			for( PEPeerTransport pt: to_close2 ){
+				
+				closeAndRemovePeer( pt, "disconnect other seed as upload only", Transport.CR_UPLOAD_TO_UPLOAD, false );
 			}
 		}
 	}
 
+	private boolean
+	isUploadOnly()
+	{
+		return( getDownloadRateLimitBytesPerSecond() == -1 );
+	}
+	
 	private void updateStats(){
 
 		if((mainloop_loop_count % MAINLOOP_ONE_SECOND_INTERVAL) != 0){
@@ -2549,6 +2697,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		int new_seeds = 0;
 		int new_peers = 0;
+		int new_tcp_peers_transfering = 0;
 		int new_tcp_incoming = 0;
 		int new_udp_incoming = 0;
 		int new_utp_incoming = 0;
@@ -2557,14 +2706,19 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		int con_queued = 0;
 		int con_blocked = 0;
 		int con_unchoked = 0;
+		int con_unchoking = 0;
 		int out_messages = 0;
 
 		for(Iterator<PEPeerTransport> it = peer_transports.iterator(); it.hasNext();){
 
 			final PEPeerTransport pc = it.next();
 
-			if(pc.getPeerState() == PEPeer.TRANSFERING){
+			if ( pc.getPeerState() == PEPeer.TRANSFERING ){
 
+				if ( pc.isTCP()){
+					new_tcp_peers_transfering++;
+				}
+				
 				if(!pc.isChokedByMe()){
 
 					con_unchoked++;
@@ -2572,6 +2726,11 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 					out_messages += pc.getIncomingRequestedPieceNumberCount();
 				}
 
+				if ( !pc.isChokingMe()){
+					
+					con_unchoking++;
+				}
+				
 				Connection connection = pc.getPluginConnection();
 
 				if(connection != null){
@@ -2600,17 +2759,26 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 				if(pc.isIncoming() && !pc.isLANLocal()){
 
-					if(pc.isTCP()){
+					String protocol = pc.getProtocol();
 
-						if(pc.getNetwork() == AENetworkClassifier.AT_PUBLIC){
+					if (pc.isTCP()){
 
-							new_tcp_incoming++;
+						if (pc.getNetwork() == AENetworkClassifier.AT_PUBLIC){
+
+								// anomaly here - uTP is classified as TCP rather than UDP (expected elsewhere unfortunately)
+							
+							if ( protocol.equals( "TCP" )){
+								
+								new_tcp_incoming++;
+								
+							}else{
+								
+								new_utp_incoming++;
+							}
 						}
 					}else{
 
-						String protocol = pc.getProtocol();
-
-						if(protocol.equals("UDP")){
+						if (protocol.equals("UDP")){
 
 							new_udp_incoming++;
 
@@ -2639,6 +2807,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		_seeds = new_seeds;
 		_peers = new_peers;
+		_tcp_peers_transfering = new_tcp_peers_transfering;
 		_remotesTCPNoLan = new_tcp_incoming;
 		_remotesUDPNoLan = new_udp_incoming;
 		_remotesUTPNoLan = new_utp_incoming;
@@ -2649,9 +2818,15 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		connections_with_queued_data = con_queued;
 		connections_with_queued_data_blocked = con_blocked;
 		connections_unchoked = con_unchoked;
+		connections_unchoking = con_unchoking;
 		outbound_message_count = out_messages;
 
 		_stats.update(stats_tick_count);
+		
+		if ( global_hide_a_piece_cached != global_hide_a_piece ){
+			
+			initHiddenPiece();
+		}
 	}
 
 	/**
@@ -2670,6 +2845,27 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 	}
 
+	@Override
+	public void 
+	requestAdded(
+		PEPiece					piece,
+		PEPeerTransport			peer,
+		DiskManagerReadRequest	request )
+	{
+		final ArrayList<PEPeerManagerListener> peer_manager_listeners = peer_manager_listeners_cow;
+
+		for( PEPeerManagerListener listener: peer_manager_listeners ){
+			
+			try{
+				listener.requestAdded( this, piece, peer, request);
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
+	}
+	
 	public PEPeerControl getControl(){
 		return(this);
 	}
@@ -2834,15 +3030,15 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	 * peer either if in end-game mode, or per cancel param
 	 * 
 	 * @param pieceNumber
-	 *            to potentialy write to
+	 *            to potentially write to
 	 * @param offset
 	 *            within piece to queue write for
 	 * @param data
-	 *            to be writen
+	 *            to be written
 	 * @param sender
 	 *            peer that sent this data
 	 * @param cancel
-	 *            if cancels definatly need to be sent to all peers for this request
+	 *            if cancels definitely need to be sent to all peers for this request
 	 */
 	@Override
 	public void writeBlock(int pieceNumber, int offset, DirectByteBuffer data, Object sender, boolean cancel){
@@ -3072,7 +3268,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			long smooth_result;
 
 			if(dataRemaining == 0){
-				final long timeElapsed = (_timeFinished - _timeStarted) / 1000;
+				final long timeElapsed = (_timeFinished_mono - _timeStarted_mono) / 1000;
 				// if time was spent downloading....return the time as negative
 				if(timeElapsed > 1){
 					jagged_result = timeElapsed * -1;
@@ -3190,7 +3386,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			peerAdded(peer);
 		}else{
-			peer.closeConnection("PeerTransport added when manager not running");
+			peer.closeConnection("PeerTransport added when manager not running", Transport.CR_STOPPED_OR_REMOVED );
 		}
 	}
 
@@ -3288,67 +3484,115 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	// the peer calls this method itself in closeConnection() to notify this manager
 
 	@Override
-	public void peerConnectionClosed(PEPeerTransport peer, boolean connect_failed, boolean network_failed){
+	public void 
+	peerConnectionClosed(
+		PEPeerTransport peer, 
+		boolean connect_failed, 
+		boolean network_failed)
+	{
 		boolean connection_found = false;
 
-		boolean tcpReconnect = false;
-		boolean ipv6reconnect = false;
+		boolean tcpReconnect	= false;
+		boolean ipv6reconnect	= false;
 
 		try{
-			peer_transports_mon.enter();
-
+			String net	= peer.getNetwork();
+			String ip	= peer.getIp();
+			
+			int tcpPort = peer.getTCPListenPort();
 			int udpPort = peer.getUDPListenPort();
 
-			boolean canTryUDP = UDPNetworkManager.UDP_OUTGOING_ENABLED && peer.getUDPListenPort() > 0;
-			boolean canTryIpv6 = network_admin.hasIPV6Potential(true) && peer.getAlternativeIPv6() != null;
+			peer_transports_mon.enter();
 
-			if(is_running){
-
+			if ( is_running ){
+				
+				boolean canTryUDP;
+				boolean canTryIpv6;
+				boolean canTryHolePunch;
+				
+				boolean both_seeds = seeding_mode && (peer.isSeed() || peer.isRelativeSeed());
+				
+				if ( net == AENetworkClassifier.AT_PUBLIC ){
+				
+					canTryUDP = UDPNetworkManager.UDP_OUTGOING_ENABLED && udpPort > 0;
+					canTryIpv6 = network_admin.hasIPV6Potential(true) && peer.getAlternativeIPv6() != null;
+					canTryHolePunch = 	peer.isTCP() && !both_seeds;
+										
+				}else{
+					canTryUDP 		= false;
+					canTryIpv6		= false;
+					canTryHolePunch = false;
+				}
+				
 				PeerItem peer_item = peer.getPeerItemIdentity();
 				PeerItem self_item = peer_database.getSelfPeer();
 
-				if(self_item == null || !self_item.equals(peer_item)){
+				if ( self_item == null || !self_item.equals(peer_item )){
 
-					String ip = peer.getIp();
 					boolean wasIPv6;
-					if(peer.getNetwork() == AENetworkClassifier.AT_PUBLIC){
+					
+					if ( net == AENetworkClassifier.AT_PUBLIC ){
+						
 						try{
 
 							wasIPv6 = AddressUtils.getByName(ip) instanceof Inet6Address;
-						}catch(UnknownHostException e){
+							
+						}catch( UnknownHostException e ){
+							
 							wasIPv6 = false;
-							// something is fishy about the old address, don't try to reconnect with v6
+							
+								// something is fishy about the old address, don't try to reconnect with v6
+							
 							canTryIpv6 = false;
 						}
 					}else{
-						wasIPv6 = false;
-						canTryIpv6 = false;
+						
+						wasIPv6		= false;
+						canTryIpv6	= false;
 					}
 
 					// System.out.println("netfail="+network_failed+", connfail="+connect_failed+",
 					// can6="+canTryIpv6+", was6="+wasIPv6);
 
-					String key = ip + ":" + udpPort;
+					String keyUDP = ip + ":" + udpPort;
 
-					if(peer.isTCP()){
+					if ( peer.isTCP()){
 
-						String net = AENetworkClassifier.categoriseAddress(ip);
+						if ( connect_failed ){
 
-						if(connect_failed){
-
-							// TCP connect failure, try UDP later if necessary
-
-							if(canTryUDP && udp_fallback_for_failed_connection){
-
-								pending_nat_traversals.put(key, peer);
-							}else if(canTryIpv6 && !wasIPv6){
-								tcpReconnect = true;
-								ipv6reconnect = true;
+							if ( canTryHolePunch ){
+								
+									// TCP connect failure, try UDP later if necessary
+	
+								if ( canTryUDP && udp_fallback_for_failed_connection ){
+	
+									pending_nat_traversals.put(keyUDP, peer);
+									
+								}else if ( canTryIpv6 && !wasIPv6 ){
+									
+									tcpReconnect = true;
+									ipv6reconnect = true;
+								}
+								
+								if ( _tcp_peers_transfering > 0 && isPeerSourceEnabled( PEPeerSource.PS_HOLE_PUNCH  )){
+																													
+									if ( tcpPort > 0 ){
+										
+										String keyTCP = ip + ":" + tcpPort;
+		
+										pending_hole_punches.put( keyTCP, new Object[]{ ip, tcpPort });
+									}
+								}
 							}
-						}else if(canTryUDP && udp_fallback_for_dropped_connection && network_failed && seeding_mode
-								&& peer.isInterested() && !peer.isSeed() && !peer.isRelativeSeed()
-								&& peer.getStats().getEstimatedSecondsToCompletion() > 60
-								&& FeatureAvailability.isUDPPeerReconnectEnabled()){
+						}else if(	canTryUDP && 
+									udp_fallback_for_dropped_connection && 
+									network_failed && 
+									seeding_mode && 
+									peer.isInterested() && 
+									!peer.isSeed() && 
+									!peer.isRelativeSeed() &&
+									peer.getStats().getEstimatedSecondsToCompletion() > 60 &&
+									FeatureAvailability.isUDPPeerReconnectEnabled()){
 
 							if(Logger.isEnabled()){
 								Logger.log(new LogEvent(peer, LOGID, LogEvent.LT_WARNING,
@@ -3358,72 +3602,221 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 							// System.out.println( "Premature close of stream: " + getDisplayName() + "/" +
 							// peer.getIp());
 
-							udp_reconnects.put(key, peer);
+							udp_reconnects.put(keyUDP, peer);
 
-						}else if(network_failed && peer.isSafeForReconnect()
-								&& !(seeding_mode && (peer.isSeed() || peer.isRelativeSeed()
-										|| peer.getStats().getEstimatedSecondsToCompletion() < 60))
-								&& getMaxConnections(net) > 0
-								&& (getMaxNewConnectionsAllowed(net) < 0
-										|| getMaxNewConnectionsAllowed(net) > getMaxConnections(net) / 3)
-								&& FeatureAvailability.isGeneralPeerReconnectEnabled()){
+						}else if(	network_failed && 
+									peer.isSafeForReconnect() &&
+									!(	seeding_mode && 
+										(	peer.isSeed() || 
+											peer.isRelativeSeed() ||
+											peer.getStats().getEstimatedSecondsToCompletion() < 60)) &&
+									getMaxConnections(net) > 0 &&
+									(	getMaxNewConnectionsAllowed(net) < 0  || 
+										getMaxNewConnectionsAllowed(net) > getMaxConnections(net) / 3) &&
+									FeatureAvailability.isGeneralPeerReconnectEnabled()){
 
 							tcpReconnect = true;
 						}
-					}else if(connect_failed){
+					}else if ( connect_failed ){
 
-						// UDP connect failure
+							// UDP connect failure
 
-						if(udp_fallback_for_failed_connection){
+						if ( udp_fallback_for_failed_connection && canTryHolePunch ){
 
-							if(peer.getData(PEER_NAT_TRAVERSE_DONE_KEY) == null){
+							if ( peer.getData( PEER_NAT_TRAVERSE_DONE_KEY ) == null ){
 
-								// System.out.println( "Direct reconnect failed, attempting NAT traversal" );
-
-								pending_nat_traversals.put(key, peer);
+								pending_nat_traversals.put(keyUDP, peer);
 							}
 						}
 					}
 				}
 			}
 
-			if(peer_transports_cow.contains(peer)){
-				final ArrayList new_peer_transports = new ArrayList(peer_transports_cow);
+			if ( peer_transports_cow.contains(peer)){
+				
+				final ArrayList<PEPeerTransport> new_peer_transports = new ArrayList<>(peer_transports_cow);
+				
 				new_peer_transports.remove(peer);
+				
 				peer_transports_cow = new_peer_transports;
+				
 				connection_found = true;
 			}
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+			
 		}finally{
+			
 			peer_transports_mon.exit();
 		}
 
-		if(connection_found){
-			if(peer.getPeerState() != PEPeer.DISCONNECTED){
-				System.out.println("peer.getPeerState() != PEPeer.DISCONNECTED: " + peer.getPeerState());
-			}
-
-			peerRemoved(peer); // notify listeners
+		if ( connection_found ){
+			
+			peerRemoved( peer ); // notify listeners
 		}
 
-		if(tcpReconnect)
-			peer.reconnect(false, ipv6reconnect);
+		if ( tcpReconnect ){
+			
+			peer.reconnect( false, ipv6reconnect, null);
+		}
 	}
 
 	@Override
-	public void peerAdded(PEPeer pc){
+	public void 
+	informFullyConnected(
+		PEPeer peer )
+	{
+		updateConnectHealth((PEPeerTransport)peer );
+	}
+	
+	private void
+	updateConnectHealth(
+		PEPeerTransport	pc )
+	{
+		if ( !pc.isIncoming()){
+			
+			int	state = pc.getOutboundConnectionProgress();
+			
+			if ( state != PEPeerTransportProtocol.CP_UNKNOWN ){
+			
+					// 'connected' states don't mean much when we have a SOCKS proxy or plugin-proxy...
+					// we should at least have received a handshake in return as we don't send the bitfield
+					// until after handshaking so it isn't as if the other peer can quickly disconnect
+					// on seeing, for example, we're a seed and they're one too
+
+				boolean ok = state == PEPeerTransportProtocol.CP_RECEIVED_DATA;
+			
+				String ps = pc.getPeerSource();
+			
+				synchronized( ob_ps_stats ){
+					
+					if ( pc.getUserData( CON_HEALTH_DONE_KEY ) == null ){
+						
+						pc.setUserData( CON_HEALTH_DONE_KEY, "" );
+					
+						boolean[] 	stats_history;
+						int			stats_index;
+						
+						if ( ps == PEPeerSource.PS_BT_TRACKER ){
+						
+							stats_history = ob_ps_stats_history[stats_index=0];
+							
+						}else if ( ps == PEPeerSource.PS_DHT ){
+							
+							stats_history = ob_ps_stats_history[stats_index=1];
+							
+						}else if ( ps == PEPeerSource.PS_OTHER_PEER ){
+							
+							stats_history = ob_ps_stats_history[stats_index=2];
+							
+						}else if ( ps == PEPeerSource.PS_PLUGIN ){
+							
+							stats_history = ob_ps_stats_history[stats_index=3];
+							
+						}else if ( ps == PEPeerSource.PS_INCOMING ){
+							
+							stats_history = ob_ps_stats_history[stats_index=4];
+						}else{
+							
+							stats_history = ob_ps_stats_history[stats_index=5];
+						}
+						
+						int pos = ob_ps_stats_pos[stats_index]++;
+						
+						if ( pos < OB_PS_STATS_HISTORY_SIZE ){
+							
+							if ( ok ){
+								
+								ob_ps_stats[stats_index]++;
+							}
+							
+							stats_history[pos] = ok;
+							
+						}else{
+							
+							pos = pos%OB_PS_STATS_HISTORY_SIZE;
+							
+							if ( stats_history[pos]){
+								
+								if ( !ok ){
+									ob_ps_stats[stats_index]--;
+								}
+							}else{
+								
+								if ( ok ){
+									ob_ps_stats[stats_index]++;
+								}
+							}
+							
+							stats_history[pos] = ok;
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	@Override
+	public String 
+	getConnectHealth(
+		boolean		verbose )
+	{		
+		String 	str = "";
+			
+		for ( int i=0;i<ob_ps_stats.length;i++){
+			
+			String ps = PEPeerSource.PS_SOURCES[i];
+			
+			if ( ps == PEPeerSource.PS_INCOMING ){
+				
+				continue;
+			}
+			
+			int events = Math.min( ob_ps_stats_pos[i], OB_PS_STATS_HISTORY_SIZE );
+			
+			if ( events > 0 ){
+				
+				str += (str.isEmpty()?"":", " ) + ps + "=" + ((ob_ps_stats[i]*100)/events) + "%";
+				
+				if ( verbose ){
+					str +=  " (" + ob_ps_stats[i] + "/" + events + ")";
+				}
+			}
+		}
+		
+		if ( verbose ){
+			
+			str += (str.isEmpty()?"":": ") + "Fail history=" + connect_fail_history.size() + ", blocked=" + outbound_ignore_addresses.size();
+		}
+		return( str );
+	}
+	
+
+	private void 
+	peerAdded(
+		PEPeerTransport pc)
+	{
 		adapter.addPeer(pc); // async downloadmanager notification
 
 		// sync peermanager notification
-		final ArrayList peer_manager_listeners = peer_manager_listeners_cow;
+		final ArrayList<PEPeerManagerListener> peer_manager_listeners = peer_manager_listeners_cow;
 
-		for(int i = 0; i < peer_manager_listeners.size(); i++){
-			((PEPeerManagerListener) peer_manager_listeners.get(i)).peerAdded(this, pc);
+		for( PEPeerManagerListener peer: peer_manager_listeners ){
+			peer.peerAdded(this, pc);
 		}
 	}
 
-	@Override
-	public void peerRemoved(PEPeer pc){
-		if(is_running && !seeding_mode && (prefer_udp || prefer_udp_default)){
+	private void 
+	peerRemoved(
+		PEPeerTransport pc)
+	{
+		if ( is_running ){
+			
+			updateConnectHealth( pc );
+		}
+		
+		if (is_running && !seeding_mode && (prefer_udp || prefer_udp_default)){
 
 			int udp = pc.getUDPListenPort();
 
@@ -3472,25 +3865,16 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		if(pc.isSeed()){
 
 			last_seed_disconnect_time = SystemTime.getCurrentTime();
-
-			if(seeding_mode && disconnect_seeds_when_seeding){
-
-				String key = pc.getIp() + ":" + pc.getTCPListenPort();
-
-				synchronized(seeding_seed_disconnects){
-
-					seeding_seed_disconnects.put(key, SystemTime.getMonotonousTime());
-				}
-			}
 		}
 
 		adapter.removePeer(pc); // async downloadmanager notification
 
 		// sync peermanager notification
-		final ArrayList peer_manager_listeners = peer_manager_listeners_cow;
+		final ArrayList<PEPeerManagerListener> peer_manager_listeners = peer_manager_listeners_cow;
 
-		for(int i = 0; i < peer_manager_listeners.size(); i++){
-			((PEPeerManagerListener) peer_manager_listeners.get(i)).peerRemoved(this, pc);
+		for( PEPeerManagerListener peer: peer_manager_listeners ){
+			
+			peer.peerRemoved(this, pc);
 		}
 	}
 
@@ -3693,7 +4077,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	private void processPieceCheckResult(DiskManagerCheckRequest request, int outcome){
 		final int check_type = ((Integer) request.getUserData()).intValue();
-
+		
 		try{
 
 			final int pieceNumber = request.getPieceNumber();
@@ -3883,7 +4267,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 									PEPeerTransport pt = getTransportFromAddress(writer);
 
 									if(pt != null && pt.getReservedPieceNumbers() == null
-											&& !ip_filter.isInRange(writer, getDisplayName(), getTorrentHash())){
+											&& !isBlocked(pt, getDisplayName(), getTorrentHash())){
 
 										bestWriter = writer;
 										maxWrites = writes;
@@ -3987,11 +4371,9 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 		// Debug.out("Bad Peer Detected: " + peerIP + " [" + peer.getClient() + "]");
 
-		IpFilterManager filter_manager = IpFilterManagerFactory.getSingleton();
-
 		// Ban fist to avoid a fast reco of the bad peer
 
-		int nbWarnings = filter_manager.getBadIps().addWarningForIp(ip);
+		int nbWarnings = addWarning( ip, peer );
 
 		boolean disconnect_peer = false;
 
@@ -4007,7 +4389,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 				// if a block-ban occurred, check other connections
 
-				if(ip_filter.ban(ip, getDisplayName() + ": " + reason, false)){
+				if( addBan( ip, reason )){
 
 					checkForBannedConnections();
 				}
@@ -4040,12 +4422,17 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 				if(!(ps == PEPeer.CLOSING || ps == PEPeer.DISCONNECTED)){
 					// Close connection
 					closeAndRemovePeer(peer, "has sent too many " + (hash_fail ? "bad pieces" : "discarded blocks")
-							+ ", " + WARNINGS_LIMIT + " max.", true);
+							+ ", " + WARNINGS_LIMIT + " max.", Transport.CR_BAD_PIECE_DATA, true);
 				}
 			}
 		}
 	}
 
+	@Override
+	public int getNbPieces(){
+		return( _nbPieces );
+	}
+	
 	@Override
 	public PEPiece[] getPieces(){
 		return pePieces;
@@ -4227,8 +4614,11 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 	}
 
-	private void checkForBannedConnections(){
-		if(ip_filter.isEnabled()){ // if ipfiltering is enabled, remove any existing filtered connections
+	private void 
+	checkForBannedConnections()
+	{
+		if (ip_filter.isEnabled()){ // if ipfiltering is enabled, remove any existing filtered connections
+			
 			List<PEPeerTransport> to_close = null;
 
 			final List<PEPeerTransport> peer_transports = peer_transports_cow;
@@ -4236,24 +4626,98 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			String name = getDisplayName();
 			byte[] hash = getTorrentHash();
 
-			for(int i = 0; i < peer_transports.size(); i++){
-				final PEPeerTransport conn = peer_transports.get(i);
+			for( PEPeerTransport peer: peer_transports ){
 
-				if(ip_filter.isInRange(conn.getIp(), name, hash)){
-					if(to_close == null)
-						to_close = new ArrayList();
-					to_close.add(conn);
+				if ( isBlocked(peer, name, hash)){
+					
+					if ( to_close == null ){
+						
+						to_close = new ArrayList<>();
+					}
+					
+					to_close.add(peer);
 				}
 			}
 
-			if(to_close != null){
-				for(int i = 0; i < to_close.size(); i++){
-					closeAndRemovePeer(to_close.get(i), "IPFilter banned IP address", true);
+			if ( to_close != null ){
+				
+				for ( PEPeerTransport peer: to_close ){
+					
+					closeAndRemovePeer( peer, "IPFilter banned IP address", Transport.CR_IP_BLOCKED, true);
 				}
 			}
 		}
 	}
 
+	private boolean
+	isBlocked(
+		PEPeerTransport	peer,
+		String			name,
+		byte[]			hash )
+	{
+		return( ip_filter.isInRange( peer.getIp(), name, hash, PeerClassifier.isHTTPSeed( peer.getClient()), true ));
+	}
+	
+	private int
+	addWarning(
+		String				ip,
+		PEPeerTransport		peer )
+	{
+		IpFilterManager filter_manager = IpFilterManagerFactory.getSingleton();
+
+		byte[]	specific_hash = null;
+		
+		if ( peer != null ){
+			
+			if ( PeerClassifier.isHTTPSeed( peer.getClient())){
+				
+				specific_hash = getTorrentHash();
+			}
+			
+		}else{
+			
+				// might be recently banned http seed that's since disconnected
+			
+			if ( ip_filter.isBanned( ip, getTorrentHash())){
+				
+				specific_hash = getTorrentHash();
+			}
+		}
+		
+		int nbWarnings = filter_manager.getBadIps().addWarningForIp( ip, specific_hash );
+		
+		return( nbWarnings );
+	}
+	
+	private boolean
+	addBan(
+		String			ip,
+		String			reason )
+	{
+		PEPeerTransport peer = getTransportFromAddress( ip );
+		
+		byte[]	specific_hash = null;
+		
+		if ( peer != null ){
+			
+			if ( PeerClassifier.isHTTPSeed( peer.getClient())){
+				
+				specific_hash = getTorrentHash();
+			}
+			
+		}else{
+			
+				// might be recently banned http seed that's since disconnected
+			
+			if ( ip_filter.isBanned( ip, getTorrentHash())){
+				
+				specific_hash = getTorrentHash();
+			}
+		}
+		
+		return( ip_filter.ban( ip, getDisplayName() + ": " + reason, specific_hash, false));
+	}
+	
 	@Override
 	public boolean isSeeding(){
 		return(seeding_mode);
@@ -4331,7 +4795,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 				PEPeerTransport conn = peer_transports.get(i);
 
-				closeAndRemovePeer(conn, "Turning on super-seeding", false);
+				closeAndRemovePeer(conn, "Turning on super-seeding", Transport.CR_NONE, false);
 			}
 		}
 	}
@@ -4389,13 +4853,13 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 
 		// Find a piece
-		boolean found = false;
+	
 		SuperSeedPiece piece = null;
 		boolean loopdone = false; // add loop status
 
-		while(!found){
+		while( true ){
 			piece = superSeedPieces[superSeedModeCurrentPiece];
-			if(piece.getLevel() > 0){
+			if ( piece.getLevel() > 0 || superSeedModeCurrentPiece == hidden_piece ){
 				piece = null;
 				superSeedModeCurrentPiece++;
 				if(superSeedModeCurrentPiece >= _nbPieces){
@@ -4404,7 +4868,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 					if(loopdone){ // if already been here, has been full loop through pieces, quit
 						// quit superseed mode
 						superSeedMode = false;
-						closeAndRemoveAllPeers("quiting SuperSeed mode", true);
+						closeAndRemoveAllPeers("quitting SuperSeed mode", Transport.CR_NONE, true);
 						return;
 					}else{
 						// loopdone==false --> first time here --> go through the pieces
@@ -4414,7 +4878,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 					}
 				}
 			}else{
-				found = true;
+				break;	// piece ready to be allocated
 			}
 		}
 
@@ -4523,7 +4987,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			return(ct_def);
 		}
 
-		int max_sim_con = TCPConnectionManager.MAX_SIMULTANIOUS_CONNECT_ATTEMPTS;
+		int max_sim_con = TCPConnectionManager.MAX_SIMULTANEOUS_CONNECT_ATTEMPTS;
 
 		// high, let's not mess with things
 
@@ -4582,7 +5046,9 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		return(res);
 	}
 
-	private void doConnectionChecks(){
+	private void 
+	doConnectionChecks()
+	{
 		// if mixed networks then we have potentially two connections limits
 		// 1) general peer one - e.g. 100
 		// 2) general+reserved slots for non-public net - e.g. 103
@@ -4590,11 +5056,13 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		// every 1 second
 
+		final List<PEPeerTransport> peer_transports = peer_transports_cow;
+
 		boolean has_ipv6 = false;
 		boolean has_ipv4 = false;
 		boolean can_ipv6 = network_admin.hasIPV6Potential(true);
 
-		if(mainloop_loop_count % MAINLOOP_ONE_SECOND_INTERVAL == 0){
+		if ( mainloop_loop_count % MAINLOOP_ONE_SECOND_INTERVAL == 0 ){
 
 			// need to sync the rates periodically as when upload is disabled (for example)
 			// the we can end up with
@@ -4603,14 +5071,11 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			upload_limited_rate_group.getRateLimitBytesPerSecond();
 			download_limited_rate_group.getRateLimitBytesPerSecond();
 
-			final List<PEPeerTransport> peer_transports = peer_transports_cow;
-
 			int num_waiting_establishments = 0;
 
 			int udp_connections = 0;
 
-			for(int i = 0; i < peer_transports.size(); i++){
-				final PEPeerTransport transport = peer_transports.get(i);
+			for( PEPeerTransport transport: peer_transports ){
 
 				// update waiting count
 				final int state = transport.getConnectionState();
@@ -4682,7 +5147,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 							if(!to_retain.contains(transport)){
 
-								closeAndRemovePeer(transport, "Too many seeds", false);
+								closeAndRemovePeer(transport, "Too many seeds", Transport.CR_TOO_MANY_CONNECTIONS, false);
 
 								to_disconnect--;
 							}
@@ -4721,7 +5186,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 					// try and connect only as many as necessary
 
-					final int wanted = TCPConnectionManager.MAX_SIMULTANIOUS_CONNECT_ATTEMPTS
+					final int wanted = TCPConnectionManager.MAX_SIMULTANEOUS_CONNECT_ATTEMPTS
 							- num_waiting_establishments;
 
 					if(wanted > allowed){
@@ -4736,7 +5201,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 					int udp_remaining = UDPNetworkManager.getSingleton().getConnectionManager()
 							.getMaxOutboundPermitted();
 
-					while(num_waiting_establishments < TCPConnectionManager.MAX_SIMULTANIOUS_CONNECT_ATTEMPTS
+					while(num_waiting_establishments < TCPConnectionManager.MAX_SIMULTANEOUS_CONNECT_ATTEMPTS
 							&& (tcp_remaining > 0 || udp_remaining > 0)){
 
 						if(!is_running)
@@ -4813,12 +5278,20 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 						}
 					}
 
-					if(i == 0){
+					if ( i == 0 ){
 
-						if(UDPNetworkManager.UDP_OUTGOING_ENABLED && remaining > 0 && udp_remaining > 0
+						if( UDPNetworkManager.UDP_OUTGOING_ENABLED && remaining > 0 && udp_remaining > 0
 								&& udp_connections < MAX_UDP_CONNECTIONS){
 
 							doUDPConnectionChecks(remaining);
+						}
+						
+						if ( mainloop_loop_count % MAINLOOP_FIVE_SECOND_INTERVAL == 0 ){
+						
+							if( TCPNetworkManager.TCP_OUTGOING_ENABLED && remaining > 0 && tcp_remaining > 0 ){
+								
+								doTCPConnectionChecks(remaining);
+							}
 						}
 					}
 				}
@@ -4842,13 +5315,9 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			final int min_done = Math.max(1,
 					(int) ((piece_length * DUP_CHECK_MIN_PIECES * 1000) / disk_mgr.getTotalLength()));
 
-			final List<PEPeerTransport> peer_transports = peer_transports_cow;
-
 			List<PEPeerTransport> interesting_peers = new ArrayList<>(peer_transports.size());
 
-			for( int i = 0; i < peer_transports.size(); i++ ){
-
-				final PEPeerTransport transport = peer_transports.get(i);
+			for( PEPeerTransport transport: peer_transports ){
 
 				// check for timeouts
 
@@ -5068,7 +5537,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 					
 					ip_filter.ban( peer.getIp(), getDisplayName() + ": " + msg, false );
 					
-					closeAndRemovePeer( peer, msg, true);
+					closeAndRemovePeer( peer, msg, Transport.CR_DUPLICATE_PEER_ID, true);
 				}
 			}
 		}
@@ -5095,41 +5564,82 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			}
 		}
 
-		// sweep over all peers in a 60 second timespan
-		float percentage = ((mainloop_loop_count % MAINLOOP_SIXTY_SECOND_INTERVAL) + 1F)
-				/ (1F * MAINLOOP_SIXTY_SECOND_INTERVAL);
-		int goal;
-		if(mainloop_loop_count % MAINLOOP_SIXTY_SECOND_INTERVAL == 0){
+		if ( mainloop_loop_count % MAINLOOP_ONE_SECOND_INTERVAL == 0 ){
 
-			goal = 0;
-			sweepList = peer_transports_cow;
-		}else{
-			goal = (int) Math.floor(percentage * sweepList.size());
+				// sweep over all peers in a 60 second timespan
+			
+			float percentage = ((mainloop_loop_count % MAINLOOP_SIXTY_SECOND_INTERVAL) + 1F) / (1F * MAINLOOP_SIXTY_SECOND_INTERVAL);
+			
+			int goal;
+			
+			if ( mainloop_loop_count % MAINLOOP_SIXTY_SECOND_INTERVAL == 0 ){
+
+					// update considered peers every minute - any that come along or get disconnected
+					// will be processed later or ignored
+				
+				goal = 0;
+				
+				ArrayList<PEPeerTransport> transferring = new ArrayList<>(peer_transports.size());
+				
+				for( PEPeerTransport transport: peer_transports ){
+					
+					if ( transport.getPeerState() == PEPeer.TRANSFERING ){
+						
+						transferring.add( transport );
+					}
+				}
+				
+				sweepList = transferring;
+				
+			}else{
+				
+				goal = (int) Math.floor(percentage * sweepList.size());
+			}
+
+			for (int i = nextPEXSweepIndex; i < goal && i < sweepList.size(); i++){
+				
+				// System.out.println(mainloop_loop_count+" %:"+percentage+"
+				// start:"+nextPEXSweepIndex+" current:"+i+" <"+goal+"/"+sweepList.size());
+				
+				PEPeerTransport peer = sweepList.get(i);
+				
+				peer.updatePeerExchange();
+			}
+	
+			nextPEXSweepIndex = goal;
 		}
 
-		for(int i = nextPEXSweepIndex; i < goal && i < sweepList.size(); i++){
-			// System.out.println(mainloop_loop_count+" %:"+percentage+"
-			// start:"+nextPEXSweepIndex+" current:"+i+" <"+goal+"/"+sweepList.size());
-			final PEPeerTransport peer = sweepList.get(i);
-			peer.updatePeerExchange();
-		}
+		if ( mainloop_loop_count % MAINLOOP_SIXTY_SECOND_INTERVAL == 0 ){
 
-		nextPEXSweepIndex = goal;
+			hp_bloom = null;
 
-		// kick duplicate outbound connections - some users experience increasing
-		// numbers of connections to the same IP address sitting there in a 'connecting'
-		// state
-		// not sure of the exact cause unfortunately so adding this as a stop gap
-		// measure (parg, 2015/01/11)
-		// I have a suspicion this is caused by an outbound connection failing (possibly
-		// with TCP+uTP dual connects) and not resulting in overall disconnect
-		// as the user has a bunch of 'bind' exceptions in their log
+			long now = SystemTime.getMonotonousTime();
+			
+			synchronized( outbound_ignore_addresses ){
 
-		if(mainloop_loop_count % MAINLOOP_SIXTY_SECOND_INTERVAL == 0){
+				Iterator<Long> it =  connect_fail_history.values().iterator();
+				
+				while( it.hasNext()){
+					
+					long t = it.next();
+					
+					if ( now - t > RECONNECT_SEEDING_MIN ){
+						
+						it.remove();
+					}
+				}
+			}
+			
+				// kick duplicate outbound connections - some users experience increasing
+				// numbers of connections to the same IP address sitting there in a 'connecting'
+				// state
+				// not sure of the exact cause unfortunately so adding this as a stop gap
+				// measure (parg, 2015/01/11)
+				// I have a suspicion this is caused by an outbound connection failing (possibly
+				// with TCP+uTP dual connects) and not resulting in overall disconnect
+				// as the user has a bunch of 'bind' exceptions in their log
 
-			List<PEPeerTransport> peer_transports = peer_transports_cow;
-
-			if(peer_transports.size() > 1){
+			if ( peer_transports.size() > 1){
 
 				Map<String, List<PEPeerTransport>> peer_map = new HashMap<>();
 
@@ -5142,7 +5652,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 					if(peer.getPeerState() == PEPeer.CONNECTING
 							&& peer.getConnectionState() == PEPeerTransport.CONNECTION_CONNECTING
-							&& peer.getLastMessageSentTime() != 0){
+							&& peer.getLastMessageSentTimeMono() >= 0){
 
 						String key = peer.getIp() + ":" + peer.getPort();
 
@@ -5163,16 +5673,17 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 					if(list.size() >= 2){
 
-						long newest_time = Long.MIN_VALUE;
+						long newest_time_mono = Long.MIN_VALUE;
 						PEPeerTransport newest_peer = null;
 
 						for(PEPeerTransport peer : list){
 
-							long last_sent = peer.getLastMessageSentTime();
+							long last_sent_mono = peer.getLastMessageSentTimeMono();
 
-							if(last_sent > newest_time){
+							if (last_sent_mono > newest_time_mono){
 
-								newest_time = last_sent;
+								newest_time_mono = last_sent_mono;
+								
 								newest_peer = peer;
 							}
 						}
@@ -5184,7 +5695,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 								if(peer.getPeerState() == PEPeer.CONNECTING
 										&& peer.getConnectionState() == PEPeerTransport.CONNECTION_CONNECTING){
 
-									closeAndRemovePeer(peer, "Removing old duplicate connection", false);
+									closeAndRemovePeer(peer, "Removing old duplicate connection", Transport.CR_DUPLICATE_PEER_ID, false);
 								}
 							}
 						}
@@ -5194,17 +5705,99 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 	}
 
+	@Override
+	public boolean
+	isHolePunchOperationOK(
+		PEPeerTransport	peer,
+		boolean			is_connect )
+	{
+		BloomFilter bf = hp_bloom;
+		
+		if ( bf == null ){
+			
+			bf = hp_bloom = BloomFilterFactory.createAddRemove4Bit( HP_BLOOM_FILTER_SIZE);
+		}
+		
+		if ( bf.add( peer.getIp().getBytes()) > ( is_connect?3:5 )){
+			
+			return( false );
+		}
+		
+		return( true );
+	}
+	
+	private void 
+	doTCPConnectionChecks(
+		int number )
+	{
+		try{
+			peer_transports_mon.enter();
+			
+			//System.out.println( "hp=" + pending_hole_punches.size());
+			
+			if ( pending_hole_punches.size() == 0 ){
+
+				return;
+			}
+			
+			List<PEPeerTransport> available = new ArrayList<>( peer_transports_cow.size());
+			
+			for ( PEPeerTransport peer: peer_transports_cow ){
+				
+				if ( peer.canSendHolePunch()){
+					
+					available.add( peer );
+				}
+			}
+			
+			if ( available.isEmpty()){
+				
+				return;
+			}
+			
+			Collections.shuffle( available );
+			
+			int a_pos = 0;
+			
+			int	to_do = Math.min( number, seeding_mode?2:5 );
+			
+			for ( Iterator<Object[]> it=pending_hole_punches.values().iterator();it.hasNext()&&a_pos<available.size()&&to_do>0;){
+				
+				Object[] entry = it.next();
+				
+				it.remove();
+				
+				String	ip 		= (String)entry[0];
+				int		port	= (Integer)entry[1];
+				
+				PEPeerTransport peer = available.get( a_pos++ );
+				
+				try{
+					peer.sendHolePunch( InetAddress.getByName( ip ), port );
+					
+				}catch( Throwable e ){
+					
+				}
+				
+				to_do--;
+			}
+		}finally{
+
+			peer_transports_mon.exit();
+		}
+	}
+	
 	private void doUDPConnectionChecks(int number){
 		List<PEPeerTransport> new_connections = null;
 
 		try{
 			peer_transports_mon.enter();
 
-			long now = SystemTime.getCurrentTime();
+			long mono_now = SystemTime.getMonotonousTime();
 
-			if(udp_reconnects.size() > 0 && now - last_udp_reconnect >= UDP_RECONNECT_MIN_MILLIS){
+			if (udp_reconnects.size() > 0 && mono_now - last_udp_reconnect_mono >= UDP_RECONNECT_MIN_MILLIS){
 
-				last_udp_reconnect = now;
+				last_udp_reconnect_mono = mono_now;
 
 				Iterator<PEPeerTransport> it = udp_reconnects.values().iterator();
 
@@ -5281,46 +5874,54 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 				to_do--;
 
-				PeerNATTraverser.getSingleton().create(this,
-						new InetSocketAddress(peer_ip, peer.getPeerItemIdentity().getUDPPort()),
-						new PeerNATTraversalAdapter(){
-							private boolean done;
-
-							@Override
-							public void success(InetSocketAddress target){
-								complete();
-
-								PEPeerTransport newTransport = peer.reconnect(true, false);
-
-								if(newTransport != null){
-
-									newTransport.setData(PEER_NAT_TRAVERSE_DONE_KEY, "");
-								}
-							}
-
-							@Override
-							public void failed(){
-								complete();
-							}
-
-							protected void complete(){
-								try{
-									peer_transports_mon.enter();
-
-									if(!done){
-
-										done = true;
-
-										udp_traversal_count--;
+				if ( isPeerSourceEnabled( PEPeerSource.PS_HOLE_PUNCH )){
+					
+					PeerNATTraverser.getSingleton().create(this,
+							new InetSocketAddress(peer_ip, peer.getPeerItemIdentity().getUDPPort()),
+							new PeerNATTraversalAdapter(){
+								private boolean done;
+	
+								@Override
+								public void success(InetSocketAddress target){
+									complete();
+	
+									Map userData = new HashMap();
+									
+									userData.put( Peer.PR_PEER_SOURCE, PEPeerSource.PS_HOLE_PUNCH );
+									userData.put( Peer.PR_PRIORITY_CONNECTION, Boolean.TRUE);
+									
+									PEPeerTransport newTransport = peer.reconnect( true, false, userData );
+	
+									if(newTransport != null){
+	
+										newTransport.setData(PEER_NAT_TRAVERSE_DONE_KEY, "");
 									}
-								}finally{
-
-									peer_transports_mon.exit();
 								}
-							}
-						});
-
-				udp_traversal_count++;
+	
+								@Override
+								public void failed(){
+									complete();
+								}
+	
+								protected void complete(){
+									try{
+										peer_transports_mon.enter();
+	
+										if(!done){
+	
+											done = true;
+	
+											udp_traversal_count--;
+										}
+									}finally{
+	
+										peer_transports_mon.exit();
+									}
+								}
+							});
+	
+					udp_traversal_count++;
+				}
 			}
 		}finally{
 
@@ -5333,7 +5934,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 					PEPeerTransport peer_item = new_connections.get(i);
 
 					// don't call when holding monitor - deadlock potential
-					peer_item.reconnect(true, false);
+					peer_item.reconnect(true, false, null);
 
 				}
 			}
@@ -5391,14 +5992,18 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		int lan_peer_count = 0;
 
+		long mono_now = SystemTime.getMonotonousTime();
+		
 		for(int i = 0; i < peer_transports.size(); i++){
 
 			final PEPeerTransport peer = peer_transports.get(i);
 
 			if(peer.getConnectionState() == PEPeerTransport.CONNECTION_FULLY_ESTABLISHED){
 
-				final long timeSinceConnection = peer.getTimeSinceConnectionEstablished();
-				final long timeSinceSentData = peer.getTimeSinceLastDataMessageSent();
+				long timeConnected = peer.getConnectionEstablishedMonoTime();
+				
+				final long timeSinceConnection	= timeConnected<0?0:(mono_now-timeConnected);
+				final long timeSinceSentData	= peer.getTimeSinceLastDataMessageSent();
 
 				activeConnectionTimes.add(timeSinceConnection);
 
@@ -5597,28 +6202,28 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			// if we have a seed limit, kick seeds in preference to non-seeds
 
 			if(getMaxSeedConnections(network) > 0 && max_seed_transport != null && max_time > 5 * 60 * 1000){
-				closeAndRemovePeer(max_seed_transport, "timed out by doOptimisticDisconnect()", true);
+				closeAndRemovePeer(max_seed_transport, "timed out by doOptimisticDisconnect()", Transport.CR_PEER_CHURN, true);
 				optimisticDisconnectCount++;
 				return true;
 			}
 
 			if(max_transport != null && max_time > 5 * 60 * 1000){ // ensure a 5 min minimum test time
-				closeAndRemovePeer(max_transport, "timed out by doOptimisticDisconnect()", true);
+				closeAndRemovePeer(max_transport, "timed out by doOptimisticDisconnect()", Transport.CR_PEER_CHURN, true);
 				optimisticDisconnectCount++;
 				return true;
 			}
 
-			// kick worst peers to accomodate lan peer
+			// kick worst peers to accommodate lan peer
 
 			if(pending_lan_local_peer && lan_peer_count < LAN_PEER_MAX){
-				closeAndRemovePeer(max_transport, "making space for LAN peer in doOptimisticDisconnect()", true);
+				closeAndRemovePeer(max_transport, "making space for LAN peer in doOptimisticDisconnect()", Transport.CR_PEER_CHURN, true);
 				optimisticDisconnectCount++;
 				return true;
 			}
 
 			if(force){
 
-				closeAndRemovePeer(max_transport, "force removal of worst peer in doOptimisticDisconnect()", true);
+				closeAndRemovePeer(max_transport, "force removal of worst peer in doOptimisticDisconnect()", Transport.CR_PEER_CHURN, true);
 
 				return true;
 			}
@@ -5628,7 +6233,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 				PEPeerTransport pt = peer_transports.get(new Random().nextInt(peer_transports.size()));
 
-				closeAndRemovePeer(pt, "force removal of random peer in doOptimisticDisconnect()", true);
+				closeAndRemovePeer(pt, "force removal of random peer in doOptimisticDisconnect()", Transport.CR_PEER_CHURN, true);
 
 				return true;
 			}
@@ -5705,7 +6310,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 				PEPeerTransport peer = it.next();
 
 				if(filter.isInRange(peer.getIp(), name, hash)){
-					peer.closeConnection("IP address blocked by filters");
+					peer.closeConnection("IP address blocked by filters",Transport.CR_IP_BLOCKED);
 				}
 			}catch(Exception e){
 			}
@@ -5720,19 +6325,87 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 	}
 
+	private boolean
+	disconnectSeedsWhenSeeding()
+	{
+		if ( hidden_piece < 0 ){
+			
+			return( global_disconnect_seeds_when_seeding );
+			
+		}else{
+			
+			return( global_hide_a_piece_ds );
+		}
+	}
+	
+	private void
+	initHiddenPiece()
+	{
+		global_hide_a_piece_cached = global_hide_a_piece;
+		
+		int new_hp;
+		
+		if ( local_hide_a_piece_opt==null?global_hide_a_piece_cached:local_hide_a_piece_opt ){
+			
+			if ( hidden_piece == -1 ){
+				
+				new_hp = (int)(Math.abs(adapter.getRandomSeed()) % _nbPieces);
+				
+			}else{
+				
+				new_hp = hidden_piece;
+			}
+		}else{
+			
+			new_hp = -1;
+		}
+		
+		if ( new_hp != hidden_piece ){
+			
+			hidden_piece = new_hp;
+			
+			removeAllPeers( "Hidden piece changed", Transport.CR_NONE );
+		}
+	}
+	
 	@Override
-	public long getHiddenBytes(){
-		if(hidden_piece < 0){
+	public void
+	setMaskDownloadCompletion(
+		Boolean	mask )
+	{
+		if ( mask == null && local_hide_a_piece_opt == null ){
+			
+			return;
+			
+		}else if ( mask == null || local_hide_a_piece_opt == null ){
+			
+		}else if ( mask == local_hide_a_piece_opt ){
+			
+			return;
+		}
+		
+		local_hide_a_piece_opt = mask;
+				
+		initHiddenPiece();
+	}
+	
+	@Override
+	public long 
+	getHiddenBytes()
+	{
+		if ( hidden_piece < 0 ){
 
-			return(0);
+			return( 0 );
 		}
 
-		return(dm_pieces[hidden_piece].getLength());
+		return( dm_pieces[hidden_piece].getLength());
 	}
 
 	@Override
-	public int getHiddenPiece(){
-		return(hidden_piece);
+	public int 
+	getHiddenPiece()
+	{
+		return( hidden_piece );
 	}
 
 	@Override
@@ -5916,7 +6589,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	@Override
 	public boolean hasPotentialConnections(){
-		return(pending_nat_traversals.size() + peer_database.getDiscoveredPeerCount() > 0);
+		return(pending_nat_traversals.size() + pending_hole_punches.size() + peer_database.getDiscoveredPeerCount() > 0);
 	}
 
 	@Override
@@ -6099,6 +6772,86 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 	}
 
+	private void
+	handleFilePriorityChanged()
+	{
+		synchronized( outbound_ignore_addresses ){
+
+			Iterator<Integer> it =  outbound_ignore_addresses.values().iterator();
+			
+			while( it.hasNext()){
+				
+				int rc = it.next();
+				
+				if ( rc == Transport.CR_NOT_INTERESTED_UPLOAD_ONLY || rc == Transport.CR_UPLOAD_TO_UPLOAD ){
+					
+					it.remove();
+				}
+			}
+		}
+	}
+	
+	@Override
+	public void
+	handleCloseReason(
+		PEPeerTransport		peer,
+		boolean				reason_outgoing,
+		int					reason )
+	{
+		if (	reason == Transport.CR_UPLOAD_TO_UPLOAD || 
+				reason == Transport.CR_NOT_INTERESTED_UPLOAD_ONLY ||
+				( !reason_outgoing && reason == Transport.CR_IP_BLOCKED ) ||		// we handle outgoing already
+				( !reason_outgoing && reason == Transport.CR_PORT_BLOCKED )	||		// we handle outgoing already
+				( reason_outgoing && reason == Transport.CR_SELF_CONNECTION ) ||	// we're both ends, do the one we know to be true
+				( reason == Transport.CR_INTERNAL_CONNECT_FAILED )){
+			
+			NetworkConnectionBase connection = peer.getNetworkConnection();
+			
+			if ( connection != null ){
+						
+				InetSocketAddress address = connection.getEndpoint().getNotionalAddress();
+								
+				PeerCacheKey key;
+				
+				if ( address.isUnresolved()){
+				
+					key = new PeerNonPublicCacheKey( address.getHostName());
+					
+				}else{
+					
+					key = new PeerResolvedCacheKey( address.getAddress().getAddress(), peer.getTCPListenPort());
+				}
+				
+				if ( reason == Transport.CR_INTERNAL_CONNECT_FAILED ){
+					
+					synchronized( outbound_ignore_addresses ){
+						
+						connect_fail_history.put( key, SystemTime.getMonotonousTime());
+					}
+				}else{
+					
+					InetAddress ipv6 = peer.getAlternativeIPv6();
+
+					synchronized( outbound_ignore_addresses ){
+						
+						Integer i_rc = Integer.valueOf( reason );
+						
+						outbound_ignore_addresses.put( key, i_rc );
+							
+						if ( ipv6 != null ){
+							
+							PeerCacheKey keyv6 = key = new PeerResolvedCacheKey( ipv6.getAddress(), peer.getTCPListenPort());
+							
+							outbound_ignore_addresses.put( keyv6, i_rc );
+						}
+					
+						//  System.out.println( "peer: " + host + ":" + port + ", " + ipv6 + ", " + reason + ", " + reason_outgoing );
+					}
+				}
+			}
+		}
+	}
+	
 	@Override
 	public PEPeerControlHashHandler getHashHandler(){
 		return(hash_handler);
@@ -6151,6 +6904,46 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		if(active_udp.length() > 0){
 
 			writer.println("    active_udp=" + active_udp);
+		}
+
+		writer.println("    tcp_hp=" + pending_hole_punches.size());
+
+		synchronized( outbound_ignore_addresses ){
+
+			writer.println("  Outbound Ignores: " + outbound_ignore_addresses.size());
+
+			try{
+				writer.indent();
+	
+				for ( Map.Entry<PeerCacheKey,Integer> entry: outbound_ignore_addresses.entrySet()){
+					
+					writer.println( entry.getKey().getString() + " - " + entry.getValue());
+				}
+	
+			}finally{
+	
+				writer.exdent();
+			}
+		}
+		
+		synchronized( outbound_ignore_addresses ){
+
+			writer.println("  Connect Fails: " + connect_fail_history.size());
+
+			long now = SystemTime.getMonotonousTime();
+			
+			try{
+				writer.indent();
+	
+				for ( Map.Entry<PeerCacheKey,Long> entry: connect_fail_history.entrySet()){
+					
+					writer.println( entry.getKey().getString() + " - " + ( now - entry.getValue()));
+				}
+	
+			}finally{
+	
+				writer.exdent();
+			}
 		}
 
 		if(!seeding_mode){
@@ -6392,30 +7185,34 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		public String getIp(){
 			String[] nets = adapter.getEnabledNetworks();
 
-			String pub_str = "";
-			String i2p_str = null;
+			String result = "";
+			
+			for ( String net : nets ){
 
-			for(String net : nets){
+				String str = "";
+				
+				if ( net == AENetworkClassifier.AT_PUBLIC ){
 
-				if(net == AENetworkClassifier.AT_PUBLIC){
+					InetAddress ia = NetworkAdmin.getSingleton().getDefaultPublicAddress( true );
 
-					InetAddress ia = NetworkAdmin.getSingleton().getDefaultPublicAddress();
+					str = ia == null ? "127.0.0.1" : ia.getHostAddress();
 
-					pub_str = ia == null ? "127.0.0.1" : ia.getHostAddress();
-
-				}else if(net == AENetworkClassifier.AT_I2P){
-
-					i2p_str = "local.i2p";
+				}else{
+					
+					str = net;
+				}
+				
+				if ( result.isEmpty()){
+					
+					result = str;
+					
+				}else{
+					
+					result += "; " + str;
 				}
 			}
 
-			String str = pub_str;
-
-			if(i2p_str != null){
-				str += (str.isEmpty() ? "" : "; ") + i2p_str;
-			}
-
-			return(str);
+			return(result );
 		}
 
 		public InetAddress getAlternativeIPv6(){
@@ -6684,14 +7481,14 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			return(outgoing_requested_pieces);
 		}
 
-		public int getPercentDoneOfCurrentIncomingRequest(){
-			return(0);
+		public int[] getCurrentIncomingRequestProgress(){
+			return(null);
 		}
 
-		public int getPercentDoneOfCurrentOutgoingRequest(){
-			return(0);
+		public int[] getCurrentOutgoingRequestProgress(){
+			return(null);
 		}
-
+		
 		public long getBytesRemaining(){
 			return(disk_mgr.getRemaining());
 		}
@@ -6699,8 +7496,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		public void setSuspendedLazyBitFieldEnabled(boolean enable){
 		}
 
-		public long getTimeSinceConnectionEstablished(){
-			return(SystemTime.getMonotonousTime() - _timeStarted_mono);
+		public long getConnectionEstablishedMonoTime(){
+			return(_timeStarted_mono);
 		}
 
 		public void setLastPiece(int i){
@@ -6789,6 +7586,12 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		public void setTaggableTransientProperty(String key, Object value){
 		}
 
+		@Override
+		public PeerDescriptor 
+		getDescriptor()
+		{
+			return( PeerItemFactory.getDescriptor( this ));
+		}
 	}
 
 	private class MyPeerStats implements PEPeerStats{
@@ -6926,6 +7729,160 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 
 		public void permittedReceiveBytesUsed(int num){
+		}
+	}
+	
+	static interface
+	PeerCacheKey
+	{
+		String
+		getString();
+	}
+	
+	static class
+	PeerNonPublicCacheKey
+		implements PeerCacheKey
+	{
+		final String key;
+		
+		PeerNonPublicCacheKey(
+			String	address )
+		{
+			if ( address.length() > 16 ){
+				
+				key = new String( address.substring(0, 16 ));
+				
+			}else{
+				
+				key = address;
+			}
+		}
+		
+		@Override
+		public String 
+		getString()
+		{
+			return( key );
+		}
+		
+		@Override
+		public int 
+		hashCode()
+		{
+			return( key.hashCode());
+		}
+		
+		@Override
+		public boolean 
+		equals(
+			Object obj )
+		{
+			if ( obj instanceof PeerNonPublicCacheKey ){
+			
+				return( key.equals(((PeerNonPublicCacheKey)obj).key ));
+				
+			}else{
+				
+				return( false );
+			}
+		}
+	}
+	
+	static class
+	PeerUnresolvedCacheKey
+		implements PeerCacheKey
+	{
+		final String key;
+		
+		PeerUnresolvedCacheKey(
+			String	address,
+			int		port )
+		{
+			key = address + ":" + port;
+		}
+		
+		@Override
+		public String 
+		getString()
+		{
+			return( key );
+		}
+		
+		@Override
+		public int 
+		hashCode()
+		{
+			return( key.hashCode());
+		}
+		
+		@Override
+		public boolean 
+		equals(
+			Object obj )
+		{
+			if ( obj instanceof PeerUnresolvedCacheKey ){
+			
+				return( key.equals(((PeerUnresolvedCacheKey)obj).key ));
+				
+			}else{
+				
+				return( false );
+			}
+		}	
+	}
+	
+	static class
+	PeerResolvedCacheKey
+		extends HashWrapper
+		implements PeerCacheKey
+	{
+		PeerResolvedCacheKey(
+			byte[]		bytes,
+			int			port )
+		{
+			super( addPort( bytes, port ));
+		}
+		
+		@Override
+		public String 
+		getString()
+		{
+			byte[] bytes = getBytes();
+			
+			int len = bytes.length;
+			
+			byte[] address = new byte[len-2];
+			
+			System.arraycopy(bytes, 0, address, 0, address.length );
+			
+			try{			
+				InetAddress ia = InetAddress.getByAddress( address );
+				
+				int port = ( bytes[len-2]<<8 )&0xff00 | bytes[len-1]&0xff;
+				
+				return( ia.getHostAddress() + ":" + port );
+				
+			}catch( Throwable e ){
+				
+				return( ByteFormatter.encodeString(bytes));
+			}
+		}
+		
+		static byte[]
+		addPort(
+			byte[]		address,
+			int			port )
+		{
+			int	len = address.length;
+			
+			byte[] temp = new byte[len+2];
+			
+			System.arraycopy( address, 0, temp, 0, len );
+			
+			temp[len] 	= (byte)( port>>8 );
+			temp[len+1] = (byte)( port );
+			
+			return( temp );
 		}
 	}
 }

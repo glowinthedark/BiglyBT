@@ -23,8 +23,8 @@ package com.biglybt.ui.swt.views;
 import java.io.File;
 import java.net.URL;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
@@ -33,6 +33,7 @@ import org.eclipse.swt.events.*;
 import org.eclipse.swt.graphics.*;
 import org.eclipse.swt.layout.*;
 import org.eclipse.swt.widgets.*;
+import org.json.simple.JSONObject;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.category.Category;
@@ -73,10 +74,9 @@ import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.pifimpl.UISWTViewCore;
 import com.biglybt.ui.swt.utils.*;
-import com.biglybt.ui.swt.views.piece.PieceInfoView;
-import com.biglybt.ui.swt.views.table.TableViewSWT;
-import com.biglybt.ui.swt.views.table.TableViewSWTMenuFillListener;
-import com.biglybt.ui.swt.views.table.TableViewSWTPanelCreator;
+import com.biglybt.ui.swt.views.configsections.ConfigSectionInterfaceTablesSWT;
+import com.biglybt.ui.swt.views.piece.PieceMapView;
+import com.biglybt.ui.swt.views.table.*;
 import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
 import com.biglybt.ui.swt.views.table.impl.TableViewSWT_TabsCommon;
 import com.biglybt.ui.swt.views.table.impl.TableViewTab;
@@ -86,6 +86,8 @@ import com.biglybt.ui.swt.views.utils.ManagerUtils;
 import com.biglybt.ui.swt.views.utils.TagUIUtils;
 import com.biglybt.ui.swt.widgets.TagCanvas;
 import com.biglybt.ui.swt.widgets.TagCanvas.TagButtonTrigger;
+import com.biglybt.util.JSONUtils;
+import com.biglybt.ui.swt.widgets.TagPainter;
 
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.DownloadTypeComplete;
@@ -119,7 +121,7 @@ public class MyTorrentsView
                   TableSelectionListener,
                   TableViewSWTMenuFillListener,
                   TableRefreshListener,
-                  TableViewFilterCheck.TableViewFilterCheckEx<DownloadManager>,
+                  TableViewFilterCheck<DownloadManager>,
                   TableRowRefreshListener,
                   TableCountChangeListener,
                   TableExpansionChangeListener,
@@ -128,7 +130,12 @@ public class MyTorrentsView
 {
 	private static final LogIDs LOGID = LogIDs.GUI;
 
+	private static final Object KEY_DM_REMOVED_FROM_COMPLETE_TABLE_TIME = new Object();
+	
 	private static final AsyncDispatcher	dispatcher = new AsyncDispatcher();
+	
+	private static final TagManager tagManager = TagManagerFactory.getTagManager();
+
 	
 	private Core core;
 
@@ -150,36 +157,7 @@ public class MyTorrentsView
 
 				DownloadManager dm = event.getDownload();
 
-				if ( isOurDownloadManager( dm )){
-
-					TableRowCore row = tv.getRow( dm );
-
-					if ( row != null ){
-
-						TableRowCore[] existing = tv.getSelectedRows();
-
-						if ( existing != null ){
-
-							for ( TableRowCore e: existing ){
-
-								if ( e != row ){
-
-									e.setSelected( false );
-								}
-							}
-						}
-
-						if ( !row.isSelected()){
-
-							row.setSelected( true );
-						}
-						
-						if ( !row.isVisible()){
-								
-							tv.showRow( row );
-						}
-					}
-				}
+				requestAttention( dm );
 			}
 		}
   	};
@@ -187,12 +165,13 @@ public class MyTorrentsView
   private boolean	supportsTabs;
   private Composite cTablePanel;
   private Font fontButton = null;
-  protected Composite cCategoriesAndTags;
+  protected Composite cTitleCategoriesAndTags;
   protected BubbleTextBox filterBox = null;
-  private Menu	tableHeaderMenu = null;
   private TimerEventPeriodic	txtFilterUpdateEvent;
 
-
+  private String		lastSearchConstraintString;
+  private TagConstraint	lastSearchConstraint;
+  
   private Object	currentTagsLock = new Object();
   private Tag[]		_currentTags;
   private List<Tag>	allTags;
@@ -209,6 +188,7 @@ public class MyTorrentsView
 
 	private ViewUtils.ViewTitleExtraInfo	vtxi;
 	
+	private boolean	showTableTitle;
 	protected boolean neverShowTagButtons;
 	protected boolean neverShowCatButtons;
 	private boolean	showCatButtons;
@@ -219,6 +199,7 @@ public class MyTorrentsView
 	private Menu oldMenu;
 
 	private boolean isCompletedOnly;
+	private boolean isIncompletedOnly;
 
 	private Class<?> forDataSourceType;
 
@@ -243,14 +224,20 @@ public class MyTorrentsView
 	private volatile int[]	dmCounts = new int[3];
 	private AtomicInteger	dmCountMutations	= new AtomicInteger(0);
 	private volatile int	dmCountLast			= -1;
+
+	private final Set<TableRowCore> listRowsToRefresh = new HashSet<>();
+
+	private final Object 	createdLock = new Object();
+	private boolean			created;
+	private DownloadManager	pendingAttention;
 	
 	public MyTorrentsView( boolean supportsTabs ) {
 		super("MyTorrentsView");
 		this.supportsTabs = supportsTabs;
 	}
 
-	public MyTorrentsView(String propertiesPrefix, boolean supportsTabs) {
-		super(propertiesPrefix);
+	public MyTorrentsView(String textPrefixID, boolean supportsTabs) {
+		super(textPrefixID);
 		this.supportsTabs = supportsTabs;
 	}
 
@@ -267,14 +254,19 @@ public class MyTorrentsView
   		String				tableID,
   		boolean 			isSeedingView,
   		TableColumnCore[]	basicItems,
-		  BubbleTextBox 				filterBox,
-  		Composite 			cCatsAndTags,
+		BubbleTextBox 		filterBox,
   		boolean				supportsTabs )
   {
 		super("MyTorrentsView");
 		this.filterBox = filterBox;
-		filterBox.setTooltip(MessageText.getString("MyTorrentsView.filter.tooltip"));
-		this.cCategoriesAndTags = cCatsAndTags;
+		
+		String tooltip = MessageText.getString("MyTorrentsView.filter.tooltip");
+		
+		if ( Utils.getUserMode() > 0 ){
+			tooltip += "\n" + MessageText.getString( "search.tt.tag.constraint" );
+		}
+		
+		filterBox.setTooltip(tooltip);
 		this.supportsTabs = supportsTabs;
 		init(core, tableID, isSeedingView
 				? DownloadTypeComplete.class : DownloadTypeIncomplete.class, basicItems);
@@ -294,11 +286,17 @@ public class MyTorrentsView
     	oldMenu = tableComposite.getMenu();
     	Menu menu = new Menu(tableComposite);
     	tableComposite.setMenu(menu);
+			tableComposite.addMenuDetectListener(
+					e -> menu.setData("MenuSource", e.detail));
     	menu.addMenuListener(new MenuListener() {
 
   			@Override
 			  public void menuShown(MenuEvent e) {
-  				if (!showMyOwnMenu(e)) {
+				  Object oMenuSource = menu.getData("MenuSource");
+				  int menuSource = (oMenuSource instanceof Number)
+					  ? ((Number) oMenuSource).intValue() : SWT.MENU_MOUSE;
+				  
+  				if (!showMyOwnMenu(e, menuSource != SWT.MENU_KEYBOARD)) {
   					oldMenu.setVisible(true);
   				}
   			}
@@ -311,12 +309,12 @@ public class MyTorrentsView
   	super.tableViewTabInitComplete();
   }
 
-	protected boolean showMyOwnMenu(MenuEvent e) {
+	protected boolean showMyOwnMenu(MenuEvent e, boolean isMouseEvent) {
 		Display d = e.widget.getDisplay();
-		if (d == null)
+		if (d.isDisposed()) {
 			return false;
+		}
 
-		Object[] dataSources = tv.getSelectedDataSources(true);
 		final DownloadManager[] dms = getSelectedDownloads();
 
 		boolean hasSelection = (dms.length > 0);
@@ -324,21 +322,37 @@ public class MyTorrentsView
 		if (!hasSelection) {
 			return false;
 		}
-		Point pt = e.display.getCursorLocation();
-		pt = tv.getTableComposite().toControl(pt.x, pt.y);
+		Point cursorLocation = e.display.getCursorLocation();
+		Composite tableComposite = tv.getTableComposite();
+		Point pt = tableComposite.toControl(cursorLocation.x, cursorLocation.y);
 		TableColumnCore column = tv.getTableColumnByOffset(pt.x);
 
-		boolean isSeedingView = Download.class.equals(forDataSourceType) || DownloadTypeComplete.class.equals(forDataSourceType);
+		Point locationOnDiplay = new Point(cursorLocation.x - 5,
+				cursorLocation.y - 16);
+		if (!isMouseEvent) {
+			TableRowPainted focusedRow = (TableRowPainted) tv.getFocusedRow();
+			if (focusedRow != null) {
+				Rectangle bounds = focusedRow.getDrawBounds();
+				if (!bounds.contains(pt)) {
+					locationOnDiplay = tableComposite.toDisplay(
+							new Point(bounds.x, bounds.y + bounds.height - 1));
+				}
+			}
+		}
+
+		boolean isSeedingView = Download.class.equals(forDataSourceType)
+				|| DownloadTypeComplete.class.equals(forDataSourceType);
 		new TorrentMenuFancy(tv, isSeedingView, getComposite().getShell(), dms,
-				tv.getTableID()).showMenu(column, oldMenu);
+				tv.getTableID()).showMenu(locationOnDiplay, column, oldMenu);
 		return true;
 	}
 
-	public void init(Core _core, String tableID,
-	                 Class<?> forDataSourceType, TableColumnCore[] basicItems) {
+	public TableViewSWT<DownloadManager> init(Core _core, String tableID,
+			Class<?> _forDataSourceType, TableColumnCore[] basicItems) {
 
-		this.forDataSourceType = forDataSourceType;
-		this.isCompletedOnly = forDataSourceType.equals(DownloadTypeComplete.class);
+		forDataSourceType 	= _forDataSourceType;
+		isCompletedOnly 	= forDataSourceType.equals(DownloadTypeComplete.class);
+		isIncompletedOnly 	= forDataSourceType.equals(DownloadTypeIncomplete.class);
 
     tv = createTableView(forDataSourceType, tableID, basicItems);
 
@@ -420,12 +434,12 @@ public class MyTorrentsView
 						new TagGroupListener(){
 							
 							@Override
-							public void tagRemoved(Tag tag){
+							public void tagRemoved(TagGroup group, Tag tag){
 								setCurrentTagGroup( tg );
 							}
 							
 							@Override
-							public void tagAdded(Tag tag){
+							public void tagAdded(TagGroup group, Tag tag){
 								setCurrentTagGroup( tg );
 							}
 						}, false );
@@ -436,6 +450,8 @@ public class MyTorrentsView
 				}
 			}
 		}, true);
+
+    return tv;
 	}
 
 	@Override
@@ -453,8 +469,10 @@ public class MyTorrentsView
   protected void 
   tableViewInitialized() 
 	{
+	  	showTableTitle = COConfigurationManager.getBooleanParameter( "Library.ShowTitle" );
+	  
 		tv.addKeyListener(this);
-
+	
 		createTabs();
 
 		if (filterBox == null) {
@@ -544,11 +562,14 @@ public class MyTorrentsView
 			    COConfigurationManager.addAndFireParameterListeners(new String[] {
 						"DND Always In Incomplete",
 						"User Mode",
+						"Library.ShowTitle", 
 						"Library.ShowCatButtons", 
+						"Library.ShowCatButtons.CompOnly",
 						"Library.ShowTagButtons", 
 						"Library.ShowTagButtons.CompOnly",
 						"Library.ShowTagButtons.FiltersOnly",
 						"Library.ShowTagButtons.ImageOverride",
+						"Library.ShowTagButtons.Align",
 						"Library.ShowTagButtons.Inclusive",
 					}, this);
 	
@@ -561,7 +582,6 @@ public class MyTorrentsView
 				    }
 			    }
 			    
-			    TagManager tagManager = TagManagerFactory.getTagManager();
 			    TagType ttManual = tagManager.getTagType(TagType.TT_DOWNLOAD_MANUAL);
 			    TagType ttCat = tagManager.getTagType(TagType.TT_DOWNLOAD_CATEGORY);
 			    ttManual.addTagTypeListener(this, false);
@@ -580,6 +600,22 @@ public class MyTorrentsView
 					}
 			    tv.addDataSources(dms);
 			    tv.processDataSourceQueue();
+			    
+			    DownloadManager pa = null;
+			    
+			    synchronized( createdLock ){
+					
+			    	created = true;
+			    	
+			    	pa = pendingAttention;
+			    	
+			    	pendingAttention = null;
+				}
+			    
+			    if ( pa != null ){
+			    	
+			    	requestAttention( pa );
+			    }
 			}));
 	
     cTablePanel.layout();
@@ -588,13 +624,8 @@ public class MyTorrentsView
   private Menu
   getHeaderMenu()
   {
-	  if ( tableHeaderMenu != null ){
-
-		  return( tableHeaderMenu );
-	  }
-
 	  Composite composite = tv.getComposite();
-	  tableHeaderMenu = new Menu(composite.getShell(), SWT.POP_UP );
+	  Menu tableHeaderMenu = new Menu(composite.getShell(), SWT.POP_UP );
 
 	  MenuItem	showItem = new MenuItem( tableHeaderMenu, SWT.CASCADE );
 	  Messages.setLanguageText( showItem, "ConfigView.label.ui_switcher_button" );
@@ -614,7 +645,7 @@ public class MyTorrentsView
 					  "MyTorrentsView.showuptime", menuItemShowUptime.getSelection());
 		  }
 	  });
-
+	  
 	  // selected download rates
 
 	  final MenuItem menuItemShowRates = new MenuItem(showMenu, SWT.CHECK);
@@ -627,6 +658,20 @@ public class MyTorrentsView
 					  "MyTorrentsView.showrates", menuItemShowRates.getSelection());
 		  }
 	  });
+	  
+	  // show title
+	  
+	  final MenuItem menuItemShowTitle = new MenuItem(showMenu, SWT.CHECK);
+	  Messages.setLanguageText( menuItemShowTitle, "menu.show.title" );
+
+	  menuItemShowTitle.addSelectionListener(new SelectionAdapter() {
+		  @Override
+		  public void widgetSelected(SelectionEvent e) {
+			  COConfigurationManager.setParameter(
+					  "Library.ShowTitle", menuItemShowTitle.getSelection());
+		  }
+	  });
+
 	  // show category buttons
 
 	  final MenuItem menuItemShowCatBut = new MenuItem(showMenu, SWT.CHECK);
@@ -687,23 +732,52 @@ public class MyTorrentsView
 		  }
 	  });
 	  
+	  MenuItem menuEnableSimple;
 	  
+	  if ( Utils.isAZ3UI()){
+	  
+		  new MenuItem( tableHeaderMenu, SWT.SEPARATOR );
+	
+		  	// enable simple views
+	
+		  String rr = MessageText.getString( "ConfigView.section.security.restart.title" );
+	
+		  menuEnableSimple = new MenuItem(tableHeaderMenu, SWT.CHECK);
+	
+		  menuEnableSimple.setText( MessageText.getString( "ConfigView.section.style.EnableSimpleView" ) + " (" + rr + ")" );
+	
+		  menuEnableSimple.addSelectionListener(new SelectionAdapter() {
+			  @Override
+			  public void widgetSelected(SelectionEvent e) {
+				  COConfigurationManager.setParameter(
+						  "Library.EnableSimpleView", menuEnableSimple.getSelection());
+			  }
+		  });
+	  }else{
+		  
+		  menuEnableSimple = null;
+	  }
 	  
 	  new MenuItem( tableHeaderMenu, SWT.SEPARATOR );
 
-	  	// enable simple views
+	  MenuItem mi = new MenuItem( tableHeaderMenu, SWT.PUSH );
 
-	  String rr = MessageText.getString( "ConfigView.section.security.restart.title" );
+	  mi.setText( MessageText.getString( "menu.library.options"));
 
-	  final MenuItem menuEnableSimple = new MenuItem(tableHeaderMenu, SWT.CHECK);
+	  mi.addListener( SWT.Selection, (ev)->{
+		  UIFunctions uif = UIFunctionsManager.getUIFunctions();
 
-	  menuEnableSimple.setText( MessageText.getString( "ConfigView.section.style.EnableSimpleView" ) + " (" + rr + ")" );
+		  if ( uif != null ){
 
-	  menuEnableSimple.addSelectionListener(new SelectionAdapter() {
-		  @Override
-		  public void widgetSelected(SelectionEvent e) {
-			  COConfigurationManager.setParameter(
-					  "Library.EnableSimpleView", menuEnableSimple.getSelection());
+			  JSONObject args = new JSONObject();
+
+			  args.put( "select", ConfigSectionInterfaceTablesSWT.REFID_SECTION_LIBRARY);
+
+			  String args_str = JSONUtils.encodeToJSON( args );
+
+			  uif.getMDI().showEntryByID(
+					  MultipleDocumentInterface.SIDEBAR_SECTION_CONFIG,
+					  ConfigSectionInterfaceTablesSWT.SECTION_ID + args_str );
 		  }
 	  });
 
@@ -715,6 +789,7 @@ public class MyTorrentsView
 		  public void menuShown(MenuEvent e) {
 			  menuItemShowUptime.setSelection(COConfigurationManager.getBooleanParameter( "MyTorrentsView.showuptime" ));
 			  menuItemShowRates.setSelection(COConfigurationManager.getBooleanParameter( "MyTorrentsView.showrates" ));
+			  menuItemShowTitle.setSelection(COConfigurationManager.getBooleanParameter( "Library.ShowTitle" ));
 			  menuItemShowCatBut.setSelection(COConfigurationManager.getBooleanParameter( "Library.ShowCatButtons" ));
 			  menuItemShowTagBut.setSelection(COConfigurationManager.getBooleanParameter( "Library.ShowTagButtons" ));
 
@@ -723,8 +798,10 @@ public class MyTorrentsView
 
 			  searchHistoryEnable.setSelection(COConfigurationManager.getBooleanParameter( "table.filter.history.enabled", true ));
 
-			  menuEnableSimple.setSelection(COConfigurationManager.getBooleanParameter( "Library.EnableSimpleView" ));
-
+			  if ( menuEnableSimple != null ){
+			  
+				  menuEnableSimple.setSelection(COConfigurationManager.getBooleanParameter( "Library.EnableSimpleView" ));
+			  }
 		  }
 
 		  @Override
@@ -741,15 +818,19 @@ public class MyTorrentsView
   	Utils.execSWTThread(new SWTRunnable() {
 			@Override
 			public void runWithDisplay(Display display) {
-				Utils.disposeSWTObjects(fontButton, tableHeaderMenu);
-				fontButton		= null;
-				tableHeaderMenu = null;
+				if ( fontButton != null ){
+					FontUtils.uncache( fontButton );
+					fontButton		= null;
+				}
 			}
 		});
   	
     dispatcher.dispatch(
        	AERunnable.create(
        		()->{
+       			synchronized( createdLock ){	
+			    	created = false;
+       			}
 			    Object[] dms = globalManager.getDownloadManagers().toArray();
 			    for (int i = 0; i < dms.length; i++) {
 						DownloadManager dm = (DownloadManager) dms[i];
@@ -764,7 +845,6 @@ public class MyTorrentsView
 					}
 			    }
 			    
-			    TagManager tagManager = TagManagerFactory.getTagManager();
 			    TagType ttManual = tagManager.getTagType(TagType.TT_DOWNLOAD_MANUAL);
 			    TagType ttCat = tagManager.getTagType(TagType.TT_DOWNLOAD_CATEGORY);
 			    ttManual.removeTagTypeListener(MyTorrentsView.this);
@@ -772,14 +852,20 @@ public class MyTorrentsView
 			    TorrentUtils.removePotentialTorrentDeletionListener( this );
 			    globalManager.removeListener(this);
 			    globalManager.removeEventListener( gm_event_listener );
-				COConfigurationManager.removeParameterListener("DND Always In Incomplete", this);
-				COConfigurationManager.removeParameterListener("User Mode", this);
-			    COConfigurationManager.removeParameterListener("Library.ShowCatButtons", this);
-			    COConfigurationManager.removeParameterListener("Library.ShowTagButtons", this);
-			    COConfigurationManager.removeParameterListener("Library.ShowTagButtons.CompOnly", this);
-			    COConfigurationManager.removeParameterListener("Library.ShowTagButtons.FiltersOnly", this);
-			    COConfigurationManager.removeParameterListener("Library.ShowTagButtons.ImageOverride", this );
-			    COConfigurationManager.removeParameterListener("Library.ShowTagButtons.Inclusive", this);
+				COConfigurationManager.removeParameterListeners(
+					new String[]{
+						"DND Always In Incomplete",
+						"User Mode",
+						"Library.ShowTitle",
+						"Library.ShowCatButtons",
+						"Library.ShowCatButtons.CompOnly",
+						"Library.ShowTagButtons",
+						"Library.ShowTagButtons.CompOnly",
+						"Library.ShowTagButtons.FiltersOnly",
+						"Library.ShowTagButtons.ImageOverride",
+						"Library.ShowTagButtons.Align",
+						"Library.ShowTagButtons.Inclusive" },
+					this);
        		}));
   }
 
@@ -848,8 +934,8 @@ public class MyTorrentsView
 		Utils.execSWTThread(new AERunnable() {
 			@Override
 			public void runSupport() {
-			 	if (cCategoriesAndTags != null && !cCategoriesAndTags.isDisposed()) {
-			  		Utils.disposeComposite(cCategoriesAndTags, false);
+			 	if (cTitleCategoriesAndTags != null && !cTitleCategoriesAndTags.isDisposed()) {
+			  		Utils.disposeComposite(cTitleCategoriesAndTags, false);
 			  	}
 			}
 		});
@@ -860,6 +946,11 @@ public class MyTorrentsView
     boolean catButtonsDisabled = neverShowCatButtons;
     if ( !catButtonsDisabled){
     	catButtonsDisabled = !COConfigurationManager.getBooleanParameter( "Library.ShowCatButtons" );
+    	if ( !catButtonsDisabled ){
+    		if ( !isCompletedOnly ){
+    			catButtonsDisabled = COConfigurationManager.getBooleanParameter( "Library.ShowCatButtons.CompOnly" );
+    		}
+    	}
     }
 
     List<Tag> tags_to_show = new ArrayList<>();
@@ -880,7 +971,7 @@ public class MyTorrentsView
     	boolean filterOnly = COConfigurationManager.getBooleanParameter( "Library.ShowTagButtons.FiltersOnly" );
     	
     	ArrayList<Tag> tagsManual = new ArrayList<>(
-    			TagManagerFactory.getTagManager().getTagType(
+    			tagManager.getTagType(
     					TagType.TT_DOWNLOAD_MANUAL).getTags());
     	
     	for (Tag tag : tagsManual) {
@@ -920,7 +1011,7 @@ public class MyTorrentsView
 
     	if ( !hideAllCats ){
     		ArrayList<Tag> tagsCat = new ArrayList<>(
-    				TagManagerFactory.getTagManager().getTagType(
+    				tagManager.getTagType(
     						TagType.TT_DOWNLOAD_CATEGORY).getTags());
     		if (showAll) {
     			tags_to_show.addAll(tagsCat);
@@ -937,82 +1028,106 @@ public class MyTorrentsView
     tags_to_show = TagUtils.sortTags( tags_to_show );
 
    	buildHeaderArea();
-  	if (cCategoriesAndTags != null && !cCategoriesAndTags.isDisposed()) {
-  		Utils.disposeComposite(cCategoriesAndTags, false);
-  	}
 
-    if (tags_to_show.size() > 0 ) {
+    if ( tags_to_show.size() > 0 || showTableTitle ){
+    	
     	buildCatAndTag(tags_to_show);
+    	
     } else if (cTableParentPanel != null && !cTableParentPanel.isDisposed()) {
+    	
   		cTableParentPanel.layout();
   	}
   }
 
-	private void buildHeaderArea() {
-		if (cCategoriesAndTags == null) {
-			cCategoriesAndTags = new Composite(cTableParentPanel, SWT.NONE);
-			GridData gridData = new GridData(SWT.RIGHT, SWT.CENTER, true, false);
-			cCategoriesAndTags.setLayoutData(gridData);
-			cCategoriesAndTags.moveAbove(null);
+	private void 
+	buildHeaderArea()
+	{
+		if ( cTitleCategoriesAndTags == null ){
+			
+			cTitleCategoriesAndTags = new Composite(cTableParentPanel, SWT.NONE);
+
+			cTitleCategoriesAndTags.moveAbove(null);
+			
+			RowLayout rowLayout = new RowLayout();
+			
+			rowLayout.marginTop = 2;
+			rowLayout.marginBottom = 1;
+			rowLayout.marginLeft = 3;
+			rowLayout.marginRight = 3;
+			rowLayout.spacing = 3;
+			rowLayout.wrap = true;
+
+		    cTitleCategoriesAndTags.setLayout(rowLayout);
 
 			Composite filterParent = filterBox == null ? null : filterBox.getMainWidget().getParent();
 			if ( filterParent != null ){
 					// inherit the background of the search filter - best that can be done to make things look ok
 				Color background = filterParent.getBackground();
 				if ( background != null ){
-					cCategoriesAndTags.setBackground( background );
+					cTitleCategoriesAndTags.setBackground( background );
 					cTableParentPanel.setBackground( background );
 				}
 			}
-		}else if ( cCategoriesAndTags.isDisposed()){
+			
+			cTableParentPanel.setMenu(getHeaderMenu());
+
+		    if ( Constants.isOSX ){
+
+		    		/* bug on OSX whereby the table is allowing menu-detect events to fire both on the table itself and the composite it
+		    		 * sits on - this results in the header-area menu appearing after a menu appears for the table itself
+		    		 * Doesn't happen on 10.6.8 but observed to happen on 10.9.4
+		    		 */
+
+			    cTableParentPanel.addListener(
+						SWT.MenuDetect,
+						new Listener() {
+
+							@Override
+							public void
+							handleEvent(
+								Event event )
+							{
+								Display display = cTableParentPanel.getDisplay();
+
+								Point pp_rel = display.map( null, cTableParentPanel, event.x, event.y );
+
+								Control hit = Utils.findChild(cTableParentPanel, pp_rel.x, pp_rel.y );
+
+								event.doit = hit == cTableParentPanel;
+							}
+						});
+		    }
+
+			tv.enableFilterCheck(filterBox, this);
+			
+		}else if ( cTitleCategoriesAndTags.isDisposed()){
+			
 			return;
-		}
-
-		RowLayout rowLayout;
-
-		if (cCategoriesAndTags.getLayout() instanceof RowLayout){
-		  rowLayout = (RowLayout)cCategoriesAndTags.getLayout();
 		}else{
-	      rowLayout = new RowLayout();
-	      cCategoriesAndTags.setLayout(rowLayout);
+		  	
+		  	Utils.disposeComposite(cTitleCategoriesAndTags, false);
 		}
-		rowLayout.marginTop = 2;
-		rowLayout.marginBottom = 1;
-		rowLayout.marginLeft = 3;
-		rowLayout.marginRight = 3;
-		rowLayout.spacing = 3;
-		rowLayout.wrap = true;
-
-		cTableParentPanel.setMenu(getHeaderMenu());
-
-	    if ( Constants.isOSX ){
-
-	    		/* bug on OSX whereby the table is allowing menu-detect events to fire both on the table itself and the composite it
-	    		 * sits on - this results in the header-area menu appearing after a menu appears for the table itself
-	    		 * Doesn't happen on 10.6.8 but observed to happen on 10.9.4
-	    		 */
-
-		    cTableParentPanel.addListener(
-					SWT.MenuDetect,
-					new Listener() {
-
-						@Override
-						public void
-						handleEvent(
-							Event event )
-						{
-							Display display = cTableParentPanel.getDisplay();
-
-							Point pp_rel = display.map( null, cTableParentPanel, event.x, event.y );
-
-							Control hit = Utils.findChild(cTableParentPanel, pp_rel.x, pp_rel.y );
-
-							event.doit = hit == cTableParentPanel;
-						}
-					});
-	    }
-
-		tv.enableFilterCheck(filterBox, this);
+		
+		int align = COConfigurationManager.getIntParameter("Library.ShowTagButtons.Align" );
+		
+		int	swtAlign;
+		
+		if ( align == 0 ){
+			if ( showTableTitle ){
+				swtAlign = SWT.CENTER;
+			}else{
+				swtAlign = SWT.RIGHT;
+			}
+		}else if ( align == 1 ){
+			swtAlign = SWT.LEFT;
+		}else if ( align == 2 ){
+			swtAlign = SWT.CENTER;
+		}else{
+			swtAlign = SWT.RIGHT;
+		}
+		
+		GridData gridData = new GridData(swtAlign, SWT.CENTER, true, false);
+		cTitleCategoriesAndTags.setLayoutData(gridData);
 	}
 
   /**
@@ -1020,8 +1135,52 @@ public class MyTorrentsView
 	 */
 	private void buildCatAndTag(List<Tag> tags) {
 
-		if (tags.size() == 0 || cCategoriesAndTags == null
-				|| cCategoriesAndTags.isDisposed()) {
+		if ( cTitleCategoriesAndTags == null	|| cTitleCategoriesAndTags.isDisposed()){
+			return;
+		}
+
+		Label titleLab = null;
+		
+		if ( showTableTitle && ( isCompletedOnly || isIncompletedOnly )){
+			titleLab = new Label( cTitleCategoriesAndTags, SWT.NULL );
+			titleLab.setLayoutData( new RowData());
+			titleLab.setText( MessageText.getString( isCompletedOnly?"MySeedersView.header":"MyTorrentsView.header" ));
+			titleLab.setMenu( getHeaderMenu());	
+			if ( Utils.isAZ3UI()){
+				FontUtils.setBold( titleLab );
+			}
+			titleLab.addPaintListener((ev)->{
+				Label l = (Label)ev.widget;
+						
+				String key = "MTV:title:fg";
+				
+				if ( Colors.isBlackTextReadable( ev.gc.getBackground())){
+					
+					Color c = (Color)l.getData( key );
+					
+					if ( c != null ){
+						
+						if ( !c.isDisposed()){
+							
+							l.setForeground( c );
+						}
+					}
+					
+					l.setData( key, null );
+					
+				}else{
+					
+					if ( l.getData( key ) == null ){
+						
+						l.setData( key, l.getForeground());
+					}
+					l.setForeground( Colors.white );
+				}
+			});
+		}
+		
+		if (tags.size() == 0 ){
+			cTableParentPanel.layout();
 			return;
 		}
 
@@ -1034,20 +1193,21 @@ public class MyTorrentsView
 			buttonListener = new TagButtonTrigger() {
 
 				@Override
-				public void tagButtonTriggered(TagCanvas tagCanvas, Tag tag,
-						int stateMask, boolean longPress) {
+				public void tagButtonTriggered(TagPainter painter, int stateMask,
+						boolean longPress) {
+					Tag tag = painter.getTag();
 					if (longPress) {
-						handleLongPress(tagCanvas, tag);
+						handleLongPress(painter, tag);
 						return;
 					}
 
 					boolean add = (stateMask & SWT.MOD1) != 0;
 
-					boolean isSelected = tagCanvas.isSelected();
+					boolean isSelected = painter.isSelected();
 
 					if (isSelected) {
 						removeTagFromCurrent(tag);
-						tagCanvas.setSelected(!isSelected);
+						painter.setSelected(!isSelected);
 					} else {
 						if (add) {
 							Category catAll = CategoryManager.getCategory(Category.TYPE_ALL);
@@ -1066,12 +1226,13 @@ public class MyTorrentsView
 									setCurrentTags(newTags);
 								}
 							}
-							tagCanvas.setSelected(!isSelected);
+							painter.setSelected(!isSelected);
 						} else {
 							setCurrentTags(tag);
-							setSelection(tagCanvas.getParent());
+							setSelection(painter.getControl().getParent());
 						}
 					}
+					updateTagAlphas();
 				}
 
 				private void setSelection(Composite parent) {
@@ -1090,60 +1251,97 @@ public class MyTorrentsView
 						if (!(control instanceof TagCanvas)) {
 							continue;
 						}
-						TagCanvas tagCanvas = (TagCanvas) control;
-						boolean selected = selectedTags.remove(tagCanvas.getTag());
-						tagCanvas.setSelected(selected);
+						TagPainter painter = ((TagCanvas) control).getTagPainter();
+						boolean selected = selectedTags.remove(painter.getTag());
+						painter.setSelected(selected);
 					}
+					updateTagAlphas();
 				}
 
-				private void handleLongPress(TagCanvas tagCanvas, Tag tag) {
+				private void handleLongPress(TagPainter painter, Tag tag) {
 					if (tv == null) {
 						return;
 					}
 					Object[] ds = tv.getSelectedDataSources().toArray();
 
-					if (tag instanceof Category) {
-						TorrentUtil.assignToCategory(ds, (Category) tag);
-						return;
-					}
-
-					boolean doAdd = false;
-					for (Object obj : ds) {
-
-						if (obj instanceof DownloadManager) {
-
-							DownloadManager dm = (DownloadManager) obj;
-
-							if (!tag.hasTaggable(dm)) {
-								doAdd = true;
-								break;
+					boolean doVisual = false;
+					
+					try{
+						if ( tag instanceof Category ){
+							
+							TorrentUtil.assignToCategory(ds, (Category) tag);
+							
+							doVisual = true;
+							
+							return;
+						}
+	
+						boolean doAdd = false;
+						for (Object obj : ds) {
+	
+							if (obj instanceof DownloadManager) {
+	
+								DownloadManager dm = (DownloadManager) obj;
+	
+								if (!tag.hasTaggable(dm)) {
+									doAdd = true;
+									break;
+								}
 							}
 						}
-					}
-
-					for (Object obj : ds) {
-
-						if (obj instanceof DownloadManager) {
-
-							DownloadManager dm = (DownloadManager) obj;
-
-							if (doAdd) {
-								tag.addTaggable(dm);
-							} else {
-								tag.removeTaggable(dm);
+	
+						boolean do_it = true;
+						
+						boolean[] auto = tag.isTagAuto();
+						
+						if ( auto.length >= 1 && auto[0] ){
+								
+								// can't add to / remove from an auto-add tag
+								// note - can remove from an auto-remove-only
+							
+							do_it = false;
+						}
+						
+						if ( do_it ){
+							
+							try{
+								tag.addTaggableBatch( true );
+							
+								for (Object obj : ds) {
+			
+									if (obj instanceof DownloadManager) {
+			
+										DownloadManager dm = (DownloadManager) obj;
+			
+										if (doAdd) {
+											tag.addTaggable(dm);
+										} else {
+											tag.removeTaggable(dm);
+										}
+									}
+								}
+							}finally{
+								
+								tag.addTaggableBatch( false );
 							}
+							
+							doVisual = true;
+						}
+					}finally{
+						
+						if ( doVisual ){
+							// Quick Visual
+							boolean wasSelected = painter.isSelected();
+							painter.setGrayed(true);
+							painter.setSelected(true);
+		
+							Utils.execSWTThreadLater(200, () -> {
+								painter.setGrayed(false);
+								painter.setSelected(wasSelected);
+								updateTagAlphas();
+							});
 						}
 					}
-
-					// Quick Visual
-					boolean wasSelected = tagCanvas.isSelected();
-					tagCanvas.setGrayed(true);
-					tagCanvas.setSelected(true);
-
-					Utils.execSWTThreadLater(200, () -> {
-						tagCanvas.setGrayed(false);
-						tagCanvas.setSelected(wasSelected);
-					});
 				}
 
 				@Override
@@ -1163,7 +1361,7 @@ public class MyTorrentsView
 			
 			if ( tg != currentGroup && currentGroup != null && !currentGroup.getTags().isEmpty()){
 								
-				Divider div = new Divider( cCategoriesAndTags, SWT.NULL );
+				Divider div = new Divider( cTitleCategoriesAndTags, SWT.NULL );
 				
   				RowData rd = new RowData();
   				
@@ -1172,29 +1370,36 @@ public class MyTorrentsView
 
 			currentGroup = tg;
 
-			TagCanvas button = new TagCanvas(cCategoriesAndTags, tag, false, true);
+			TagCanvas button = new TagCanvas(cTitleCategoriesAndTags, tag, false, true);
+			TagPainter painter = button.getTagPainter();
 			button.setTrigger(buttonListener);
-			button.setCompact(true,COConfigurationManager.getBooleanParameter( "Library.ShowTagButtons.ImageOverride" ));
+			painter.setCompact(true,
+					COConfigurationManager.getBooleanParameter(
+							"Library.ShowTagButtons.ImageOverride"));
 
 			if (isCat) {
 				if (spacer == null) {
-					spacer = new Label(cCategoriesAndTags, SWT.NONE);
+					spacer = new Label(cTitleCategoriesAndTags, SWT.NONE);
 					RowData rd = new RowData();
 					rd.width = 8;
 					spacer.setLayoutData(rd);
 					spacer.moveAbove(null);
+					if ( titleLab != null ){
+						titleLab.moveAbove(spacer);
+					}
 				}
 				button.moveAbove(spacer);
 			}
 			
 			button.addKeyListener(this);
 			if ( fontButton == null) {
-				fontButton = FontUtils.getFontWithStyle(button.getFont(), SWT.NONE, 0.8f);
+				fontButton = FontUtils.cache( FontUtils.getFontWithStyle(button.getFont(), SWT.NONE, 0.8f));
 			}
 			button.setFont(fontButton);
 
 			if (isCurrent(tag)) {
-				button.setSelected(true);
+				painter.setSelected(true);
+				updateTagAlphas();
 			}
 
 			Menu menu = new Menu( button );
@@ -1202,15 +1407,61 @@ public class MyTorrentsView
 			button.setMenu( menu );
 
 			if (isCat) {
-				CategoryUIUtils.setupCategoryMenu(menu, (Category) tag);
+				CategoryUIUtils.setupCategoryMenu(
+					menu, 
+					(Category) tag,
+					(dm)->{
+						return( isOurDownloadManager((DownloadManager)dm ));
+					});
 			} else {
-				TagUIUtils.createSideBarMenuItemsDelayed(menu, tag);
+				TagUIUtils.createSideBarMenuItemsDelayed(
+					menu, 
+					tag,
+					(dm)->{
+						return( isOurDownloadManager((DownloadManager)dm ));
+					});
 			}
 		}
 
-		cCategoriesAndTags.getParent().layout(true, true);
+		cTableParentPanel.layout(true, true);
 	}
 
+	private void
+	updateTagAlphas()
+	{
+		if (cTitleCategoriesAndTags == null || cTitleCategoriesAndTags.isDisposed()) {
+			return;
+		}
+		
+		List<TagPainter> painters = new ArrayList<>(128);
+		
+		Control[] children = cTitleCategoriesAndTags.getChildren();
+		
+		boolean any_selected = false;
+		
+		for (Control child : children) {
+			if (!(child instanceof TagCanvas)) {
+				continue;
+			}
+			TagPainter painter = ((TagCanvas) child).getTagPainter();
+			painters.add( painter );
+			if ( painter.isSelected()){
+				Tag tag = painter.getTag();
+				if ( tag instanceof Category ){
+					Category cat = (Category)tag;
+					if ( cat.getType() == Category.TYPE_ALL ){
+						// ignore this one as equivalent to "no filter"
+						continue;
+					}
+				}
+				any_selected = true;
+			}
+		}
+		for ( TagPainter painter: painters ){
+			painter.setAlpha(painter.isSelected() || !any_selected?255:130);
+		}
+	}
+	
 	public boolean isOurDownloadManager(DownloadManager dm) {
 		if (!isInCurrentTags(dm )) {
 			return false;
@@ -1233,12 +1484,40 @@ public class MyTorrentsView
 	}
 
 	@Override
-	public boolean filterCheck(DownloadManager dm, String sLastSearch, boolean bRegexSearch) {
+	public boolean 
+	filterCheck(
+		DownloadManager 	dm, 
+		String 				sLastSearch, 
+		boolean 			bRegexSearch,
+		boolean				confusable )
+	{
 		if ( dm == null ){
 			return( false );
 		}
+		
 		boolean bOurs;
 		if (sLastSearch.length() > 0) {
+			
+			if ( !bRegexSearch ){
+				
+				try{
+					TagConstraint constraint = lastSearchConstraint;
+					
+					if ( constraint == null || !sLastSearch.equals( lastSearchConstraintString )){
+						
+						lastSearchConstraintString = sLastSearch;
+												
+						constraint = lastSearchConstraint = tagManager.compileConstraint( sLastSearch );
+					}
+					
+					if ( constraint != null && constraint.getError() == null ){
+						
+						return( constraint.testConstraint( dm ));
+					}
+				}catch( Throwable e ){		
+				}
+			}
+			
 			try {
 				String	comment = dm.getDownloadState().getUserComment();
 				if ( comment == null ){
@@ -1275,6 +1554,11 @@ public class MyTorrentsView
 				Object o_name = name_mapping[0][1];
 
 				String tmpSearch = sLastSearch;
+
+				if ( confusable ){
+				
+					tmpSearch = GeneralUtils.getConfusableEquivalent( tmpSearch, true );
+				}
 
 				for ( int i = 1; i < name_mapping.length; i++ ){
 
@@ -1342,7 +1626,6 @@ public class MyTorrentsView
 
 							o_name = names;
 
-							TagManager tagManager = TagManagerFactory.getTagManager();
 							List<Tag> tags = tagManager.getTagsForTaggable( TagType.TT_DOWNLOAD_MANUAL, dm );
 
 							if ( tags.size() > 0 ){
@@ -1379,39 +1662,21 @@ public class MyTorrentsView
 					}
 				}else{
 					
-					if ( tmpSearch.contains( " " )){
-						
-						String[] bits = tmpSearch.split( " " );
-						
-						String s = "";
-						
-							// implement 'and' for spaces - (?=.*xxx)(?=.*yyy)
-						
-						for ( String bit: bits ){
-							
-							bit = bit.trim();
-							
-							if ( !bit.isEmpty()){
-							
-								bit = "\\Q" + bit.replaceAll("[|;]", "\\\\E|\\\\Q") + "\\E";
-								
-								s += "(?=.*" + bit + ")";
-							}
-						}
-						
-						expr = s;
-						
-					}else{
-					
-						expr = "\\Q" + tmpSearch.replaceAll("[|;]", "\\\\E|\\\\Q") + "\\E";
-					}
+					expr = RegExUtil.convertAndOrToExpr( tmpSearch );
 				}
 
 				Pattern pattern = RegExUtil.getCachedPattern( "tv:search", expr, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
 				if ( o_name instanceof String ){
 
-					bOurs = pattern.matcher((String)o_name).find() == match_result;
+					String name = (String)o_name;
+					
+					if ( confusable ){
+						
+						name = GeneralUtils.getConfusableEquivalent( name, false );
+					}
+					
+					bOurs = pattern.matcher( name ).find() == match_result;
 
 				}else{
 					List<String>	names = (List<String>)o_name;
@@ -1421,6 +1686,12 @@ public class MyTorrentsView
 					bOurs = !match_result;
 
 					for ( String name: names ){
+						
+						if ( confusable ){
+						
+							name = GeneralUtils.getConfusableEquivalent( name, false );
+						}
+
 						if ( pattern.matcher( name ).find()){
 							bOurs = match_result;
 							break;
@@ -1521,31 +1792,36 @@ public class MyTorrentsView
 		});
 	}
 
-	private void swt_viewChanged(final TableView<DownloadManager> view) {
+	private void 
+	swt_viewChanged(
+		TableView<DownloadManager> view )
+	{
+		if ( filterBox == null || filterBox.isDisposed() || vtxi == null ){
+			
+			return;
+		}		
 
-		Composite filterParent = filterBox == null ? null : filterBox.getMainWidget().getParent();
-		if ( filterParent != null && !filterParent.isDisposed()){
+		Composite filterParent = filterBox.getMainWidget().getParent();
+		
+		if ( !filterParent.isDisposed()){
 
-			if ( vtxi != null){
+			TableRowCore[] rows = view.getRows();
 
-				TableRowCore[] rows = view.getRows();
+			int	active = 0;
 
-				int	active = 0;
+			for ( TableRowCore row: rows ){
 
-				for ( TableRowCore row: rows ){
+				DownloadManager dm = (DownloadManager)row.getDataSource( true );
 
-					DownloadManager dm = (DownloadManager)row.getDataSource( true );
+				int	state = dm.getState();
 
-					int	state = dm.getState();
+				if ( state == DownloadManager.STATE_DOWNLOADING || state == DownloadManager.STATE_SEEDING ){
 
-					if ( state == DownloadManager.STATE_DOWNLOADING || state == DownloadManager.STATE_SEEDING ){
-
-						active++;
-					}
+					active++;
 				}
-
-				vtxi.searchUpdate( tv.getComposite(), rows.length, active );
 			}
+
+			vtxi.searchUpdate( tv.getComposite(), rows.length, active );
 		}
 	}
 
@@ -1570,6 +1846,11 @@ public class MyTorrentsView
 	public void focusChanged(TableRowCore focus) {
 		updateSelectedContent();
 		refreshTorrentMenu();
+	}
+	
+	@Override
+	public void focusRequested(){
+		viewActive = true;
 	}
 
 	// @see TableSelectionListener#mouseEnter(TableRowCore)
@@ -1621,7 +1902,7 @@ public class MyTorrentsView
 		}
 			// if we're not active then ignore this update as we don't want invisible components
 			// updating the toolbar with their invisible selection. Note that unfortunately the
-			// call we get here when activating a view does't yet have focus
+			// call we get here when activating a view doesn't yet have focus
 
 		if ( !isTableFocus()){
 			if ( !force ){
@@ -1842,40 +2123,59 @@ public class MyTorrentsView
 	@Override
 	public void fillMenu(String sColumnName, final Menu menu) {
 		Object[] dataSources = tv.getSelectedDataSources(true);
-		DownloadManager[] dms = getSelectedDownloads();
+		DownloadManager[] selecteddms = getSelectedDownloads();
 
-		if (dms.length == 0 && dataSources.length > 0) {
-  		List<DiskManagerFileInfo> listFileInfos = new ArrayList<>();
-  		DownloadManager firstFileDM = null;
-  		for (Object ds : dataSources) {
-  			if (ds instanceof DiskManagerFileInfo) {
-  				DiskManagerFileInfo info = (DiskManagerFileInfo) ds;
-  				// for now, FilesViewMenuUtil.fillmenu can only handle one DM
-  				if (firstFileDM != null && !firstFileDM.equals(info.getDownloadManager())) {
-  					break;
-  				}
-  				firstFileDM = info.getDownloadManager();
-  				listFileInfos.add(info);
-  			}
-  		}
-  		if (listFileInfos.size() > 0) {
-  			FilesViewMenuUtil.fillMenu(
-  					tv,
-  					sColumnName,
-  					menu,
-  					new DownloadManager[]{ firstFileDM },
-  					new DiskManagerFileInfo[][]{ listFileInfos.toArray(new DiskManagerFileInfo[0])},
-  					false,
-  					false);
-  			return;
-  		}
+		if (selecteddms.length == 0 && dataSources.length > 0) {
+			
+			Map<DownloadManager,List<DiskManagerFileInfo>> map = new IdentityHashMap<>();
+
+			List<DownloadManager> dms = new ArrayList<>();
+
+			for (Object ds : dataSources) {
+				if (ds instanceof DiskManagerFileInfo) {
+					DiskManagerFileInfo info = (DiskManagerFileInfo) ds;
+					
+					DownloadManager dm = info.getDownloadManager();
+					
+					List<DiskManagerFileInfo> list = map.get(dm);
+
+					if ( list == null ){
+
+						list = new ArrayList<>(dm.getDiskManagerFileInfoSet().nbFiles());
+
+						map.put( dm, list );
+
+						dms.add( dm );
+					}
+
+					list.add( info );
+				}
+			}
+			
+			DownloadManager[] manager_list = dms.toArray( new DownloadManager[ dms.size()]);
+
+			DiskManagerFileInfo[][] files_list = new DiskManagerFileInfo[manager_list.length][];
+
+			for ( int i=0;i<manager_list.length;i++){
+
+				List<DiskManagerFileInfo> list =  map.get( manager_list[i] );
+
+				files_list[i] = list.toArray( new DiskManagerFileInfo[list.size()]);
+			}
+			
+			if ( files_list.length > 0 ){
+				
+				FilesViewMenuUtil.fillMenu(	tv,	sColumnName, menu, manager_list, files_list, null, false, false );
+				
+				return;
+			}
 		}
 
-		boolean hasSelection = (dms.length > 0);
+		boolean hasSelection = (selecteddms.length > 0);
 
 		if (hasSelection) {
 			boolean isSeedingView = Download.class.equals(forDataSourceType) || DownloadTypeComplete.class.equals(forDataSourceType);
-			TorrentUtil.fillTorrentMenu(menu, dms, core, true,
+			TorrentUtil.fillTorrentMenu(menu, selecteddms, core, true,
 					(isSeedingView) ? 2 : 1, tv);
 
 			// ---
@@ -2355,7 +2655,7 @@ public class MyTorrentsView
 		}
 
 		if (e.keyCode == SWT.F2 && (e.stateMask & SWT.MODIFIER_MASK) == 0) {
-			FilesViewMenuUtil.rename(tv, tv.getSelectedDataSources(true), true, false,false);
+			FilesViewMenuUtil.rename(tv, tv.getSelectedDataSources(true), null, true, false, false, false );
 			e.doit = false;
 			return;
 		}
@@ -2377,41 +2677,55 @@ public class MyTorrentsView
 	}
 
 
+	AsyncDispatcher reposition_disps = new AsyncDispatcher();
 
-
+	private void
+	reposition(
+		Runnable r )
+	{
+		reposition_disps.dispatch(r);
+	}
 
   private void moveSelectedTorrentsDown() {
     // Don't use runForSelectDataSources to ensure the order we want
   	DownloadManager[] dms = getSelectedDownloads();
-    Arrays.sort(dms, new Comparator<DownloadManager>() {
-			@Override
-			public int compare(DownloadManager a, DownloadManager b) {
-        return a.getPosition() - b.getPosition();
-			}
+      
+    reposition(()->{
+    	Arrays.sort(dms, new Comparator<DownloadManager>() {
+    		@Override
+    		public int compare(DownloadManager a, DownloadManager b) {
+    			return a.getPosition() - b.getPosition();
+    		}
+    	});
+  
+	    for (int i = dms.length - 1; i >= 0; i--) {
+	      DownloadManager dm = dms[i];
+	      if (dm.getGlobalManager().isMoveableDown(dm)) {
+	        dm.getGlobalManager().moveDown(dm);
+	      }
+	    }
     });
-    for (int i = dms.length - 1; i >= 0; i--) {
-      DownloadManager dm = dms[i];
-      if (dm.getGlobalManager().isMoveableDown(dm)) {
-        dm.getGlobalManager().moveDown(dm);
-      }
-    }
   }
 
   private void moveSelectedTorrentsUp() {
     // Don't use runForSelectDataSources to ensure the order we want
   	DownloadManager[] dms = getSelectedDownloads();
-    Arrays.sort(dms, new Comparator<DownloadManager>() {
-    	@Override
-	    public int compare(DownloadManager a, DownloadManager b) {
-        return a.getPosition() - b.getPosition();
-      }
+    
+  	reposition(()->{
+    	Arrays.sort(dms, new Comparator<DownloadManager>() {
+    		@Override
+    		public int compare(DownloadManager a, DownloadManager b) {
+    			return a.getPosition() - b.getPosition();
+    		}
+    	});
+    	   
+	    for (int i = 0; i < dms.length; i++) {
+	      DownloadManager dm = dms[i];
+	      if (dm.getGlobalManager().isMoveableUp(dm)) {
+	        dm.getGlobalManager().moveUp(dm);
+	      }
+	    }
     });
-    for (int i = 0; i < dms.length; i++) {
-      DownloadManager dm = dms[i];
-      if (dm.getGlobalManager().isMoveableUp(dm)) {
-        dm.getGlobalManager().moveUp(dm);
-      }
-    }
   }
 
 	private void moveSelectedTorrents(int by) {
@@ -2420,41 +2734,43 @@ public class MyTorrentsView
 		if (dms.length <= 0)
 			return;
 
-		int[] newPositions = new int[dms.length];
+		reposition(()->{
+			int[] newPositions = new int[dms.length];
 
-		if (by < 0) {
-			Arrays.sort(dms, new Comparator<DownloadManager>() {
-				@Override
-				public int compare(DownloadManager a, DownloadManager b) {
-					return a.getPosition() - b.getPosition();
-				}
-			});
-		} else {
-			Arrays.sort(dms, new Comparator<DownloadManager>() {
-				@Override
-				public int compare(DownloadManager a, DownloadManager b) {
-					return b.getPosition() - a.getPosition();
-				}
-			});
-		}
-
-		for (int i = 0; i < dms.length; i++) {
-			DownloadManager dm = dms[i];
-			boolean complete = dm.isDownloadComplete(false);
-			int count = globalManager.downloadManagerCount(complete);
-			int pos = dm.getPosition() + by;
-			if (pos < i + 1)
-				pos = i + 1;
-			else if (pos > count - i)
-				pos = count - i;
-
-			newPositions[i] = pos;
-		}
-
-		for (int i = 0; i < dms.length; i++) {
-			DownloadManager dm = dms[i];
-			globalManager.moveTo(dm, newPositions[i]);
-		}
+			if (by < 0) {
+				Arrays.sort(dms, new Comparator<DownloadManager>() {
+					@Override
+					public int compare(DownloadManager a, DownloadManager b) {
+						return a.getPosition() - b.getPosition();
+					}
+				});
+			} else {
+				Arrays.sort(dms, new Comparator<DownloadManager>() {
+					@Override
+					public int compare(DownloadManager a, DownloadManager b) {
+						return b.getPosition() - a.getPosition();
+					}
+				});
+			}
+			
+			for (int i = 0; i < dms.length; i++) {
+				DownloadManager dm = dms[i];
+				boolean complete = dm.isDownloadComplete(false);
+				int count = globalManager.downloadManagerCount(complete);
+				int pos = dm.getPosition() + by;
+				if (pos < i + 1)
+					pos = i + 1;
+				else if (pos > count - i)
+					pos = count - i;
+	
+				newPositions[i] = pos;
+			}
+	
+			for (int i = 0; i < dms.length; i++) {
+				DownloadManager dm = dms[i];
+				globalManager.moveTo(dm, newPositions[i]);
+			}
+		});
 	}
 
 	private void columnInvalidateAfterMove() {
@@ -2481,13 +2797,66 @@ public class MyTorrentsView
     if (dms.length == 0)
       return;
 
-    if(moveToTop){
-      globalManager.moveTop(dms);
-    }else{
-      globalManager.moveEnd(dms);
-    }
+    reposition(()->{
+	    if(moveToTop){
+	      globalManager.moveTop(dms);
+	    }else{
+	      globalManager.moveEnd(dms);
+	    } 
+    });
   }
 
+  public void
+  requestAttention(
+	 DownloadManager		dm )
+  {
+	  boolean found = false;
+	  
+	  if ( isOurDownloadManager( dm )){
+
+		  TableRowCore row = tv.getRow( dm );
+
+		  if ( row != null ){
+
+			  found = true;
+			  
+			  TableRowCore[] existing = tv.getSelectedRows();
+
+			  if ( existing != null ){
+
+				  for ( TableRowCore e: existing ){
+
+					  if ( e != row ){
+
+						  e.setSelected( false );
+					  }
+				  }
+			  }
+
+			  if ( !row.isSelected()){
+
+				  row.setSelected( true );
+			  }
+
+			  if ( !row.isVisible()){
+
+				  tv.showRow( row );
+			  }
+		  }
+	  }
+	  
+	  if ( !found ){
+		  
+		  synchronized( createdLock ){
+			  
+			  if ( !created ){
+				  
+				  pendingAttention = dm;
+			  }
+		  }
+	  }
+  }
+  
   /**
    * @param parameterName the name of the parameter that has changed
    * @see com.biglybt.core.config.ParameterListener#parameterChanged(java.lang.String)
@@ -2498,6 +2867,7 @@ public class MyTorrentsView
 			bDNDalwaysIncomplete = COConfigurationManager.getBooleanParameter("DND Always In Incomplete");
 		}
 
+		showTableTitle = COConfigurationManager.getBooleanParameter( "Library.ShowTitle" );
 		showCatButtons = COConfigurationManager.getBooleanParameter( "Library.ShowCatButtons" );
 		showTagButtons = COConfigurationManager.getBooleanParameter( "Library.ShowTagButtons" );
 
@@ -2508,10 +2878,13 @@ public class MyTorrentsView
 		
 		if (parameterName != null ){
 			
-			if ( 	parameterName.equals("Library.ShowCatButtons") ||
+			if ( 	parameterName.equals("Library.ShowTitle") ||
+					parameterName.equals("Library.ShowCatButtons" ) ||
+					parameterName.equals("Library.ShowCatButtons.CompOnly" ) ||
 					parameterName.equals("Library.ShowTagButtons" ) ||
 					parameterName.equals("Library.ShowTagButtons.FiltersOnly" ) ||
 					parameterName.equals("Library.ShowTagButtons.ImageOverride" ) ||
+					parameterName.equals("Library.ShowTagButtons.Align" ) ||					
 					parameterName.equals("Library.ShowTagButtons.CompOnly" )){
 
 				createTabs();
@@ -2608,7 +2981,7 @@ public class MyTorrentsView
       return true;
     }
     if(itemKey.equals("start")){
-      TorrentUtil.queueDataSources(tv.getSelectedDataSources().toArray(), true);
+      TorrentUtil.queueDataSources(tv.getSelectedDataSources().toArray(), false);
       return true;
     }
     if(itemKey.equals("stop")){
@@ -2616,7 +2989,7 @@ public class MyTorrentsView
       return true;
     }
     if (itemKey.equals("startstop")) {
-    	TorrentUtil.stopOrStartDataSources(tv.getSelectedDataSources().toArray());
+    	TorrentUtil.stopOrStartDataSources(tv.getSelectedDataSources().toArray(), false );
     	return true;
     }
     if(itemKey.equals("remove")){
@@ -2628,24 +3001,100 @@ public class MyTorrentsView
 
   // DownloadManagerListener Functions
   @Override
-  public void stateChanged(DownloadManager manager, int state) {
-	  final TableRowCore row = tv.getRow(manager);
-	  if (row != null) {
-		  Utils.getOffOfSWTThread(new AERunnable() {
-			  @Override
-			  public void runSupport() {
-				  row.refresh(true);
-				  if (row.isSelected()) {
-					  updateSelectedContentRateLimited();
-				  }
-			  }
-		  });
-	  }
-	  
-	  if (isOurDownloadManager(manager)) {
-		  dmCountMutations.incrementAndGet();
-	  }
-  }
+	public void stateChanged(DownloadManager manager, int state) {
+		if (isOurDownloadManager(manager)) {
+			dmCountMutations.incrementAndGet();
+		}
+
+		TableRowCore row = tv.getRow(manager);
+		if (row == null) {
+			return;
+		}
+
+		if (manager.isDestroyed() && row.isSelected()) {
+			// being removed
+			//debug(manager.getDisplayName() + " being removed " + manager + "; row " + tv.indexOf(row));
+
+			if (manager.getDownloadState()
+				.getFlag(DownloadManagerState.FLAG_METADATA_DOWNLOAD)) {
+
+				synchronized (removed_while_selected) {
+
+					removed_while_selected.put(manager.getInternalName(), "");
+				}
+			}
+
+			TableRowCore[] selected_rows = tv.getSelectedRows();
+
+			if (selected_rows.length == 1 && selected_rows[0] == row) {
+				int deletedRowPos = tv.indexOf(row);
+				if (deletedRowPos > 0) {
+					int indexToSelect = -1;
+					if (deletedRowPos < tv.getRowCount() - 1) {
+						indexToSelect = deletedRowPos + 1;
+						//debug("select +1 " + indexToSelect);
+					} else if (deletedRowPos > 1) {
+						indexToSelect = deletedRowPos - 1;
+						//debug("select -1 " + indexToSelect);
+					}
+					if (indexToSelect >= 0) {
+						tv.setSelectedRows(new TableRowCore[] {
+							tv.getRow(indexToSelect)
+						});
+					}
+				}
+
+			}
+		}
+
+		// Usually get stateChanged trigger for every torrent on first display
+		// Queue them up, otherwise ThreadPool warns of too many
+		synchronized (listRowsToRefresh) {
+			if (listRowsToRefresh.contains(row)) {
+				return;
+			}
+			listRowsToRefresh.add(row);
+			if (listRowsToRefresh.size() > 1) {
+				return;
+			}
+		}
+
+		Utils.getOffOfSWTThread(() -> {
+			// wait between 10ms and 50ms for new state changes
+			int count;
+			
+			synchronized (listRowsToRefresh) {
+				count = listRowsToRefresh.size();
+			}
+			
+			for (int i = 0; i < 5; i++) {
+				try {
+					Thread.sleep(10);
+				} catch (InterruptedException e) {
+				}
+				synchronized (listRowsToRefresh) {
+					int newCount = listRowsToRefresh.size();
+					if (newCount == count) {
+						break;
+					}
+					count = newCount;
+				}
+			}
+
+			TableRowCore[] rows;
+			synchronized (listRowsToRefresh) {
+				rows = listRowsToRefresh.toArray(
+						new TableRowCore[listRowsToRefresh.size()]);
+				listRowsToRefresh.clear();
+			}
+			for (TableRowCore rowToRefresh : rows) {
+				rowToRefresh.refresh(true);
+				if (rowToRefresh.isSelected()) {
+					updateSelectedContentRateLimited();
+				}
+			}
+		});
+	}
 
   // DownloadManagerListener
   @Override
@@ -2664,10 +3113,47 @@ public class MyTorrentsView
 
   // DownloadManagerListener
   @Override
-  public void filePriorityChanged(DownloadManager download,
-                                  DiskManagerFileInfo file) {
-	}
+  public void 
+  filePriorityChanged(
+	DownloadManager 		download,
+    DiskManagerFileInfo 	file ) 
+  {
+	  TableRowCore row = tv.getRow( download );
 
+	  if ( row == null ){
+		  
+		  return;
+	  }
+	  
+	  TableRowCore[] kids = row.getSubRowsWithNull();
+	  
+	  DiskManagerFileInfo[] files = getVisibleFiles( download );
+	  
+	  if ( kids.length != files.length ){
+		  
+		  row.setSubItems( files );
+		  
+	  }else{
+		  
+		  Set<Integer>	fileIndexes = new HashSet<>();
+		  
+		  for ( int i=0;i<kids.length;i++){
+			
+			  fileIndexes.add( files[i].getIndex());
+		  }
+		  
+		  for ( int i=0;i<kids.length;i++){
+			  
+			  if (!fileIndexes.contains(((DiskManagerFileInfo)kids[i].getDataSource( true )).getIndex())){
+				  
+				  row.setSubItems(files);
+				  
+				  return;
+			  }
+		  }
+	  }
+  }
+  
   // DownloadManagerListener
 	@Override
 	public void completionChanged(DownloadManager manager, boolean bCompleted) {
@@ -2781,21 +3267,22 @@ public class MyTorrentsView
 						return;
 					}
 
-					if (cCategoriesAndTags == null || cCategoriesAndTags.isDisposed()) {
+					if (cTitleCategoriesAndTags == null || cTitleCategoriesAndTags.isDisposed()) {
 						return;
 					}
-					Control[] children = cCategoriesAndTags.getChildren();
+					Control[] children = cTitleCategoriesAndTags.getChildren();
 					for (Control child : children) {
 						if (!(child instanceof TagCanvas)) {
 							continue;
 						}
-						TagCanvas tagCanvas = (TagCanvas) child;
-						if (ourPendingTags.remove(tagCanvas.getTag())) {
-							boolean selected = tagCanvas.isSelected();
-							tagCanvas.updateState(null);
-							tagCanvas.setSelected(selected);
+						TagPainter painter = ((TagCanvas) child).getTagPainter();
+						if (ourPendingTags.remove(painter.getTag())) {
+							boolean selected = painter.isSelected();
+							painter.updateState(null);
+							painter.setSelected(selected);
 						}
 					}
+					updateTagAlphas();
 				}
 			}
 		});
@@ -3106,33 +3593,37 @@ public class MyTorrentsView
 		DownloadManager[]		old_dms,
 		DownloadManager[]		new_dms )
 	{
-		Utils.execSWTThread(
-			new Runnable()
-			{
-				public void
-				run()
+			// we need to force invocations of this to be executed in order
+		
+		dispatcher.dispatch(()->{
+			Utils.execSWTThread(
+				new Runnable()
 				{
-					for ( DownloadManager dm: old_dms ){
-						
-						TableRowCore row = tv.getRow( dm );
-						
-						if ( row != null ){
+					public void
+					run()
+					{
+						for ( DownloadManager dm: old_dms ){
 							
-							row.setRequestAttention( false );
+							TableRowCore row = tv.getRow( dm );
+							
+							if ( row != null ){
+								
+								row.setRequestAttention( false );
+							}
+						}
+						
+						for ( DownloadManager dm: new_dms ){
+							
+							TableRowCore row = tv.getRow( dm );
+							
+							if ( row != null ){
+								
+								row.setRequestAttention( true );
+							}
 						}
 					}
-					
-					for ( DownloadManager dm: new_dms ){
-						
-						TableRowCore row = tv.getRow( dm );
-						
-						if ( row != null ){
-							
-							row.setRequestAttention( true );
-						}
-					}
-				}
-			});
+				});
+		});
 	}
 	
   // globalmanagerlistener Functions
@@ -3148,50 +3639,8 @@ public class MyTorrentsView
   // @see com.biglybt.core.global.GlobalManagerListener#downloadManagerRemoved(com.biglybt.core.download.DownloadManager)
   @Override
   public void downloadManagerRemoved(DownloadManager dm ) {
-    dm.removeListener( this );
-    DownloadBar.close(dm);
-    
-    TableRowCore row = tv.getRow( dm );
-    
-    if ( row != null ){
-    	
-    	if ( row.isSelected()){
-    		
-    		if ( dm.getDownloadState().getFlag( DownloadManagerState.FLAG_METADATA_DOWNLOAD)){
-    		
-    			synchronized( removed_while_selected ){
-    			
-    				removed_while_selected.put( dm.getInternalName(), "" );
-    			}
-    		}
-    		
-    		TableRowCore[] selected_rows = tv.getSelectedRows();
-    		
-    		if ( selected_rows.length == 1 && selected_rows[0] == row ){
-    			
-    			// this is going to remove the selection completely so select existing appropriate row
-    			// logic should probably be in the table itself but for the moment fix here
-    			
-    			TableRowCore[] rows = tv.getRows();
-    			
-    			for ( int i=0;i<rows.length;i++){
-    				
-    				if ( rows[i] == row ){
-    					
-    					if ( i < rows.length - 1 ){
-    						
-    						tv.setSelectedRows( new TableRowCore[]{ rows[i+1 ] });
-    						
-    					}else if ( i > 0 ){
-    						
-    						tv.setSelectedRows( new TableRowCore[]{ rows[i-1 ] });
-    					}
-    				}
-    			}
-    		}
-    	}
-    }
-    
+		dm.removeListener( this );
+		DownloadBar.close(dm);
     tv.removeDataSource(dm);
   }
 
@@ -3210,7 +3659,10 @@ public class MyTorrentsView
 	@Override
 	public void updateLanguage() {
 		super.updateLanguage();
-		getComposite().layout(true, true);
+		Composite comp = getComposite();
+		if ( comp != null ){
+			comp.layout(true, true);
+		}
 	}
 
 	public boolean isTableFocus() {
@@ -3241,7 +3693,7 @@ public class MyTorrentsView
 		int tableExtraStyle = COConfigurationManager.getIntParameter("MyTorrentsView.table.style");
 		TableViewSWT<DownloadManager> table =
 			TableViewFactory.createTableViewSWT(forDataSourceType, tableID,
-				getPropertiesPrefix(), basicItems, "#", tableExtraStyle | SWT.MULTI
+				getTextPrefixID(), basicItems, "#", tableExtraStyle | SWT.MULTI
 						| SWT.FULL_SELECTION | SWT.VIRTUAL | SWT.CASCADE);
 
 			// config??
@@ -3283,12 +3735,19 @@ public class MyTorrentsView
 
 		vm.registerView(Download.class, new UISWTViewBuilderCore(
 				PeersGraphicView.MSGID_PREFIX, null, PeersGraphicView.class));
-
+		
 		vm.registerView(Download.class, new UISWTViewBuilderCore(
 				PiecesView.MSGID_PREFIX, null, PiecesView.class));
 
 		vm.registerView(Download.class, new UISWTViewBuilderCore(
-				PieceInfoView.MSGID_PREFIX, null, PieceInfoView.class));
+				PieceMapView.MSGID_PREFIX, null, PieceMapView.class));
+
+		UISWTViewBuilderCore blockViewBuilder =  new UISWTViewBuilderCore(
+				PieceBlocksView.MSGID_PREFIX, null, PieceBlocksView.class);
+		
+		blockViewBuilder.setDefaultVisibility( false );
+		
+		vm.registerView(Download.class, blockViewBuilder );
 
 		vm.registerView(Download.class, new UISWTViewBuilderCore(
 				DownloadActivityView.MSGID_PREFIX, null, DownloadActivityView.class));
@@ -3334,45 +3793,67 @@ public class MyTorrentsView
 		if (rowCore.getSubItemCount() == 0 && dm.getTorrent() != null
 				&& !dm.getTorrent().isSimpleTorrent() && rowCore.isVisible()
 				&& dm.getNumFileInfos() > 0) {
-			DiskManagerFileInfoSet fileInfos = dm.getDiskManagerFileInfoSet();
-			if (fileInfos != null) {
-				DiskManagerFileInfo[] files = fileInfos.getFiles();
-				boolean copied = false;
-				int pos = 0;
-				for (int i = 0; i < files.length; i++) {
-					DiskManagerFileInfo fileInfo = files[i];
-					if ( fileInfo.getTorrentFile().isPadFile()){
-						continue;
-					}
-					if (	fileInfo.isSkipped()
-							&& (fileInfo.getStorageType() == DiskManagerFileInfo.ST_COMPACT || fileInfo.getStorageType() == DiskManagerFileInfo.ST_REORDER_COMPACT)) {
-						continue;
-					}
-					if (pos != i) {
-						if ( !copied ){
-								// we *MUSTN'T* modify the returned array!!!!
-
-							DiskManagerFileInfo[] oldFiles = files;
-							files = new DiskManagerFileInfo[files.length];
-							System.arraycopy(oldFiles, 0, files, 0, files.length);
-
-							copied = true;
-						}
-
-						files[pos] = files[i];
-					}
-					pos++;
+			
+			Long lastSet = (Long)row.getData( "mtv:rowsubsset" );
+			
+			if ( lastSet == null ){
+				
+				row.setData( "mtv:rowsubsset", SystemTime.getMonotonousTime());
+				
+				DiskManagerFileInfo[] files = getVisibleFiles( dm );
+				if ( files != null ){			
+					rowCore.setSubItems(files);
 				}
-				if (pos != files.length) {
-					DiskManagerFileInfo[] oldFiles = files;
-					files = new DiskManagerFileInfo[pos];
-					System.arraycopy(oldFiles, 0, files, 0, pos);
-				}
-				rowCore.setSubItems(files);
 			}
 		}
 	}
 
+	private DiskManagerFileInfo[]
+	getVisibleFiles(
+		DownloadManager		dm )
+	{
+		DiskManagerFileInfoSet fileInfos = dm.getDiskManagerFileInfoSet();
+		if (fileInfos != null) {
+			DiskManagerFileInfo[] files = fileInfos.getFiles();
+			boolean copied = false;
+			int pos = 0;
+			for (int i = 0; i < files.length; i++) {
+				DiskManagerFileInfo fileInfo = files[i];
+				if ( fileInfo.getTorrentFile().isPadFile()){
+					continue;
+				}
+				if (	fileInfo.isSkipped()
+						&& (fileInfo.getStorageType() == DiskManagerFileInfo.ST_COMPACT || fileInfo.getStorageType() == DiskManagerFileInfo.ST_REORDER_COMPACT)) {
+					continue;
+				}
+				if (pos != i) {
+					if ( !copied ){
+							// we *MUSTN'T* modify the returned array!!!!
+
+						DiskManagerFileInfo[] oldFiles = files;
+						files = new DiskManagerFileInfo[files.length];
+						System.arraycopy(oldFiles, 0, files, 0, files.length);
+
+						copied = true;
+					}
+
+					files[pos] = files[i];
+				}
+				pos++;
+			}
+			if (pos != files.length) {
+				DiskManagerFileInfo[] oldFiles = files;
+				files = new DiskManagerFileInfo[pos];
+				System.arraycopy(oldFiles, 0, files, 0, pos);
+			}
+			
+			return( files );
+			
+		}else{
+			return( null );
+		}
+	}
+	
 	@Override
 	public boolean eventOccurred(UISWTViewEvent event) {
 		boolean b = super.eventOccurred(event);
@@ -3414,11 +3895,23 @@ public class MyTorrentsView
 	}
 
 	@Override
-	public void rowAdded(TableRowCore row) {
+	public void 
+	rowAdded(
+		TableRowCore row ) 
+	{
 		if (row.getParentRowCore() == null) {
 			DownloadManager dm = (DownloadManager) row.getDataSource(true);
 			if ( dm.getDownloadState().getBooleanAttribute( DownloadManagerState.AT_FILES_EXPANDED )){
 				row.setExpanded(true);
+			}
+			if ( isIncompletedOnly ){
+					// if a download has removed from complete to incomplete then make it obvious
+				Long prev_removed = (Long)dm.getUserData( KEY_DM_REMOVED_FROM_COMPLETE_TABLE_TIME );
+				if ( prev_removed != null ){
+					if ( SystemTime.getMonotonousTime() - prev_removed < 5000 ){						
+						dm.requestAttention();
+					}
+				}
 			}
 			
 			boolean	was_selected;
@@ -3462,6 +3955,13 @@ public class MyTorrentsView
 	public void 
 	rowRemoved(TableRowCore row) 
 	{
+		if ( isCompletedOnly && row.getParentRowCore() == null ){
+			
+			DownloadManager dm = (DownloadManager)row.getDataSource( true );
+			
+			dm.setUserData( KEY_DM_REMOVED_FROM_COMPLETE_TABLE_TIME, SystemTime.getMonotonousTime());
+		}
+		
 		TableRowCore[] selected = tv.getSelectedRows();
 
 		if (selected.length > 0 && rowRemovedRunnable == null) {
@@ -3603,5 +4103,11 @@ public class MyTorrentsView
 			
 			return( new Point(0,0));
 		}
+	}
+
+	public void debug(String s) {
+		System.out.printf("%.3f [%s] %s: %s%n",
+			System.currentTimeMillis() / 1000.0, Thread.currentThread().getName(),
+			tv == null ? "noTV" : tv.getTableID(), s);
 	}
 }

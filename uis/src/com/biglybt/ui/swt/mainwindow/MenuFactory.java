@@ -22,6 +22,7 @@ import java.io.*;
 import java.net.URL;
 import java.util.*;
 import java.util.List;
+import java.util.function.Supplier;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
@@ -91,6 +92,7 @@ import com.biglybt.pif.ui.UIInputReceiver;
 import com.biglybt.pif.ui.UIInputReceiverListener;
 import com.biglybt.pif.ui.menus.MenuManager;
 import com.biglybt.pif.ui.tables.*;
+import com.biglybt.pif.ui.tables.TableColumn;
 import com.biglybt.pif.update.Update;
 import com.biglybt.pif.update.UpdateCheckInstance;
 import com.biglybt.pif.update.UpdateCheckInstanceListener;
@@ -501,7 +503,7 @@ public class MenuFactory
 			public void handleEvent(Event event) {
 				MultipleDocumentInterface mdi = UIFunctionsManager.getUIFunctions().getMDI();
 				if (mdi != null) {
-					MdiEntry currentEntry = mdi.getCurrentEntry();
+					MdiEntry currentEntry = mdi.getMenuEntry( false );
 					if (currentEntry != null && currentEntry.isCloseable()) {
 						mdi.closeEntry(currentEntry,true);
 					}
@@ -513,7 +515,7 @@ public class MenuFactory
 			public void menuShown(MenuEvent e) {
 				MultipleDocumentInterface mdi = UIFunctionsManager.getUIFunctions().getMDI();
 				if (mdi != null) {
-					MdiEntry currentEntry = mdi.getCurrentEntry();
+					MdiEntry currentEntry = mdi.getMenuEntry( false );
 					if (currentEntry != null && currentEntry.isCloseable()) {
 						menuItem.setEnabled(true);
 						return;
@@ -529,6 +531,47 @@ public class MenuFactory
 		return menuItem;
 	}
 
+	public static MenuItem addCloseCurrentViewMenuItem(Menu menu) {
+		
+		final MenuItem item = addMenuItem(menu, MENU_ID_CLOSE_CURRENT_VIEW,
+				new Listener() {
+					@Override
+					public void handleEvent(Event e) {
+						MultipleDocumentInterface mdi = UIFunctionsManager.getUIFunctions().getMDI();
+						if (mdi != null) {
+							MdiEntry currentEntry = mdi.getMenuEntry( false );
+							if (currentEntry != null && currentEntry.isCloseable()) {
+								mdi.closeEntry(currentEntry,true);
+							}
+						}
+					}
+				});
+
+		Listener enableHandler = new Listener() {
+			@Override
+			public void handleEvent(Event event) {
+				if (MenuFactory.isEnabledForCurrentMode(item)) {
+					if (!item.isDisposed() && !event.widget.isDisposed()) {
+						MultipleDocumentInterface mdi = UIFunctionsManager.getUIFunctions().getMDI();
+						if (mdi != null) {
+							MdiEntry currentEntry = mdi.getMenuEntry( false );
+							if (currentEntry != null && currentEntry.isCloseable()) {
+								item.setEnabled(true);
+								return;
+							}
+						}
+						item.setEnabled(false);
+					}
+				}
+			}
+		};
+
+		menu.addListener(SWT.Show, enableHandler);
+
+		return item;
+		
+	}
+	
 	public static MenuItem addCloseDetailsMenuItem(Menu menu) {
 		final MenuItem item = addMenuItem(menu, MENU_ID_CLOSE_ALL_DETAIL,
 				new Listener() {
@@ -746,6 +789,19 @@ public class MenuFactory
 			}
 		});
 	}
+	
+	public static MenuItem addAllBlocksMenuItem(Menu menu) {
+		return addMenuItem(menu, MENU_ID_ALL_BLOCKS, new Listener() {
+			@Override
+			public void handleEvent(Event e) {
+				UIFunctions uiFunctions = UIFunctionsManager.getUIFunctions();
+				if (uiFunctions != null) {
+					uiFunctions.getMDI().showEntryByID(	MultipleDocumentInterface.SIDEBAR_SECTION_ALLBLOCKS );
+				}
+			}
+		});
+	}
+	
 	public static MenuItem addClientStatsMenuItem(Menu menu) {
 		return addMenuItem(menu, MENU_ID_CLIENT_STATS, new Listener() {
 			@Override
@@ -1280,6 +1336,33 @@ public class MenuFactory
 												run()
 												{
 													handleShowChanges();
+												}
+											});
+								}
+							});
+						
+						MenuItem showThreads = new MenuItem(menu, SWT.PUSH);
+
+						Messages.setLanguageText(showThreads, "show.threads" );
+
+						showThreads.addListener(
+							SWT.Selection,
+							new Listener()
+							{
+								@Override
+								public void
+								handleEvent(
+									Event arg )
+								{
+									Utils.execSWTThreadLater(
+											1,
+											new Runnable()
+											{
+												@Override
+												public void
+												run()
+												{
+													handleShowThreads();
 												}
 											});
 								}
@@ -1978,6 +2061,35 @@ public class MenuFactory
 
 	}
 
+	private static void
+	handleShowThreads()
+	{
+		Supplier<String> textGenerator = ()->{
+			
+			StringWriter content = new StringWriter();
+	
+			IndentWriter iw = new IndentWriter( new PrintWriter( content ));
+	
+			AEDiagnostics.dumpThreads( iw );
+			
+			iw.close();
+			
+			return( content.toString());
+		};
+		
+		
+		new TextViewerWindow(
+				null,
+				MessageText.getString( "label.threads" ),
+				null, 
+				textGenerator.get(), 
+				( window )->{
+					window.setText( textGenerator.get(), false );
+				},
+				false, false  );
+
+	}
+	
 	public static MenuItem addBlockedIPsMenuItem(Menu menu) {
 		return addMenuItem(menu, MENU_ID_IP_FILTER, new ListenerNeedingCoreRunning() {
 			@Override
@@ -3082,15 +3194,11 @@ public class MenuFactory
 			  @Override
 			  public int getIndex() {notSupported(); return 0;}
 			  @Override
-			  public void setForeground(int red, int green, int blue) {setForegroundDebug(); notSupported();}
-			  @Override
-			  public void setForeground(int[] rgb) {setForegroundDebug(); notSupported();}
-			  @Override
-			  public void setForegroundToErrorColor() {setForegroundDebug(); notSupported();}
-			  @Override
 			  public boolean isValid() {notSupported(); return false;}
 			  @Override
 			  public TableCell getTableCell(String sColumnName) {notSupported(); return null;}
+			  @Override
+			  public TableCell getTableCell(TableColumn column){ notSupported();return null;}
 			  @Override
 			  public boolean isSelected()  {notSupported(); return false;}
 			  @Override

@@ -8,7 +8,7 @@
     <parent>
         <groupId>com.biglybt</groupId>
         <artifactId>biglybt-parent</artifactId>
-        <version>2.5.0.1-SNAPSHOT</version>
+        <version>3.4.0.1-SNAPSHOT</version>
     </parent>
 
     <dependencies>
@@ -90,6 +90,22 @@
                                     </manifestEntries>
                                 </transformer>
                             </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>com.biglybt:biglybt-core</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/MANIFEST.MF</exclude>
+                                        <exclude>META-INF/takari/export-package</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
+                                    <artifact>com.biglybt:biglybt-ui</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/MANIFEST.MF</exclude>
+                                        <exclude>META-INF/takari/export-package</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>
@@ -98,6 +114,27 @@
     </build>
 
     <profiles>
+        <profile>
+            <id>no-swt</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>io.takari.maven.plugins</groupId>
+                        <artifactId>takari-lifecycle-plugin</artifactId>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/biglybt/ui/swt/**</exclude>
+                                <exclude>**/biglybt/ui/swing/**</exclude>
+                                <exclude>**/biglybt/ui/images/**</exclude>
+                                <exclude>**/biglybt/ui/icons/**</exclude>
+                                <exclude>**/biglybt/ui/skin/**</exclude>
+                                <exclude>**/eclipse/swt/**</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <profile>
             <id>plugin-api</id>
             <build>

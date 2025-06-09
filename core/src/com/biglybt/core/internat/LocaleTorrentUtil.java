@@ -27,6 +27,7 @@ import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentException;
 import com.biglybt.core.torrent.TOTorrentFile;
+import com.biglybt.core.util.ByteArrayHashMap;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.TorrentUtils;
 
@@ -103,6 +104,17 @@ public class LocaleTorrentUtil
 		return getTorrentEncoding(torrent, true, false);
 	}
 
+	public static boolean
+	canChangeTorrentEncoding( 
+		TOTorrent torrent )
+	{
+		String encoding = torrent.getAdditionalStringProperty("encoding");
+		if (TOTorrent.ENCODING_ACTUALLY_UTF8_KEYS.equals(encoding)) {
+			return( false );
+		}else{
+			return( true );
+		}
+	}
 	static public LocaleUtilDecoder getTorrentEncoding(TOTorrent torrent,
 			boolean saveToFileAllowed, boolean forcePrompt)
 			throws TOTorrentException
@@ -281,11 +293,24 @@ public class LocaleTorrentUtil
 
 		TOTorrentFile[] files = torrent.getFiles();
 
+		ByteArrayHashMap<String> tested = new ByteArrayHashMap<>();
+		
 		for (TOTorrentFile file : files) {
 
 			byte[][] comps = file.getPathComponents();
 
-			for (byte[] comp : comps) {
+			int last_comp = comps.length-1;
+			
+			for ( int i=0;i<=last_comp;i++){
+				byte[] comp = comps[i];
+				if ( i != last_comp ){
+						// optimise to avoid multiple tests of folder names
+					if (tested.containsKey( comp )){
+				
+						continue;
+					}
+					tested.put( comp, "" );
+				}
 				List<LocaleUtilDecoderCandidate> candidateDecoders = localeUtil.getCandidates(
 						comp);
 				if (candidateDecoders.size() < lMinCandidates) {
@@ -340,6 +365,7 @@ public class LocaleTorrentUtil
 	private static void retainAll(List<LocaleUtilDecoderCandidate> listToModify,
 			List<LocaleUtilDecoderCandidate> list) {
 		Iterator<LocaleUtilDecoderCandidate> it = listToModify.iterator();
+		boolean caused_removal = false;
 		while (it.hasNext()) {
 			LocaleUtilDecoderCandidate candidate = it.next();
 			if (candidate == null) {
@@ -355,6 +381,19 @@ public class LocaleTorrentUtil
 			}
 			if (!found) {
 				it.remove();
+				caused_removal = true;
+			}
+		}
+		if ( caused_removal ){
+			for( LocaleUtilDecoderCandidate rem: listToModify ){
+				if ( rem == null ){
+					continue;
+				}
+				for (LocaleUtilDecoderCandidate candidate2 : list) {
+					if (rem.getIndex() == candidate2.getIndex()) {
+						rem.setDetails( rem.getDecoder(), rem.getValue() + "; " + candidate2.getValue());
+					}
+				}
 			}
 		}
 	}

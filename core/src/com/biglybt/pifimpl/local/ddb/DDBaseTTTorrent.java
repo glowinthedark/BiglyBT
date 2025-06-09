@@ -164,6 +164,11 @@ DDBaseTTTorrent
 					continue;
 				}
 
+				if ( dl.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
+					
+					continue;
+				}
+				
 				String	sha1 = dl.getAttribute( ta_sha1 );
 
 				if ( sha1 == null ){
@@ -218,7 +223,7 @@ DDBaseTTTorrent
 				}
 			}
 
-			String	originator = contact.getName();
+			String	originator = contact.getName() + " (" + contact.getAddress() + ")";
 
 			if ( download == null ){
 
@@ -273,6 +278,29 @@ DDBaseTTTorrent
 					if ( !dms.isPeerSourceEnabled( PEPeerSource.PS_DHT )){
 	
 						ddb.log( "TorrentDownload: request from " + originator + "  for '" + download.getName() + "' denied as DHT peer source disabled" );
+	
+						return( null );
+					}
+					
+					String contact_net = AENetworkClassifier.categoriseAddress( contact.getAddress());
+					
+					String[] nets = dms.getNetworks();
+					
+					boolean net_ok = false;
+					
+					for ( String n: nets ){
+						
+						if ( n == contact_net ){
+							
+							net_ok = true;
+							
+							break;
+						}
+					}
+					
+					if ( !net_ok){
+						
+						ddb.log( "TorrentDownload: request from " + originator + "  for '" + download.getName() + "' denied as network '" + contact_net + "' is disabled" );
 	
 						return( null );
 					}

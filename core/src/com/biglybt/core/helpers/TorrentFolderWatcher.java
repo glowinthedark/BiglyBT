@@ -23,6 +23,7 @@ import java.io.File;
 import java.io.FilenameFilter;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -33,6 +34,7 @@ import java.util.Set;
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.disk.DiskManagerFileInfoSet;
@@ -52,8 +54,15 @@ import com.biglybt.core.tag.TagType;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.torrent.impl.TorrentOpenOptions;
+import com.biglybt.core.tracker.client.TRTrackerAnnouncer;
 import com.biglybt.core.util.*;
 import com.biglybt.core.util.protocol.magnet.MagnetConnection2;
+import com.biglybt.pif.PluginInterface;
+import com.biglybt.pif.logging.LoggerChannel;
+import com.biglybt.pif.ui.UIManager;
+import com.biglybt.pif.ui.model.BasicPluginViewModel;
+import com.biglybt.ui.UIFunctions;
+import com.biglybt.ui.UIFunctionsManager;
 
 /**
  * Watches a folder for new torrents and imports them.
@@ -68,6 +77,8 @@ public class TorrentFolderWatcher {
 
 	private volatile GlobalManager _global_manager;
 
+	private final LoggerChannel log;
+	
 	volatile boolean running = false;
 
 	private final ArrayList<TOTorrent> to_delete = new ArrayList<>();
@@ -184,6 +195,20 @@ public class TorrentFolderWatcher {
 	 */
 	public TorrentFolderWatcher(GlobalManager global_manager) {
 		_global_manager = global_manager;
+		
+		Core core = CoreFactory.getSingleton();
+		PluginInterface plugin_interface = core.getPluginManager().getDefaultPluginInterface();
+
+		log = plugin_interface.getLogger().getTimeStampedChannel( "Torrent Importer" );
+
+		UIManager	ui_manager = plugin_interface.getUIManager();
+
+		BasicPluginViewModel model = ui_manager.createBasicPluginViewModel( "log.torrent.importer" );
+
+		model.getActivity().setVisible( false );
+		model.getProgress().setVisible( false );
+
+		model.attachLoggerChannel( log );
 	}
 
 	public void
@@ -209,8 +234,26 @@ public class TorrentFolderWatcher {
 				param_listener);
 	}
 
-	void importAddedFiles() {
-
+	private File
+	renameToImported(
+		File 	parent,
+		File	file )
+	{
+		File imported = FileUtil.newFile (parent, file.getName() + ".imported");
+		
+		if ( imported.exists()){
+			
+			imported.delete();
+		}
+		
+		TorrentUtils.move(file, imported);
+		
+		return( imported );
+	}
+	
+	void 
+	importAddedFiles() 
+	{
 		Core core = CoreFactory.getSingleton();
 
 		try {
@@ -231,13 +274,13 @@ public class TorrentFolderWatcher {
 
 			boolean save_torrents_default = COConfigurationManager.getBooleanParameter("Save Torrent Files");
 
-			String torrent_save_path = COConfigurationManager
-					.getStringParameter("General_sDefaultTorrent_Directory");
+			String torrent_save_path = COConfigurationManager.getStringParameter("General_sDefaultTorrent_Directory");
 
 			int start_mode = COConfigurationManager.getIntParameter( "Watch Torrents Add Mode" );
 
 			boolean always_rename = COConfigurationManager.getBooleanParameter("Watch Torrent Always Rename");
-
+			
+			boolean use_tod = COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_WATCH_TORRENT_USE_TOD );
 			
 	    	int num_folders = COConfigurationManager.getIntParameter( "Watch Torrent Folder Path Count", 1);
 
@@ -329,6 +372,14 @@ public class TorrentFolderWatcher {
 
 				TOTorrent torrent = (TOTorrent) to_delete.get(i);
 
+				try{
+					log( "Deleting processed torrent: " + TorrentUtils.getTorrentFileName(torrent));
+					
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+				
 				try {
 					TorrentUtils.delete(torrent);
 
@@ -344,6 +395,11 @@ public class TorrentFolderWatcher {
 
 				File	folder = folders.get(folder_index);
 
+				if ( Logger.isEnabled()){
+				
+					log( "Processing " + folder );
+				}
+				
 				final String tag_name = tags.get(folder_index);
 
 					// if we are saving torrents to the same location as we import them from
@@ -358,6 +414,8 @@ public class TorrentFolderWatcher {
 					save_torrents = false;
 				}
 
+				boolean rename_to_imported = always_rename || !save_torrents;
+						
 				String[] currentFileList = folder.list(filename_filter);
 
 				if (currentFileList == null) {
@@ -381,36 +439,72 @@ public class TorrentFolderWatcher {
 							
 						}else{
 							// make sure we've got a valid torrent file before proceeding
-	
-							DownloadManager dm;
+								
+							log( "Importing " + file.getName());
 							
 							try {
 	
-								TOTorrent torrent = TorrentUtils.readFromFile(file, false);
-	
-								dm = global_manager.getDownloadManager( torrent );
+								boolean logged = false;
 								
-								if ( dm != null) {
+								TOTorrent new_torrent = TorrentUtils.readFromFile(file, false);
+	
+								DownloadManager existing_dm = global_manager.getDownloadManager( new_torrent );
+								
+								if ( existing_dm != null) {
 	
 									if (Logger.isEnabled())
 										Logger.log(new LogEvent(LOGID, file.getAbsolutePath()
 												+ " is already being downloaded"));
-										
-										// check to see if we can rename the torrent file
+																			
+									applyTag( existing_dm, tag_name );
 
-									if ( always_rename ){
+									TOTorrent existing_torrent	= existing_dm.getTorrent();
+											
+									if ( 	existing_torrent != null && 
+											!existing_torrent.getPrivate() && 
+											!new_torrent.getPrivate()){
 									
-										if ( !file.equals( FileUtil.newFile( dm.getTorrentFileName()).getAbsoluteFile())){
+										boolean can_merge = TorrentUtils.canMergeAnnounceURLs( new_torrent, existing_torrent);
+									
+										if ( can_merge ){
 											
-											File imported = FileUtil.newFile(folder, file.getName() + ".imported");
+											TorrentUtils.mergeAnnounceURLs(	new_torrent, existing_torrent );
 											
-											TorrentUtils.move(file, imported);
+											TorrentUtils.writeToFile( existing_torrent );
+											
+											TRTrackerAnnouncer tc = existing_dm.getTrackerClient();
+											
+											if ( tc != null ){
+
+												tc.resetTrackerUrl( false );
+											}
+											
+											logged = true;
+											
+											log( "Merged trackers from " + file.getName() + " into existing download" );
 										}
 									}
 									
-									applyTag( dm, tag_name );
+										// check to see if we can rename/delete the torrent file
+								
+									if ( !file.equals( FileUtil.newFile( existing_dm.getTorrentFileName()).getAbsoluteFile())){
+										
+										if ( rename_to_imported ){
 
-								}else if ( plugin_dm.lookupDownloadStub( torrent.getHash()) != null ){
+											renameToImported( folder, file );
+											
+										}else{
+											
+											to_delete.add( new_torrent );
+										}
+									}
+								
+									if ( !logged ){
+										
+										log( "Import ignored, download already present: " + file.getName());
+									}
+									
+								}else if ( plugin_dm.lookupDownloadStub( new_torrent.getHash()) != null ){
 	
 									// archived download
 	
@@ -418,20 +512,20 @@ public class TorrentFolderWatcher {
 										Logger.log(new LogEvent(LOGID, file.getAbsolutePath()
 												+ " is an archived download"));
 	
-									if ( always_rename || !save_torrents ){
+									if ( rename_to_imported ){
 	
-										File imported = FileUtil.newFile(folder, file.getName() + ".imported");
-	
-										TorrentUtils.move(file, imported);
+										renameToImported( folder, file );
 	
 									}else{
 	
-										to_delete.add(torrent);
+										to_delete.add( new_torrent );
 									}
 	
-								} else {
+									log( "Import ignored, download already archived: " + file.getName());
+									
+								}else{
 
-									boolean[] to_skip = TorrentUtils.getSkipFiles( torrent );
+									boolean[] to_skip = TorrentUtils.getSkipFiles( new_torrent );
 
 									final DownloadManagerInitialisationAdapter dmia = new DownloadManagerInitialisationAdapter() {
 	
@@ -526,9 +620,12 @@ public class TorrentFolderWatcher {
 									};
 	
 									byte[] hash = null;
-									try {
-										hash = torrent.getHash();
-									} catch (Exception e) { }
+									
+									try{
+										hash = new_torrent.getHash();
+										
+									}catch( Exception e ){
+									}
 	
 									String data_save_path = default_data_save_path;
 									
@@ -557,18 +654,18 @@ public class TorrentFolderWatcher {
 												
 													File root;
 													
-													if ( torrent.isSimpleTorrent()){
+													if ( new_torrent.isSimpleTorrent()){
 													
 														root = move_loc;
 														
 													}else{
 														
-														root = FileUtil.newFile( move_loc, FileUtil.convertOSSpecificChars( TorrentUtils.getLocalisedName(torrent), true ));
+														root = FileUtil.newFile( move_loc, FileUtil.convertOSSpecificChars( TorrentUtils.getLocalisedName( new_torrent ), true ));
 													}
 													
 													if (( tag_save_location.getTagMoveOnCompleteOptions() & TagFeatureFileLocation.FL_DATA ) != 0 ){
 																																										
-														TOTorrentFile[] files = torrent.getFiles();
+														TOTorrentFile[] files = new_torrent.getFiles();
 														
 														boolean all_exist = true;
 														
@@ -600,42 +697,160 @@ public class TorrentFolderWatcher {
 											}
 										}
 									}
-									
-									int start_state = TorrentOpenOptions.addModePreCreate(start_mode);
-									
-									if ( always_rename || !save_torrents) {
-	
-										File imported = FileUtil.newFile(folder, file.getName() + ".imported");
-	
-										TorrentUtils.move(file, imported);
-	
-										dm = global_manager.addDownloadManager(imported.getAbsolutePath(), hash,
-												data_save_path, start_state, true, for_seeding, dmia);
+																		
+									if ( !use_tod ){
 										
-	
-									} else {
-	
-										dm = global_manager.addDownloadManager(file.getAbsolutePath(), hash,
-												data_save_path, start_state, true, for_seeding, dmia);
-	
-										// add torrent for deletion, since there will be a
-										// saved copy elsewhere
-										to_delete.add(torrent);
-									}
+										int start_state = TorrentOpenOptions.addModePreCreate(start_mode);
+
+										DownloadManager new_dm;
+										
+										if ( rename_to_imported ){
+		
+											File imported = renameToImported( folder, file );
+		
+											new_dm = global_manager.addDownloadManager(imported.getAbsolutePath(), hash,
+													data_save_path, start_state, true, for_seeding, dmia);
+											
+		
+										} else {
+		
+											new_dm = global_manager.addDownloadManager(file.getAbsolutePath(), hash,
+													data_save_path, start_state, true, for_seeding, dmia);
+		
+											// add torrent for deletion, since there will be a
+											// saved copy elsewhere
+											
+											to_delete.add( new_torrent );
+										}
+											
+										log( "Imported " + file.getName());
+										
+											// might have already existed, check tagging
+											
+										applyTag( new_dm, tag_name );
+										
+											// if it was a magnet download then pick up any tags that
+											// were manually added to it while it was downloading
+										
+										List<String> it = TorrentUtils.getInitialTags( new_torrent );
+										
+										if ( !it.isEmpty()){
+											
+											try{
+												TagManager tm = TagManagerFactory.getTagManager();
 												
-										// might have already existed, check tagging
+												for ( String tag: it ){
+													
+													Tag t = tm.getTagType( TagType.TT_DOWNLOAD_MANUAL ).getTag( tag,  true );
+													
+													if ( t != null ){
+														
+														if ( !t.hasTaggable( new_dm )){
+															
+															t.addTaggable( new_dm );
+														}	
+													}
+												}
+											}catch( Throwable e ){
+												
+												Debug.out( e );
+											}
+										}
 										
-									applyTag( dm, tag_name );
+										TorrentOpenOptions.addModePostCreate(start_mode, new_dm );	
+										
+										if (Logger.isEnabled()){
+											Logger.log(new LogEvent(LOGID, "Auto-imported "
+													+ file.getAbsolutePath()));
+										}
 									
-									TorrentOpenOptions.addModePostCreate(start_mode, dm );	
-									
-									if (Logger.isEnabled())
-										Logger.log(new LogEvent(LOGID, "Auto-imported "
-												+ file.getAbsolutePath()));
+									}else{
+										
+										TorrentOpenOptions torrentOptions = new TorrentOpenOptions( null );
+
+										File to_file;
+										
+										if ( rename_to_imported ){
+										
+											to_file = renameToImported( folder, file );
+											
+										}else{
+
+											TOTorrent copy = TorrentUtils.cloneTorrent( new_torrent );
+
+												// delete immediately
+												// to_delete.add( torrent );
+
+											try{
+												log( "Deleting processed torrent: " + TorrentUtils.getTorrentFileName( new_torrent ));
+												
+											}catch( Throwable e ){
+												
+												Debug.out( e );
+											}
+											
+											try{
+												TorrentUtils.delete( new_torrent );
+
+											}catch( Throwable e ){
+
+												Debug.printStackTrace(e);
+											}
+											
+											new_torrent = copy;
+											
+											to_file = AETemporaryFileHandler.createTempFile();
+											
+											TorrentUtils.writeToFile( new_torrent, to_file, false );											
+										}
+										
+										TOTorrent to_torrent = TorrentUtils.readFromFile( to_file, false );
+												
+										torrentOptions.setDeleteFileOnCancel( false );
+										torrentOptions.setTorrentFile( to_file.getAbsolutePath());
+										torrentOptions.setTorrent( to_torrent );
+																					
+										torrentOptions.setStartMode( start_mode );						
+										
+										if ( tag_name != null ){
+											
+											TagManager tm = TagManagerFactory.getTagManager();
+
+											TagType tt = tm.getTagType( TagType.TT_DOWNLOAD_MANUAL );
+
+											Tag	tag = tt.getTag( tag_name, true );
+
+											try{
+												if ( tag == null ){
+
+													tag = tt.createTag( tag_name, true );
+												}
+												
+												torrentOptions.setInitialTags( Arrays.asList( tag ));
+												
+											}catch( Throwable e ){
+												
+												Debug.out( e );
+											}
+										}
+										
+										UIFunctions uif = UIFunctionsManager.getUIFunctions();
+
+										uif.addTorrentWithOptions( false, torrentOptions );
+										
+										log( "Imported (via options dialog) " + file.getName());
+
+										if (Logger.isEnabled()){
+											Logger.log(new LogEvent(LOGID, "Auto-imported (via options dialog) "
+													+ file.getAbsolutePath()));
+										}
+
+									}
 								}
-	
 							} catch (Throwable e) {
 	
+								log( "Failed to import " + file.getName() + ": " + Debug.getNestedExceptionMessage(e));
+								
 								Debug.out("Failed to auto-import torrent file '"
 										+ file.getAbsolutePath() + "' - "
 										+ Debug.getNestedExceptionMessage(e));
@@ -869,7 +1084,9 @@ public class TorrentFolderWatcher {
 		}
 		
 		pending_magnets.add( file );
-		
+
+		log( "Adding magnet to queue: " + file.getName() + " - pending=" + pending_magnets.size() + ", active=" + active_magnets.size());
+				
 		if ( active_magnets.size() >= 5 ){
 			
 			return;
@@ -892,6 +1109,8 @@ public class TorrentFolderWatcher {
 					boolean		bad_magnet 	= true;
 					
 					try{
+						log( "Processing magnet: " + active.getName() + " - pending=" + pending_magnets.size() + ", active=" + active_magnets.size());
+						
 						String magnet_uri = FileUtil.readFileAsString( active, 32000, "UTF-8" );
 						
 						URL magnet_url = new URL( magnet_uri );
@@ -945,13 +1164,21 @@ public class TorrentFolderWatcher {
 							
 							if ( ok ){
 							
+								log( "Completed magnet: " + active.getName());
+								
 								active.delete();
 								
 							}else{
 								
 								if ( bad_magnet ){
 								
+									log( "Bad magnet, failing: " + active.getName());
+									
 									active.renameTo( FileUtil.newFile( active.getAbsolutePath() + ".failed" ));
+									
+								}else{
+									
+									log( "Magnet download failed, will retry later: " + active.getName());
 								}
 								
 								failed_magnets.add( active );
@@ -980,5 +1207,12 @@ public class TorrentFolderWatcher {
 				}
 			}
 		}.start();
+	}
+	
+	private void
+	log(
+		String		str )
+	{
+		log.log( str );
 	}
 }

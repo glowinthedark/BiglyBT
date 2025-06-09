@@ -58,21 +58,24 @@ AEPluginProxyHandler
 	private static boolean	enable_plugin_proxies_with_socks;
 
 	static{
+		COConfigurationManager.addAndFireParameterListener(
+			"Proxy.SOCKS.disable.plugin.proxies",
+			new ParameterListener() {
+				@Override
+				public void
+				parameterChanged(
+					String parameterName)
+				{
+					enable_plugin_proxies_with_socks = !COConfigurationManager.getBooleanParameter( parameterName );
+				}
+			});
+	}
+	
+	public static void
+	initialise(
+		Core		core )
+	{
 		try{
-			COConfigurationManager.addAndFireParameterListener(
-				"Proxy.SOCKS.disable.plugin.proxies",
-				new ParameterListener() {
-					@Override
-					public void
-					parameterChanged(
-						String parameterName)
-					{
-						enable_plugin_proxies_with_socks = !COConfigurationManager.getBooleanParameter( parameterName );
-					}
-				});
-
-			Core core = CoreFactory.getSingleton();
-
 			PluginInterface default_pi = core.getPluginManager().getDefaultPluginInterface();
 
 			default_pi.addEventListener(
@@ -387,6 +390,29 @@ AEPluginProxyHandler
 		return( proxy_list.contains( address ));
 	}
 
+	public static String
+	lookupPluginProxyURLHostRewrite(
+		String		host )
+	{
+		synchronized( proxy_map ){
+			
+			for ( WeakReference<PluginProxyImpl> ref: proxy_map.values()){
+				
+				PluginProxyImpl pp = ref.get();
+				
+				if ( pp != null ){
+					
+					if ( pp.getHost().equals( host )){
+						
+						return( pp.getURLHostRewrite());
+					}
+				}
+			}
+		}
+		
+		return( null );
+	}
+	
 	public static Boolean
 	testPluginHTTPProxy(
 		URL			url,
@@ -552,6 +578,63 @@ AEPluginProxyHandler
 
 		return( null );
 	}
+	
+	private static InetSocketAddress
+	getLocalAddress(
+		PluginProxyImpl	pp )
+	{
+		String					host		= pp.getHost();
+		int						port		= pp.getPort();
+		
+		return( getLocalAddress( host, port ));
+	}
+	
+	public static final int LA_EXPLICIT_NET_NONE	= 0;
+	public static final int LA_EXPLICIT_NET_MIX		= 1;
+	public static final int LA_EXPLICIT_NET_PURE	= 2;
+	
+	public static InetSocketAddress
+	getLocalAddress(
+		String		host,
+		int			port )
+	{
+		return( getLocalAddress( host, port, LA_EXPLICIT_NET_NONE ));
+	}
+	
+	public static InetSocketAddress
+	getLocalAddress(
+		String		host,
+		int			port,
+		int			network )
+	{
+		waitForPlugins( plugin_init_max_wait );
+		
+		Map<String,Object>		options		= new HashMap<>();
+
+		options.put( "net", network );
+		
+		Object[] args = new Object[]{ host, port, options };
+		
+		for ( PluginInterface pi: plugins ){
+
+			try{
+				IPCInterface ipc = pi.getIPC();
+
+				if ( ipc.canInvoke( "getLocalProxyEndpoint", args )){
+
+					Map<String,Object> reply = (Map<String,Object>)ipc.invoke( "getLocalProxyEndpoint", args );
+
+					String	l_host	= (String)reply.get( "host" );
+					int		l_port	= (Integer)reply.get( "port" );
+					
+					return( InetSocketAddress.createUnresolved( l_host, l_port ));
+				}
+			}catch( Throwable e ){
+			}
+		}
+		
+		return( null );
+	}
 
 	private static void
 	checkPluginInstallation(
@@ -580,6 +663,7 @@ AEPluginProxyHandler
 	private static Map<String,Long>	declines = new HashMap<>();
 
 	private static boolean tor_installing;
+	private static boolean tor_install_fail_reported;
 	
 	private static boolean
 	installTor(
@@ -680,19 +764,24 @@ AEPluginProxyHandler
 								try{
 									if ( result instanceof Throwable ){
 										
-										UIFunctionsUserPrompter prompter = 
-											uif.getUserPrompter(
-												MessageText.getString( "metasearch.addtemplate.failed.title"), 
-												MessageText.getString( "plugin.manual.install",
-													new String[]{ Constants.PLUGINS_WEB_SITE,
-													MessageText.getString( "aznettor.plugin.name" )}), 
-												new String[]{
-														MessageText.getString("Button.ok"),
-												}, 0);
-
-											prompter.setAutoCloseInMS(0);
+										if ( !tor_install_fail_reported ){
 											
-											prompter.open(null);
+											tor_install_fail_reported = true;
+										
+											UIFunctionsUserPrompter prompter = 
+												uif.getUserPrompter(
+													MessageText.getString( "metasearch.addtemplate.failed.title"), 
+													MessageText.getString( "plugin.manual.install",
+														new String[]{ Constants.PLUGINS_WEB_SITE,
+														MessageText.getString( "aznettor.plugin.name" )}), 
+													new String[]{
+															MessageText.getString("Button.ok"),
+													}, 0);
+	
+												prompter.setAutoCloseInMS(0);
+												
+												prompter.open(null);
+										}
 									}
 									
 									if ( callback != null ){
@@ -834,6 +923,13 @@ AEPluginProxyHandler
 		}
 
 		@Override
+		public InetSocketAddress 
+		getLocalAddress()
+		{
+			return( AEPluginProxyHandler.getLocalAddress( this ));
+		}
+		
+		@Override
 		public PluginProxy
 		getChildProxy(
 			String		child_reason,
@@ -881,7 +977,20 @@ AEPluginProxyHandler
 		public String
 		getHost()
 		{
-			return((String)proxy_details[1]);
+			Object obj = proxy_details[1];
+			
+			if ( obj instanceof String ){
+				
+				return((String)obj);
+				
+			}else if ( obj instanceof URL ){
+				
+				return(((URL)obj).getHost());
+				
+			}else{
+				
+				return( null );
+			}
 		}
 
 		@Override

@@ -25,6 +25,7 @@ import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
+import com.biglybt.core.config.ConfigKeys.BackupRestore;
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreLifecycleAdapter;
 import com.biglybt.core.backup.BackupManager;
@@ -34,12 +35,14 @@ import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.config.impl.ConfigurationManager;
 import com.biglybt.core.custom.CustomizationManagerFactory;
+import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.logging.Logger;
 import com.biglybt.core.util.*;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.update.UpdateInstaller;
+import com.biglybt.pifimpl.PluginUtils;
 
 public class
 BackupManagerImpl
@@ -533,46 +536,80 @@ BackupManagerImpl
 				public void
 				runSupport()
 				{
-					BackupListener listener = new
-					BackupListener()
-					{
-						@Override
-						public boolean
-						reportProgress(
-							String		str )
-						{
-							return( _listener.reportProgress(str));
-						}
-
-						@Override
-						public void
-						reportComplete()
-						{
-							try{
-								setStatus( "" );
-
-							}finally{
-
-								_listener.reportComplete();
+					boolean pause_downloads = COConfigurationManager.getBooleanParameter( ConfigKeys.BackupRestore.BCFG_BACKUP_PAUSE_DOWNLOADS );
+					
+					List<DownloadManager> paused_downloads = new ArrayList<>();
+					
+					try{
+						if ( pause_downloads ){
+							
+							List<DownloadManager> dms = core.getGlobalManager().getDownloadManagers();
+							
+							for ( DownloadManager dm: dms ){
+								
+								if ( dm.pause( true )){
+									
+									paused_downloads.add( dm );
+								}
 							}
+							
+							_listener.reportProgress( "Paused " + paused_downloads.size() + " downloads" );
 						}
-
-						@Override
-						public void
-						reportError(
-							Throwable 	error )
-						{
-							try{
-								setStatus( Debug.getNestedExceptionMessage( error ));
-
-							}finally{
-
-								_listener.reportError( error );
+						
+						BackupListener listener = new
+							BackupListener()
+							{
+								@Override
+								public boolean
+								reportProgress(
+									String		str )
+								{
+									return( _listener.reportProgress(str));
+								}
+		
+								@Override
+								public void
+								reportComplete()
+								{
+									try{
+										setStatus( "" );
+		
+									}finally{
+		
+										_listener.reportComplete();
+									}
+								}
+		
+								@Override
+								public void
+								reportError(
+									Throwable 	error )
+								{
+									try{
+										setStatus( Debug.getNestedExceptionMessage( error ));
+		
+									}finally{
+		
+										_listener.reportError( error );
+									}
+								}
+							};
+	
+						backupSupport( parent_folder, listener );
+						
+					}finally{
+						
+						if ( !paused_downloads.isEmpty()){
+							
+							for ( DownloadManager dm: paused_downloads ){
+								
+								dm.resume();
 							}
-						}
-					};
+							
+							_listener.reportProgress( "Resumed " + paused_downloads.size() + " downloads" );
 
-					backupSupport( parent_folder, listener );
+						}
+					}
 				}
 
 				void
@@ -596,6 +633,81 @@ BackupManagerImpl
 		}
 	}
 
+	private File[]
+	getHighestVersions(
+		File[]		files )
+	{
+		List<File>	result = new ArrayList<>( files.length );
+		
+		Map<String,Object[]> version_map = new HashMap<>();
+		
+  		for ( File file: files ){
+
+  			String	name = file.getName().toLowerCase();
+
+  			if ( name.endsWith(".jar") || name.endsWith( ".zip" )){
+
+  				int name_len = name.length();
+  				
+  				int sep_pos = name.lastIndexOf("_");
+  				
+  				if ( 	sep_pos == -1 ||
+  						sep_pos == name_len-1 ||
+						!Character.isDigit(name.charAt(sep_pos+1))){
+
+  						// not a versioned jar
+
+  					result.add( file );
+
+  				}else{
+
+					String version = name.substring( sep_pos+1, name_len-4 );
+
+					if ( Constants.isValidVersionFormat( version )){
+						
+	  					String prefix = name.substring( 0, sep_pos );
+
+						String type = name.substring( name_len-4 );
+						
+						String key = prefix + type;
+						
+						Object[]	version_info = version_map.get( key );
+	
+						if ( version_info == null ){
+	
+							version_map.put( key, new Object[]{ version, file });
+	
+						}else{
+	
+							if ( PluginUtils.comparePluginVersions((String)version_info[0], version ) < 0 ){
+	
+								version_info[0] = version;
+								version_info[1] = file;
+							}
+						}
+					}else{
+				
+							// invalid version
+						
+						result.add( file );
+					}
+  				}
+   			}else{
+   				
+   					// not jar or zip
+   				
+   				result.add( file );
+   			}
+  		}
+  		
+  		for ( Object[] entry: version_map.values()){
+  			
+  			result.add((File)entry[1]);
+  		}
+  		
+		return( result.toArray( new File[ result.size()]));
+	}
+	
 	private long[]
  	copyFiles(
  		File		from_file,
@@ -657,19 +769,29 @@ BackupManagerImpl
 	
 				File[] files = from_file.listFiles();
 	
-				for ( File f: files ){
-	
-					checkClosing();
-	
-					long[] temp = copyFilesSupport( f, FileUtil.newFile( to_file, f.getName()), depth+1 );
-	
-					total_files 	+= temp[0];
-					total_copied	+= temp[1];
+				if ( files != null ){
+					
+					boolean do_versions =  depth == 2 && parent_name.equals( "plugins" );
+						
+					if ( do_versions ){
+						
+						files = getHighestVersions( files );
+					}
+					
+					for ( File f: files ){
+		
+						checkClosing();
+		
+						long[] temp = copyFilesSupport( f, FileUtil.newFile( to_file, f.getName()), depth+1 );
+		
+						total_files 	+= temp[0];
+						total_copied	+= temp[1];
+					}
 				}
 			}
 		}else{
 
-			if ( !FileUtil.copyFile( from_file, to_file )){
+			if ( !FileUtil.copyFileWithDates( from_file, to_file )){
 
 				try{
 					Thread.sleep( 5000 );
@@ -677,12 +799,14 @@ BackupManagerImpl
 				}catch( Throwable e ){
 				}
 
-				if ( !FileUtil.copyFile( from_file, to_file )){
+				if ( !FileUtil.copyFileWithDates( from_file, to_file )){
 
 						// a few exceptions here (e.g. dasu plugin has a 'lock' file that breaks things)
 
 					String name = from_file.getName().toLowerCase( Locale.US );
 
+					String full_path = from_file.getAbsolutePath().toLowerCase( Locale.US );
+					
 					if ( 	name.startsWith( ".lock" ) 		||
 							name.startsWith( ".azlock" ) 	|| 	// i2phelper
 							name.startsWith( "lock" ) 		|| 	// dasu
@@ -695,7 +819,8 @@ BackupManagerImpl
 							name.endsWith( ".so" )			||	// might be in use, no big deal
 							FileUtil.containsPathSegment(from_file, "cache", false) || // caches can be in use, no big deal
 							FileUtil.containsPathSegment(from_file, "azneti2phelper" + File.separator + "netdb", false ) ||	// troublesome i2p files
-							FileUtil.containsPathSegment(from_file, "azneti2phelper" + File.separator + "peerprofiles", false )	// troublesome i2p files
+							FileUtil.containsPathSegment(from_file, "azneti2phelper" + File.separator + "peerprofiles", false )	|| // troublesome i2p files
+							full_path.endsWith( "aznettor" + File.separator + "data" + File.separator + "lock" )	// troublesome tor files
 							){
 
 						return( new long[]{ total_files, total_copied });
@@ -752,7 +877,7 @@ BackupManagerImpl
 	{
 		try{
 			String date_dir = new SimpleDateFormat( "yyyy-MM-dd" ).format( new Date());
-
+			
 			File 		backup_folder 	= null;
 			boolean		ok 				= false;
 
@@ -880,6 +1005,8 @@ BackupManagerImpl
 				core.saveState();
 
 				try{
+					long total_size = 0;
+
 					listener.reportProgress( "Reading configuration data from " + user_dir.getAbsolutePath());
 
 					File[] user_files = user_dir.listFiles();
@@ -924,16 +1051,22 @@ BackupManagerImpl
 
 						long[]	result = copyFiles( f, dest_file );
 
-						String	result_str = DisplayFormatters.formatByteCountToKiBEtc( result[1] );
+						long size = result[1];
+						
+						total_size += size;
+						
+						String	result_str = DisplayFormatters.formatByteCountToKiBEtc( size );
 
 						if ( result[0] > 1 ){
 
 							result_str = result[0] + " files, " + result_str;
 						}
 
-						listener.reportProgress( result_str );
+						listener.reportProgress( " " + result_str );
 					}
 
+					listener.reportProgress( "Backup size: " + DisplayFormatters.formatByteCountToKiBEtc( total_size ));
+					
 					listener.reportComplete();
 
 					ok	= true;
@@ -954,6 +1087,8 @@ BackupManagerImpl
 			}
 		}catch( Throwable e ){
 
+			Debug.out( e );
+			
 			_listener.reportError( e );
 		}
 	}
@@ -1292,6 +1427,8 @@ BackupManagerImpl
 			}
 		}catch( Throwable e ){
 
+			Debug.out( e );
+			
 			listener.reportError( e );
 		}
 	}

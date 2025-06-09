@@ -19,6 +19,7 @@
 package com.biglybt.ui.swt.subscriptions;
 
 
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.List;
 import java.util.function.Function;
@@ -37,6 +38,7 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.subs.Subscription;
 import com.biglybt.core.subs.SubscriptionDownloadListener;
 import com.biglybt.core.subs.SubscriptionException;
+import com.biglybt.core.subs.SubscriptionHistory;
 import com.biglybt.core.subs.SubscriptionListener;
 import com.biglybt.core.subs.SubscriptionResult;
 import com.biglybt.core.subs.SubscriptionResultFilter;
@@ -53,7 +55,6 @@ import com.biglybt.ui.common.table.*;
 import com.biglybt.ui.common.table.impl.TableColumnManager;
 import com.biglybt.ui.common.updater.UIUpdatable;
 import com.biglybt.ui.common.util.MenuItemManager;
-import com.biglybt.ui.mdi.MdiEntry;
 import com.biglybt.ui.selectedcontent.DownloadUrlInfo;
 import com.biglybt.ui.selectedcontent.ISelectedContent;
 import com.biglybt.ui.selectedcontent.SelectedContent;
@@ -63,10 +64,13 @@ import com.biglybt.ui.swt.UIFunctionsManagerSWT;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.columns.searchsubs.*;
 import com.biglybt.ui.swt.columns.subscriptions.ColumnSubResultNew;
+import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.imageloader.ImageLoader;
 import com.biglybt.ui.swt.mainwindow.ClipboardCopy;
 import com.biglybt.ui.swt.mainwindow.Colors;
+import com.biglybt.ui.swt.mdi.MdiEntrySWT;
 import com.biglybt.ui.swt.mdi.MultipleDocumentInterfaceSWT;
+import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.search.SBC_SearchResultsView;
 import com.biglybt.ui.swt.skin.*;
 import com.biglybt.ui.swt.utils.SearchSubsUtils;
@@ -76,6 +80,7 @@ import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.ui.swt.views.table.TableViewSWTMenuFillListener;
 import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
 import com.biglybt.ui.swt.views.table.utils.TableColumnCreator;
+import com.biglybt.ui.swt.views.table.utils.TableColumnFilterHelper;
 import com.biglybt.ui.swt.views.tableitems.ColumnDateSizer;
 
 public class
@@ -85,13 +90,18 @@ SBC_SubscriptionResultsView
 {
 	public static final String TABLE_SR = "SubscriptionResults";
 
+	private final Object FILTER_KEY = new Object();	// not static as we want separate per view
+	
 	private static boolean columnsAdded = false;
 
-	private static TableRowSWT.ColorRequester colour_requester = ()->1;
+	private static TableViewSWT.ColorRequester colour_requester = ()->1;
 	
-	private TableViewSWT<SubscriptionResultFilterable> tv_subs_results;
+	private static LinkedList<MdiEntrySWT> activated_views	= new LinkedList<>();
+	
+	private TableViewSWT<SubscriptionResultFilterable>				tv_subs_results;
+	private TableColumnFilterHelper<SubscriptionResultFilterable>	col_filter_helper;
 
-	private MdiEntry			mdi_entry;
+	private MdiEntrySWT			mdi_entry;
 	private Composite			table_parent;
 
 
@@ -111,6 +121,8 @@ SBC_SubscriptionResultsView
 
 	private Subscription	 			ds;
 	private SubscriptionResultFilter	ds_filter = SubscriptionResultFilter.getTransientFilter();
+	private Runnable 					pFilterUpdater;
+	private long						ds_filter_version = -1;
 	
 	private List<SubscriptionResultFilterable>	last_selected_content = new ArrayList<>();
 
@@ -145,11 +157,41 @@ SBC_SubscriptionResultsView
 			mdi_entry = mdi.getEntry( mdi_key );
 
 			if ( mdi_entry != null ){
-
+				
 				mdi_entry.addToolbarEnabler(this);
+				
+				MdiEntrySWT to_deactivate = null;
+				
+				synchronized( activated_views ){
+					
+					activated_views.add( mdi_entry );
+					
+					if ( activated_views.size() > 8 ){
+						
+						for ( MdiEntrySWT m: activated_views ){
+							
+							if ( m != mdi_entry ){
+							
+									// stand-alone views can cause confusion - don't deactive the one
+									// currently being built to avoid borkage...
+								
+								to_deactivate = m;
+								
+								break;
+							}
+						}
+					}
+				}
+				
+				if ( to_deactivate != null ){
+					
+					to_deactivate.triggerEvent( UISWTViewEvent.TYPE_DESTROY, null );
+				}
 			}
 		}
-				
+			
+		SWTSkinObjectText info;
+		
 		if ( ds != null ){
 
 			if (( ds.getViewOptions() & Subscription.VO_HIDE_HEADER) != 0 ){
@@ -171,8 +213,6 @@ SBC_SubscriptionResultsView
 
 				control.setMenu( menu );
 
-				final String menu_key = SubscriptionMDIEntry.setupMenus( ds, null );
-
 				menu.addMenuListener(
 					new MenuListener() {
 
@@ -182,6 +222,8 @@ SBC_SubscriptionResultsView
 								mi.dispose();
 							}
 
+							String menu_key = SubscriptionMDIEntry.setupMenus( ds, null );
+
 							com.biglybt.pif.ui.menus.MenuItem[] menu_items = MenuItemManager.getInstance().getAllAsArray( menu_key );
 
 							MenuBuildUtils.addPluginMenuItems(menu_items, menu, true, true,
@@ -190,11 +232,15 @@ SBC_SubscriptionResultsView
 
 						@Override
 						public void menuHidden(MenuEvent e) {
-							// TODO Auto-generated method stub
-
 						}
 					});
 			}
+			
+			info = (SWTSkinObjectText) getSkinObject("topinfo");
+			
+		}else{
+			
+			info = null;
 		}
 
 		final SWTSkinObject soFilterArea = getSkinObject("filterarea");
@@ -224,7 +270,6 @@ SBC_SubscriptionResultsView
 
 			Composite parent = (Composite) soFilterArea.getControl();
 
-			Label label;
 			FormData fd;
 			GridLayout layout;
 			int sepHeight = 20;
@@ -239,9 +284,9 @@ SBC_SubscriptionResultsView
 
 			cFilters.setLayout( layout );
 
-			Runnable pFilterUpdater = null;
+			pFilterUpdater = null;
 
-			if ( ds != null && ds.isUpdateable()){
+			if ( ds != null ){
 
 				try{
 					Composite pFilters = new Composite(cFilters, SWT.NONE);
@@ -253,6 +298,9 @@ SBC_SubscriptionResultsView
 
 					pFilters.setLayout( layout );
 
+					final Label deplabel = new Label( pFilters, SWT.NONE );
+					deplabel.setLayoutData(new GridData( GridData.FILL_HORIZONTAL ));
+					
 					final Label pflabel = new Label( pFilters, SWT.NONE );
 					pflabel.setLayoutData(new GridData( GridData.FILL_HORIZONTAL ));
 										
@@ -262,26 +310,129 @@ SBC_SubscriptionResultsView
 						public void
 						run()
 						{
-							long kInB = DisplayFormatters.getKinB();
-							long mInB = kInB*kInB;
-
-							long	min_size = Math.max( 0,  ds_filter.getMinSize()/mInB );
-							long	max_size = Math.max( 0,  ds_filter.getMaxSize()/mInB );
-							long	min_seeds = Math.max( 0,  ds_filter.getMinSeeds());
-							long	max_age = Math.max( 0,  ds_filter.getMaxAgeSecs());
-							
-							pflabel.setText(
-								MessageText.getString(
-									"subs.persistent.filters",
-									new String[]{
-										getString( ds_filter.getWithWords()),
-										getString( ds_filter.getWithoutWords()),
-										String.valueOf( min_size ),
-										String.valueOf( max_size )
+							if ( pflabel.isDisposed()){
+								
+								if ( pFilterUpdater == this ){
 									
-									}) +
-								", " + MessageText.getString( "label.min.seeds") + " = " + ( min_seeds ) + 
-								", " + MessageText.getString( "label.max.age") + " = " + (TimeFormatter.format3( max_age, null, true )));
+									pFilterUpdater = null;
+								}
+								
+								return;
+							}
+							
+							if ( info != null ){
+																
+								SubscriptionHistory history = ds.getHistory();
+								
+								String error = history.getLastError();
+
+								boolean isError = error != null && !error.isEmpty();
+											
+								String lastUpdate;
+								
+								if ( isError ){
+									
+									lastUpdate = MessageText.getString( "ManagerItem.error" ) + " (" + DisplayFormatters.formatDateYMDHM( ds.getHistory().getLastErrorTime()) + ")";
+								}else{
+									
+									lastUpdate = DisplayFormatters.formatDateYMDHM( history.getLastScanTime());
+								}
+								
+								long next = history.getNextScanTime();
+								
+								long nextScheduled = history.getNextScheduledUpdate();
+								
+								if ( nextScheduled > 0 ){
+									
+									next = nextScheduled;
+								}
+								
+								info.setText( 
+										MessageText.getString( "Trackers.column.last_update" ) + ": " + lastUpdate + ", " +
+										MessageText.getString( "Button.next" ) + ": " + DisplayFormatters.formatDateYMDHM( next ));
+								
+								
+								if ( !isError ){
+									
+									error = MessageText.getString( "label.none" );
+								}
+								
+								Utils.setTT( info.getControl(), MessageText.getString( "subs.prop.last_error" ) + ": " + error );
+							}
+							
+							List<Subscription> deps = ds_filter.getDependsOn();
+							
+							if ( deps != null && !deps.isEmpty()){
+								
+								String str = "";
+								for ( Subscription dep: deps ){
+									str += (str.isEmpty()?"":"; ") + dep.getName();
+									
+									try{
+										str += " {" + dep.getFilters().getString().replaceAll("&","&&") + "}";
+									}catch( Throwable e ){
+									}
+								}
+								
+								deplabel.setText( MessageText.getString( "subs.inherited.filters" ) + ": " + str );
+								
+								deplabel.setVisible( true );
+								GridData gd = (GridData)deplabel.getLayoutData();
+								if ( gd.widthHint == 0 ){
+									gd.widthHint = gd.heightHint = SWT.DEFAULT;
+									parent.getParent().getParent().layout(true, true);
+								}
+								
+							}else{
+								deplabel.setVisible( false );
+								GridData gd = (GridData)deplabel.getLayoutData();
+								if ( gd.widthHint != 0 ){
+									gd.widthHint = gd.heightHint = 0;
+									parent.getParent().getParent().layout(true, true);
+								}
+							}
+							
+							if ( ds.isUpdateable()){
+								long kInB = DisplayFormatters.getKinB();
+								long mInB = kInB*kInB;
+	
+								String mb = DisplayFormatters.getUnit( DisplayFormatters.UNIT_MB );
+								
+								String with_words = getString( ds_filter.getWithWords());
+								String without_words = getString( ds_filter.getWithoutWords());
+								
+								long	min_size = Math.max( 0,  ds_filter.getMinSize()/mInB );
+								long	max_size = Math.max( 0,  ds_filter.getMaxSize()/mInB );
+								long	min_seeds = Math.max( 0,  ds_filter.getMinSeeds());
+								long	max_seeds = Math.max( 0,  ds_filter.getMaxSeeds());
+								long	min_peers = Math.max( 0,  ds_filter.getMinPeers());
+								long	max_age = Math.max( 0,  ds_filter.getMaxAgeSecs());
+								
+								String[] line = {""};
+								
+								addLine( line, !with_words.isEmpty(), MessageText.getString( "SubscriptionResults.filter.with.words" ), "[" + with_words + "]" );	
+								addLine( line, !without_words.isEmpty(), MessageText.getString( "SubscriptionResults.filter.without.words" ), "[" + without_words + "]" );	
+								addLine( line, min_size>0, MessageText.getString( "label.min.size"),  min_size + " " + mb ); 
+								addLine( line, max_size>0, MessageText.getString( "label.max.size"),  max_size + " " + mb); 
+								addLine( line, min_seeds>0, MessageText.getString( "label.min.seeds"), String.valueOf( min_seeds ));
+								addLine( line, max_seeds>0, MessageText.getString( "label.max.seeds"), String.valueOf(max_seeds )); 
+								addLine( line, min_peers>0, MessageText.getString( "label.min.peers"), String.valueOf(min_peers )); 
+								addLine( line, max_age>0, MessageText.getString( "label.max.age"), TimeFormatter.format3( max_age, null, true ));
+								
+								String pf = line[0].trim();
+								
+								if ( pf.isEmpty()){
+									
+									pf = MessageText.getString( "label.none" );
+								}
+								
+								pflabel.setText( MessageText.getString("subs.persistent.filters2" ) + ": " + pf );
+								
+							}else{
+								pflabel.setVisible( false );
+								GridData gd = (GridData)pflabel.getLayoutData();
+								gd.widthHint = gd.heightHint = 0;
+							}
 						}
 					};
 
@@ -296,9 +447,8 @@ SBC_SubscriptionResultsView
 			Composite vFilters = new Composite(cFilters, SWT.NONE);
 			vFilters.setLayoutData(new GridData( GridData.FILL_HORIZONTAL ));
 
-
 			RowLayout rowLayout = new RowLayout(SWT.HORIZONTAL);
-			rowLayout.spacing = 5;
+			rowLayout.spacing = 3;
 			rowLayout.marginBottom = rowLayout.marginTop = rowLayout.marginLeft = rowLayout.marginRight = 0;
 			rowLayout.center = true;
 			vFilters.setLayout(rowLayout);
@@ -325,8 +475,8 @@ SBC_SubscriptionResultsView
 
 				if ( !with ){
 
-					label = new Label(vFilters, SWT.VERTICAL | SWT.SEPARATOR);
-					label.setLayoutData(new RowData(-1, sepHeight));
+					Control sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+					sep.setLayoutData(new RowData(-1, sepHeight));
 				}
 
 				Composite cWithKW = new Composite(vFilters, SWT.NONE);
@@ -340,6 +490,7 @@ SBC_SubscriptionResultsView
 				lblWithKWImg.setImage( imageLoader.getImage( with?"icon_filter_plus":"icon_filter_minus"));
 
 				final Text textWithKW = new Text(cWithKW, SWT.BORDER);
+				Utils.setTT(textWithKW,MessageText.getString("SubscriptionResults.filter.words.tt" ));
 				textWithKW.setMessage(MessageText.getString(with?"SubscriptionResults.filter.with.words":"SubscriptionResults.filter.without.words"));
 				GridData gd = new GridData();
 				gd.widthHint = 100;
@@ -350,7 +501,7 @@ SBC_SubscriptionResultsView
 
 						@Override
 						public void modifyText(ModifyEvent e) {
-							String text = textWithKW.getText().toLowerCase( Locale.US );
+							String text = textWithKW.getText();
 							String[] bits = text.split( "\\s+");
 
 							Set<String>	temp = new HashSet<>();
@@ -381,150 +532,239 @@ SBC_SubscriptionResultsView
 			
 				// min size
 
-			label = new Label(vFilters, SWT.VERTICAL | SWT.SEPARATOR);
-			label.setLayoutData(new RowData(-1, sepHeight));
+			Control sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+			sep.setLayoutData(new RowData(-1, sepHeight));
 
-			Composite cMinSize = new Composite(vFilters, SWT.NONE);
-			layout = new GridLayout(2, false);
-			layout.marginWidth = 0;
-			layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
-			cMinSize.setLayout(layout);
-			Label lblMinSize = new Label(cMinSize, SWT.NONE);
-			lblMinSize.setText(MessageText.getString("SubscriptionResults.filter.min_size"));
-			Spinner spinMinSize = new Spinner(cMinSize, SWT.BORDER);
-			spinMinSize.setMinimum(0);
-			spinMinSize.setMaximum(100*kInB*kInB);	// 100 TB should do...
-			spinMinSize.setSelection(Math.max( 0,  (int)( ds_filter.getMinSize()/mInB )));
-			spinMinSize.addListener(SWT.Selection, new Listener() {
-				@Override
-				public void handleEvent(Event event) {
-					ds_filter.setMinSize(((Spinner) event.widget).getSelection() * mInB);
-					refilter_dispatcher.dispatch();
-				}
-			});
-
-			// max size
-
-			label = new Label(vFilters, SWT.VERTICAL | SWT.SEPARATOR);
-			label.setLayoutData(new RowData(-1, sepHeight));
-
-			Composite cMaxSize = new Composite(vFilters, SWT.NONE);
-			layout = new GridLayout(2, false);
-			layout.marginWidth = 0;
-			layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
-			cMaxSize.setLayout(layout);
-			Label lblMaxSize = new Label(cMaxSize, SWT.NONE);
-			lblMaxSize.setText(MessageText.getString("SubscriptionResults.filter.max_size"));
-			Spinner spinMaxSize = new Spinner(cMaxSize, SWT.BORDER);
-			spinMaxSize.setMinimum(0);
-			spinMaxSize.setMaximum(100*kInB*kInB);	// 100 TB should do...
-			spinMaxSize.setSelection(Math.max( 0,  (int)( ds_filter.getMaxSize()/mInB )));
-			spinMaxSize.addListener(SWT.Selection, new Listener() {
-				@Override
-				public void handleEvent(Event event) {
-					ds_filter.setMaxSize(((Spinner) event.widget).getSelection() * mInB);
-					refilter_dispatcher.dispatch();
-				}
-			});
-
-				// min seeds
-			
-			label = new Label(vFilters, SWT.VERTICAL | SWT.SEPARATOR);
-			label.setLayoutData(new RowData(-1, sepHeight));
-
-			Composite cMinSeeds = new Composite(vFilters, SWT.NONE);
-			layout = new GridLayout(2, false);
-			layout.marginWidth = 0;
-			layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
-			cMinSeeds.setLayout(layout);
-			Label lblMinSeeds = new Label(cMinSeeds, SWT.NONE);
-			lblMinSeeds.setText(MessageText.getString("label.min.seeds"));
-			Spinner spinMinSeeds = new Spinner(cMinSeeds, SWT.BORDER);
-			spinMinSeeds.setMinimum(0);
-			spinMinSeeds.setMaximum(Integer.MAX_VALUE);
-			spinMinSeeds.setSelection((int)ds_filter.getMinSeeds());
-			spinMinSeeds.addListener(SWT.Selection, new Listener() {
-				@Override
-				public void handleEvent(Event event) {
-					ds_filter.setMinSeeds(((Spinner) event.widget).getSelection());
-					refilter_dispatcher.dispatch();
-				}
-			});
-
-			
-				// max age
-			
-			label = new Label(vFilters, SWT.VERTICAL | SWT.SEPARATOR);
-			label.setLayoutData(new RowData(-1, sepHeight));
-
-			Composite cMaxAge = new Composite(vFilters, SWT.NONE);
-			layout = new GridLayout(3, false);
-			layout.marginWidth = 0;
-			layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
-			cMaxAge.setLayout(layout);
-			
-			Label lblMaxAge = new Label(cMaxAge, SWT.NONE);
-			lblMaxAge.setText(MessageText.getString("label.max.age"));
-			
-			Spinner spinMaxAge = new Spinner(cMaxAge, SWT.BORDER);
-			spinMaxAge.setMinimum(0);
-			spinMaxAge.setMaximum(Integer.MAX_VALUE);
-			
-			Combo combMaxAge = new Combo( cMaxAge, SWT.SINGLE | SWT.READ_ONLY );
-			
-			for ( String unit: TimeFormatter.TIME_SUFFIXES_2 ){
-			
-				combMaxAge.add( unit );
-			}
-			
-			Listener maxAgeListener = (e)->{
-				int	val 	= spinMaxAge.getSelection();
-				int unit	= combMaxAge.getSelectionIndex();
-				
-				long secs = TimeFormatter.TIME_SUFFIXES_2_MULT[unit] * (long)( val + 1 ) - 1;
-				
-				ds_filter.setMaxAgeSecs( secs );
-				
-				refilter_dispatcher.dispatch();
-			};
-			
-			int[] temp = TimeFormatter.format3Support( ds_filter.getMaxAgeSecs(), null, true );
-			
-			int val = temp[0];
-			
-			spinMaxAge.setSelection( val<0?0:val );
-			combMaxAge.select( temp[1] );			
-			
-			spinMaxAge.addListener(SWT.Selection, maxAgeListener );		
-			combMaxAge.addListener(SWT.Selection, maxAgeListener );
-			
-			if ( ds != null && ds.isUpdateable()){
-
-				label = new Label(vFilters, SWT.VERTICAL | SWT.SEPARATOR);
-				label.setLayoutData(new RowData(-1, sepHeight));
-
-				final Runnable					f_pFilterUpdater 	= pFilterUpdater;
-
-				Button save = new Button( vFilters,SWT.PUSH );
-				save.setText( MessageText.getString( "ConfigView.button.save" ));
-				save.addListener(SWT.Selection, new Listener() {
+			{
+				Composite cMinSize = new Composite(vFilters, SWT.NONE);
+				layout = new GridLayout(2, false);
+				layout.marginWidth = 0;
+				layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
+				cMinSize.setLayout(layout);
+				Label lblMinSize = new Label(cMinSize, SWT.NONE);
+				lblMinSize.setText(MessageText.getString("label.min.size") + " (" + DisplayFormatters.getUnit(DisplayFormatters.UNIT_MB) + ")");
+				Spinner spinMinSize = new Spinner(cMinSize, SWT.BORDER);
+				GridData gd = new GridData();
+				gd.widthHint = 20;
+				spinMinSize.setLayoutData(gd);
+				spinMinSize.setMinimum(0);
+				spinMinSize.setMaximum(100*kInB*kInB);	// 100 TB should do...
+				spinMinSize.setSelection(Math.max( 0,  (int)( ds_filter.getMinSize()/mInB )));
+				spinMinSize.addListener(SWT.Selection, new Listener() {
 					@Override
 					public void handleEvent(Event event) {
-
-						try{
-							ds_filter.save();
-
-							f_pFilterUpdater.run();
-
-						}catch( Throwable e ){
-
-							Debug.out( e );
-						}
+						ds_filter.setMinSize(((Spinner) event.widget).getSelection() * mInB);
+						refilter_dispatcher.dispatch();
 					}
 				});
+			}
+			
+			// max size
+
+			sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+			sep.setLayoutData(new RowData(-1, sepHeight));
+
+			{
+				Composite cMaxSize = new Composite(vFilters, SWT.NONE);
+				layout = new GridLayout(2, false);
+				layout.marginWidth = 0;
+				layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
+				cMaxSize.setLayout(layout);
+				Label lblMaxSize = new Label(cMaxSize, SWT.NONE);
+				lblMaxSize.setText(MessageText.getString("label.max.size") + " (" + DisplayFormatters.getUnit(DisplayFormatters.UNIT_MB) + ")");
+				Spinner spinMaxSize = new Spinner(cMaxSize, SWT.BORDER);
+				GridData gd = new GridData();
+				gd.widthHint = 20;
+				spinMaxSize.setLayoutData(gd);
+				spinMaxSize.setMinimum(0);
+				spinMaxSize.setMaximum(100*kInB*kInB);	// 100 TB should do...
+				spinMaxSize.setSelection(Math.max( 0,  (int)( ds_filter.getMaxSize()/mInB )));
+				spinMaxSize.addListener(SWT.Selection, new Listener() {
+					@Override
+					public void handleEvent(Event event) {
+						ds_filter.setMaxSize(((Spinner) event.widget).getSelection() * mInB);
+						refilter_dispatcher.dispatch();
+					}
+				});
+			}
+			
+				// min seeds
+			
+			sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+			sep.setLayoutData(new RowData(-1, sepHeight));
+
+			{	
+				Composite cMinSeeds = new Composite(vFilters, SWT.NONE);
+				layout = new GridLayout(2, false);
+				layout.marginWidth = 0;
+				layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
+				cMinSeeds.setLayout(layout);
+				Label lblMinSeeds = new Label(cMinSeeds, SWT.NONE);
+				lblMinSeeds.setText(MessageText.getString("label.min.seeds"));
+				Spinner spinMinSeeds = new Spinner(cMinSeeds, SWT.BORDER);
+				GridData gd = new GridData();
+				gd.widthHint = 20;
+				spinMinSeeds.setLayoutData(gd);
+				spinMinSeeds.setMinimum(0);
+				spinMinSeeds.setMaximum(Integer.MAX_VALUE);
+				spinMinSeeds.setSelection((int)ds_filter.getMinSeeds());
+				spinMinSeeds.addListener(SWT.Selection, new Listener() {
+					@Override
+					public void handleEvent(Event event) {
+						ds_filter.setMinSeeds(((Spinner) event.widget).getSelection());
+						refilter_dispatcher.dispatch();
+					}
+				});
+			}
+			
+				// max seeds
+			
+			sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+			sep.setLayoutData(new RowData(-1, sepHeight));
+
+			{		
+				Composite cMaxSeeds = new Composite(vFilters, SWT.NONE);
+				layout = new GridLayout(2, false);
+				layout.marginWidth = 0;
+				layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
+				cMaxSeeds.setLayout(layout);
+				Label lblMaxSeeds = new Label(cMaxSeeds, SWT.NONE);
+				lblMaxSeeds.setText(MessageText.getString("label.max.seeds"));
+				Spinner spinMaxSeeds = new Spinner(cMaxSeeds, SWT.BORDER);
+				GridData gd = new GridData();
+				gd.widthHint = 20;
+				spinMaxSeeds.setLayoutData(gd);
+				spinMaxSeeds.setMinimum(0);
+				spinMaxSeeds.setMaximum(Integer.MAX_VALUE);
+				spinMaxSeeds.setSelection((int)ds_filter.getMaxSeeds());
+				spinMaxSeeds.addListener(SWT.Selection, new Listener() {
+					@Override
+					public void handleEvent(Event event) {
+						ds_filter.setMaxSeeds(((Spinner) event.widget).getSelection());
+						refilter_dispatcher.dispatch();
+					}
+				});
+			}
+			
+				// min peers
+			
+			sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+			sep.setLayoutData(new RowData(-1, sepHeight));
+
+			{
+	
+				Composite cMinPeers = new Composite(vFilters, SWT.NONE);
+				layout = new GridLayout(2, false);
+				layout.marginWidth = 0;
+				layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
+				cMinPeers.setLayout(layout);
+				Label lblMinPeers = new Label(cMinPeers, SWT.NONE);
+				lblMinPeers.setText(MessageText.getString("label.min.peers"));
+				Spinner spinMinPeers = new Spinner(cMinPeers, SWT.BORDER);
+				GridData gd = new GridData();
+				gd.widthHint = 20;
+				spinMinPeers.setLayoutData(gd);
+				spinMinPeers.setMinimum(0);
+				spinMinPeers.setMaximum(Integer.MAX_VALUE);
+				spinMinPeers.setSelection((int)ds_filter.getMinPeers());
+				spinMinPeers.addListener(SWT.Selection, new Listener() {
+					@Override
+					public void handleEvent(Event event) {
+						ds_filter.setMinPeers(((Spinner) event.widget).getSelection());
+						refilter_dispatcher.dispatch();
+					}
+				});
+			}
+					
+				// max age
+			
+			sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+			sep.setLayoutData(new RowData(-1, sepHeight));
+
+			{
+				Composite cMaxAge = new Composite(vFilters, SWT.NONE);
+				layout = new GridLayout(3, false);
+				layout.marginWidth = 0;
+				layout.marginBottom = layout.marginTop = layout.marginLeft = layout.marginRight = 0;
+				cMaxAge.setLayout(layout);
 				
-				label = new Label(vFilters, SWT.VERTICAL | SWT.SEPARATOR);
-				label.setLayoutData(new RowData(-1, sepHeight));
+				Label lblMaxAge = new Label(cMaxAge, SWT.NONE);
+				lblMaxAge.setText(MessageText.getString("label.max.age"));
+				
+				Spinner spinMaxAge = new Spinner(cMaxAge, SWT.BORDER);
+				GridData gd = new GridData();
+				gd.widthHint = 20;
+				spinMaxAge.setLayoutData(gd);
+				spinMaxAge.setMinimum(0);
+				spinMaxAge.setMaximum(Integer.MAX_VALUE);
+				
+				Combo combMaxAge = new Combo( cMaxAge, SWT.SINGLE | SWT.READ_ONLY );
+				
+				for ( String unit: TimeFormatter.TIME_SUFFIXES_2 ){
+				
+					combMaxAge.add( unit );
+				}
+				
+				Listener maxAgeListener = (e)->{
+					int	val 	= spinMaxAge.getSelection();
+					int unit	= combMaxAge.getSelectionIndex();
+					
+					long secs = TimeFormatter.TIME_SUFFIXES_2_MULT[unit] * (long)( val + 1 ) - 1;
+					
+					ds_filter.setMaxAgeSecs( secs );
+					
+					refilter_dispatcher.dispatch();
+				};
+				
+				int[] temp = TimeFormatter.format3Support( ds_filter.getMaxAgeSecs(), null, true );
+				
+				int val = temp[0];
+				
+				spinMaxAge.setSelection( val<0?0:val );
+				combMaxAge.select( temp[1] );			
+				
+				spinMaxAge.addListener(SWT.Selection, maxAgeListener );		
+				combMaxAge.addListener(SWT.Selection, maxAgeListener );
+			}
+			
+			if ( ds != null ){
+
+				if ( ds.isUpdateable() ){
+					
+					sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+					
+					sep.setLayoutData(new RowData(-1, sepHeight));
+	
+					final Runnable	f_pFilterUpdater 	= pFilterUpdater;
+	
+					Button save = new Button( vFilters,SWT.PUSH );
+					
+					save.setText( MessageText.getString( "ConfigView.button.save" ));
+					
+					save.addListener(SWT.Selection, new Listener() {
+						@Override
+						public void handleEvent(Event event) {
+	
+							Utils.getOffOfSWTThread(()->{
+								
+								try{
+									ds_filter.save();
+									
+								}catch( Throwable e ){
+									
+									Debug.out( e );
+	
+								}finally{
+									
+									Utils.execSWTThread(()->f_pFilterUpdater.run());
+								}
+							});
+						}
+					});
+				}
+				
+				sep = Utils.createSkinnedLabelSeparator(vFilters, SWT.VERTICAL );
+				sep.setLayoutData(new RowData(-1, sepHeight));
 				
 				Button more = new Button( vFilters,SWT.PUSH );
 				more.setText( MessageText.getString( "Subscription.menu.forcecheck" ));
@@ -587,6 +827,27 @@ SBC_SubscriptionResultsView
 		return null;
 	}
 
+	private void
+	addLine(
+		String[]	line,
+		boolean		add,
+		String		name,
+		String		value )
+	{
+		if ( add ){
+			
+			String text = name + " = " + value;
+			
+			if ( line[0].isEmpty()){
+				
+				line[0] = text;
+				
+			}else{
+				
+				line[0] += ", " + text;
+			}
+		}
+	}
 	private String
 	getString(
 		String[]	strs )
@@ -710,6 +971,39 @@ SBC_SubscriptionResultsView
 
 		tableManager.registerColumn(
 			SubscriptionResultFilterable.class,
+			ColumnSearchSubResultSeeds.COLUMN_ID,
+				new TableColumnCreationListener() {
+
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnSearchSubResultSeeds(column);
+					}
+				});
+
+		tableManager.registerColumn(
+			SubscriptionResultFilterable.class,
+			ColumnSearchSubResultPeers.COLUMN_ID,
+				new TableColumnCreationListener() {
+
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnSearchSubResultPeers(column);
+					}
+				});
+		
+		tableManager.registerColumn(
+			SubscriptionResultFilterable.class,
+			ColumnSearchSubResultGrabbed.COLUMN_ID,
+				new TableColumnCreationListener() {
+
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnSearchSubResultGrabbed(column);
+					}
+				});
+		
+		tableManager.registerColumn(
+			SubscriptionResultFilterable.class,
 			ColumnSearchSubResultRatings.COLUMN_ID,
 				new TableColumnCreationListener() {
 
@@ -772,6 +1066,24 @@ SBC_SubscriptionResultsView
 
 		tableManager.registerColumn(
 			SubscriptionResultFilterable.class,
+			ColumnSearchSubResultTags.COLUMN_ID,
+				new TableColumnCoreCreationListener() 
+				{
+					@Override
+					public TableColumnCore 
+					createTableColumnCore(
+						Class<?> forDataSourceType, String tableID, String columnID )
+					{
+						return( new ColumnSearchSubResultTags(forDataSourceType, tableID, columnID ));
+					}
+				
+					@Override
+					public void tableColumnCreated(TableColumn column) {				
+					}
+				});
+
+		tableManager.registerColumn(
+			SubscriptionResultFilterable.class,
 			ColumnSearchSubResultHash.COLUMN_ID,
 				new TableColumnCreationListener() {
 
@@ -789,6 +1101,66 @@ SBC_SubscriptionResultsView
 					@Override
 					public void tableColumnCreated(TableColumn column) {
 						new ColumnSearchSubResultExisting(column);
+					}
+				});
+		
+		tableManager.registerColumn(
+				SubscriptionResultFilterable.class,
+				ColumnSearchSubResultDLHistoryAdded.COLUMN_ID,
+				new TableColumnCoreCreationListener() {
+					@Override
+					public TableColumnCore 
+					createTableColumnCore(
+							Class<?> forDataSourceType, String tableID, String columnID) 
+					{
+						return new ColumnDateSizer(
+								SubscriptionResultFilterable.class, columnID,
+								TableColumnCreator.DATE_COLUMN_WIDTH, tableID){};
+					}
+
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnSearchSubResultDLHistoryAdded(column);
+					}
+				});
+		
+		tableManager.registerColumn(
+			SubscriptionResultFilterable.class,
+			ColumnSearchSubResultDLHistoryCompleted.COLUMN_ID,
+			new TableColumnCoreCreationListener() {
+				@Override
+				public TableColumnCore 
+				createTableColumnCore(
+						Class<?> forDataSourceType, String tableID, String columnID) 
+				{
+					return new ColumnDateSizer(
+							SubscriptionResultFilterable.class, columnID,
+							TableColumnCreator.DATE_COLUMN_WIDTH, tableID){};
+				}
+
+				@Override
+				public void tableColumnCreated(TableColumn column) {
+					new ColumnSearchSubResultDLHistoryCompleted(column);
+				}
+			});
+		
+		tableManager.registerColumn(
+				SubscriptionResultFilterable.class,
+				ColumnSearchSubResultDLHistoryRemoved.COLUMN_ID,
+				new TableColumnCoreCreationListener() {
+					@Override
+					public TableColumnCore 
+					createTableColumnCore(
+							Class<?> forDataSourceType, String tableID, String columnID) 
+					{
+						return new ColumnDateSizer(
+								SubscriptionResultFilterable.class, columnID,
+								TableColumnCreator.DATE_COLUMN_WIDTH, tableID){};
+					}
+
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnSearchSubResultDLHistoryRemoved(column);
 					}
 				});
 	}
@@ -828,7 +1200,14 @@ SBC_SubscriptionResultsView
 				ds.addListener( this );
 				
 				try{
-					ds_filter = ds.getFilters();
+					ds_filter = (SubscriptionResultFilter)ds.getUserData( FILTER_KEY );
+					
+					if ( ds_filter == null ){
+						
+						ds_filter = ds.getFilters();
+						
+						ds.setUserData( FILTER_KEY, ds_filter );
+					}
 					
 				}catch( Throwable e ){
 					
@@ -849,19 +1228,33 @@ SBC_SubscriptionResultsView
 		Subscription		subs,
 		int					reason )
 	{
-		if ( reason == CR_RESULTS){
+		if ( reason == CR_RESULTS ){
 
-			if ( tv_subs_results != null ) {
+			TableViewSWT<SubscriptionResultFilterable> tv = tv_subs_results;
+					
+			if ( tv != null ) {
 
 				reconcileResults( subs );
 
-				tv_subs_results.runForAllRows(
+				tv.runForAllRows(
 					new TableGroupRowRunner() {
 						@Override
 						public void run(TableRowCore row) {
 							row.invalidate( true );
 						}
 					});
+			}
+		}
+		
+		
+		if ( reason == CR_METADATA || reason == CR_RESULTS ){
+			
+			if ( pFilterUpdater != null ){
+				
+				Utils.execSWTThread(()->{
+					
+					pFilterUpdater.run();
+				});
 			}
 		}
 	}
@@ -939,11 +1332,36 @@ SBC_SubscriptionResultsView
 
 			initTable((Composite) so_list.getControl());
 		}
+		
+		if ( pFilterUpdater != null ){
+			
+			Utils.execSWTThread(()->{
+				
+				pFilterUpdater.run();
+			});
+		}
 	}
 
 	private void
 	hideView()
 	{
+		synchronized( this ){
+
+			if ( tv_subs_results != null ){
+
+				tv_subs_results.delete();
+
+				tv_subs_results = null;
+			}
+
+			if ( ds != null ){
+
+				ds.removeListener( this );
+			}
+		}
+
+		col_filter_helper = null;
+		
 		Utils.disposeSWTObjects(new Object[] {
 			table_parent,
 		});
@@ -963,6 +1381,10 @@ SBC_SubscriptionResultsView
 
 			if ( ds != null ){
 
+					// remove in case already added
+				
+				ds.removeListener( this );
+				
 				ds.addListener( this );
 			}
 		}
@@ -978,14 +1400,6 @@ SBC_SubscriptionResultsView
 	{
 		hideView();
 
-		synchronized( this ){
-
-			if ( ds != null ){
-
-				ds.removeListener( this );
-			}
-		}
-
 		return( super.skinObjectHidden(skinObject, params));
 	}
 
@@ -995,26 +1409,23 @@ SBC_SubscriptionResultsView
 		SWTSkinObject 	skinObject,
 		Object 			params )
 	{
-		synchronized( this ){
+		try{
+			hideView();
+	
+			return( super.skinObjectDestroyed(skinObject, params));
+			
+		}finally{
+			
+			if ( mdi_entry != null ){
+			
+				mdi_entry.removeToolbarEnabler(this);
 
-			if ( tv_subs_results != null ){
-
-				tv_subs_results.delete();
-
-				tv_subs_results = null;
-			}
-
-			if ( ds != null ){
-
-				ds.removeListener( this );
+				synchronized( activated_views ){
+			
+					activated_views.remove( mdi_entry );
+				}
 			}
 		}
-
-		Utils.disposeSWTObjects(new Object[] {
-			table_parent,
-		});
-
-		return( super.skinObjectDestroyed(skinObject, params));
 	}
 
 	private void
@@ -1060,18 +1471,20 @@ SBC_SubscriptionResultsView
 
 		SWTSkinObjectTextbox soFilterBox = (SWTSkinObjectTextbox) getSkinObject("filterbox");
 		if (soFilterBox != null) {
-			tv_subs_results.enableFilterCheck(soFilterBox.getBubbleTextBox(), this);
+			BubbleTextBox bubbleTextBox = soFilterBox.getBubbleTextBox();
+			
+			tv_subs_results.enableFilterCheck(bubbleTextBox, this);
+			
+			String tooltip = MessageText.getString("filter.tt.start");
+			tooltip += MessageText.getString("column.filter.tt.line1");
+			tooltip += MessageText.getString("column.filter.tt.line2");
+
+			bubbleTextBox.setTooltip( tooltip );
+			
+			bubbleTextBox.setMessage( MessageText.getString( "Button.search2" ) );
 		}
 
 		tv_subs_results.setRowDefaultHeight(COConfigurationManager.getIntParameter( "Search Subs Row Height" ));
-
-		SWTSkinObject soSizeSlider = getSkinObject("table-size-slider");
-		if (soSizeSlider instanceof SWTSkinObjectContainer) {
-			SWTSkinObjectContainer so = (SWTSkinObjectContainer) soSizeSlider;
-			if (!tv_subs_results.enableSizeSlider(so.getComposite(), 16, 100)) {
-				so.setVisible(false);
-			}
-		}
 
 		table_parent = new Composite(control, SWT.NONE);
 		table_parent.setLayoutData(Utils.getFilledFormData());
@@ -1167,7 +1580,7 @@ SBC_SubscriptionResultsView
 							
 						if ( Arrays.equals(((SubscriptionResultFilterable)row.getDataSource()).getHash(), hash )){
 			
-							target = Colors.blues[ Colors.BLUES_MIDLIGHT ];
+							target = Utils.isDarkAppearanceNative()?Colors.faded[Colors.FADED_DARKEST-2]:Colors.blues[ Colors.BLUES_MIDLIGHT ];
 						}
 					}
 					
@@ -1233,7 +1646,7 @@ SBC_SubscriptionResultsView
 
 					item.setEnabled( results.length > 0 );
 
-					SearchSubsUtils.addMenu( results, menu );
+					SearchSubsUtils.addMenu( ds, results, menu );
 
 					new MenuItem(menu, SWT.SEPARATOR );
 
@@ -1338,6 +1751,8 @@ SBC_SubscriptionResultsView
 		}
 		*/
 
+		col_filter_helper = new TableColumnFilterHelper<>( tv_subs_results, "srv:search" );
+		
 		tv_subs_results.initialize( table_parent );
 
 		control.layout(true);
@@ -1361,11 +1776,29 @@ SBC_SubscriptionResultsView
 			}
 		}
 
-		// TODO: Need a mass delete option.  This one saves the Subscription History
-		// on each call..
+		Map<Subscription,List<String>>	result_map = new HashMap<>();
+		
 		for ( SubscriptionResultFilterable result: results ){
 
-			result.delete();
+			Subscription subs = result.getSubscription();
+			
+			List<String> ids = result_map.get( subs );
+			
+			if ( ids == null ){
+				
+				ids = new ArrayList<>();
+				
+				result_map.put( subs, ids );
+			}
+			
+			ids.add( result.getID());
+		}
+		
+		for ( Map.Entry<Subscription,List<String>> entry: result_map.entrySet()){
+		
+			List<String> ids =  entry.getValue();
+			
+			entry.getKey().getHistory().deleteResults( ids.toArray( new String[ids.size()]));
 		}
 
 		if ( focusRow != null ){
@@ -1384,9 +1817,36 @@ SBC_SubscriptionResultsView
 	@Override
 	public void
 	updateUI()
-	{
+	{	
 		if ( tv_subs_results != null ){
 
+			SubscriptionResultFilter	rf = ds_filter;
+			
+			if ( rf != null ){
+			
+				long new_v = rf.getDependenciesVersion();
+				
+				long old_v = ds_filter_version;
+				
+				if ( old_v != new_v ){
+					
+					ds_filter_version = new_v;
+				
+					if ( old_v != -1 ){
+						
+						refilter_dispatcher.dispatch();
+						
+						if ( pFilterUpdater != null ){
+							
+							Utils.execSWTThread(()->{
+								
+								pFilterUpdater.run();
+							});
+						}
+					}
+				}
+			}
+			
 			tv_subs_results.refreshTable( false );
 		}
 	}
@@ -1394,16 +1854,17 @@ SBC_SubscriptionResultsView
 	@Override
 	public boolean
 	filterCheck(
-		SubscriptionResultFilterable 		ds,
-		String 						filter,
-		boolean 					regex )
+		SubscriptionResultFilterable 	ds,
+		String 							filter,
+		boolean 						regex,
+		boolean							confusable )
 	{
 		if (!isOurContent(ds)){
 
 			return false;
 		}
 
-		return( SearchSubsUtils.filterCheck( ds, filter, regex ));
+		return( SearchSubsUtils.filterCheck( col_filter_helper, ds, filter, regex, confusable ));
 	}
 
 	@Override

@@ -449,7 +449,7 @@ DeviceImpl
 			setDirty();
 		}
 
-		/* don't overwite the name as user may have altered it!
+		/* don't overwrite the name as user may have altered it!
 		if ( !name.equals( other.name )){
 
 			name	= other.name;
@@ -1508,7 +1508,7 @@ DeviceImpl
 
 			addDP( dp, "azbuddy.ui.table.online",  online );
 
-			addDP( dp, "device.lastseen", last_seen==0?"":new SimpleDateFormat().format(new Date( last_seen )));
+			addDP( dp, "device.lastseen", last_seen==0?"":DisplayFormatters.formatDateYMDHM( last_seen ));
 		}
 	}
 
@@ -2557,7 +2557,7 @@ DeviceImpl
 
 			writer.println(
 				"hidden=" + hidden +
-				", last_seen=" + new SimpleDateFormat().format(new Date(last_seen)) +
+				", last_seen=" + DisplayFormatters.formatDateYMDHM(last_seen) +
 				", online=" + online +
 				", transcoding=" + transcoding );
 

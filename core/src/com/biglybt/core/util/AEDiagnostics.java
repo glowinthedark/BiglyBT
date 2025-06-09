@@ -22,11 +22,17 @@ package com.biglybt.core.util;
 import java.io.*;
 import java.util.*;
 
+import com.biglybt.core.Core;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.logging.Logger;
+import com.biglybt.pif.PluginInterface;
+import com.biglybt.pif.logging.LoggerChannel;
+import com.biglybt.pif.ui.UIManager;
+import com.biglybt.pif.ui.model.BasicPluginViewModel;
+import com.biglybt.pif.ui.components.*;
 import com.biglybt.platform.PlatformManager;
 import com.biglybt.platform.PlatformManagerCapabilities;
 import com.biglybt.platform.PlatformManagerFactory;
@@ -114,6 +120,8 @@ AEDiagnostics
 
 	protected static boolean	logging_enabled;
 	protected static boolean	loggers_enabled;
+	
+	protected static boolean	loggers_disabled;	// all these stupid vars.
 
 	private static final List<AEDiagnosticsEvidenceGenerator>		evidence_generators	= new ArrayList<>();
 	private static final Map<AEDiagnosticsEvidenceGenerator, Void>		weak_evidence_generators	= new WeakHashMap<>();
@@ -152,12 +160,13 @@ AEDiagnostics
 			debug_dir		= FileUtil.getUserFile( "logs" );
 
 			debug_save_dir	= FileUtil.newFile( debug_dir, "save" );
-
+			
 			COConfigurationManager.addAndFireParameterListeners(
 				new String[]{
 					"Logger.Enabled",
-					"Logger.DebugFiles.Enabled",
+					"Logger.DebugFiles.Enabled",		// don't think used anymore, always true...
 					"Logger.DebugFiles.Enabled.Force",
+					"Logger.DebugFiles.Disable",		// config to disable all debug files regardless
 					"Logger.DebugFiles.SizeKB",
 				},
 				new ParameterListener()
@@ -170,6 +179,8 @@ AEDiagnostics
 						logging_enabled = COConfigurationManager.getBooleanParameter( "Logger.Enabled" );
 
 						loggers_enabled = logging_enabled && COConfigurationManager.getBooleanParameter( "Logger.DebugFiles.Enabled");
+						
+						loggers_disabled = COConfigurationManager.getBooleanParameter( "Logger.DebugFiles.Disable");
 
 						if ( !loggers_enabled ){
 
@@ -278,6 +289,20 @@ AEDiagnostics
 		AEJavaManagement.dumpThreads();
 	}
 
+	public static void
+	dumpThreads(
+		IndentWriter writer )
+	{
+		AEJavaManagement.dumpThreads( writer );
+	}
+	
+	public static String
+	getThreadInfo(
+		Thread		thread )
+	{
+		return( AEJavaManagement.getThreadInfo( thread ));
+	}
+
 	/**
 	 *
 	 */
@@ -315,6 +340,61 @@ AEDiagnostics
 	isStartupComplete()
 	{
 		return( startup_complete );
+	}
+	
+	public static void
+	postStartup(
+		Core		core )
+	{
+		  PluginInterface plugin_interface = core.getPluginManager().getDefaultPluginInterface();
+
+		  LoggerChannel log = plugin_interface.getLogger().getChannel( "JVM Info" );
+
+		  UIManager	ui_manager = plugin_interface.getUIManager();
+
+		  BasicPluginViewModel model = ui_manager.createBasicPluginViewModel( "log.jvm.info" );
+
+		  model.getActivity().setVisible( false );
+		  model.getProgress().setVisible( false );
+
+		  model.attachLoggerChannel( log );
+		  
+		  model.getLogArea().addRefreshListener(
+			  new UIComponent.RefreshListener(){
+				  private String last_line = null;
+				  
+				  @Override
+				  public void 
+				  refresh()
+				  {
+					  List<String>	lines = AEJavaManagement.getMemoryHistory();
+
+					  int line_num = lines.size();
+							  
+					  if ( line_num == 0 ){
+						  
+						  return;
+					  }
+					  
+					  int pos = lines.indexOf( last_line );
+					  
+					  if ( pos == line_num-1 ){
+						  
+						  return;
+					  }
+					  
+					  String content = "";
+
+					  for ( String line: lines.subList(pos<0?0:pos+1,lines.size())){
+	
+						  content += line + "\n";
+					  }
+					
+					  last_line = lines.get(lines.size()-1);
+					  
+					  model.getLogArea().appendText( content );
+				  }
+		  });
 	}
 
 	public static File
@@ -359,7 +439,7 @@ AEDiagnostics
 		String	logger_name,
 		String	str )
 	{
-		log( logger_name, str + ": " + Debug.getCompressedStackTrace());
+		log( logger_name, str + ": " + Debug.getCompressedStackTrace(1));
 	}
 
 	public static void
@@ -595,7 +675,8 @@ AEDiagnostics
 
 					}else{
 
-						if ( line.startsWith( "# C" ) && line.contains( "[SWT-WIN32" )){
+						if ( 	line.startsWith( "# C" ) && line.contains( "[SWT-WIN32" ) ||
+								line.startsWith( "# C" ) && line.contains( "[LIBSWT" )){
 
 							swt_crash = true;
 
@@ -660,7 +741,7 @@ AEDiagnostics
 
 				if ( swt_crash && browser_crash ){
 
-					if ( Constants.isWindows ){
+					if ( Constants.isWindows || Constants.isLinux ){
 
 						if ( !COConfigurationManager.getBooleanParameter( "browser.internal.disable", false )){
 
@@ -768,4 +849,13 @@ AEDiagnostics
 			writer.exdent();
 		}
 	}
+	
+	/*
+	public static void
+	main(
+		String[]	args )
+	{
+		analyseDump( new File( "c:\\temp\\hs_err_pid1376539.log" ));
+	}
+	*/
 }

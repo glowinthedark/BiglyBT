@@ -140,7 +140,7 @@ public interface GlobalManager extends CoreComponent, TaggableResolver, DataSour
 	 * Retrieve the DownloadManager associated with a TOTorrent object
 	 *
 	 * @param torrent Torrent to search for
-	 * @return The DownloadManager associted with the TOTOrrent, or null if
+	 * @return The DownloadManager associated with the TOTOrrent, or null if
 	 *          none found
 	 */
 	public DownloadManager getDownloadManager(TOTorrent torrent);
@@ -149,7 +149,7 @@ public interface GlobalManager extends CoreComponent, TaggableResolver, DataSour
 	 * Retrieve the DownloadManager associated with a hash
 	 *
 	 * @param hash Hash to search for
-	 * @return The DownloadManager associted with the hash, or null if
+	 * @return The DownloadManager associated with the hash, or null if
 	 *          none found
 	 */
 	public DownloadManager getDownloadManager(HashWrapper hash);
@@ -189,7 +189,15 @@ public interface GlobalManager extends CoreComponent, TaggableResolver, DataSour
 	/**
 	 * Pauses (stops) all running downloads/seedings.
 	 */
-	public void pauseDownloads();
+	public default void 
+	pauseDownloads()
+	{
+		pauseDownloads( true );
+	}
+	
+	public void 
+	pauseDownloads(
+		boolean pause_force_start );
 
 	/**
 	 * pause any non-paused downloads and auto-resume all downloads after n seconds
@@ -208,7 +216,15 @@ public interface GlobalManager extends CoreComponent, TaggableResolver, DataSour
 	 * Indicates whether or not there are any downloads that can be paused.
 	 * @return true if there is at least one download to pause, false if none
 	 */
-	public boolean canPauseDownloads();
+	public default boolean 
+	canPauseDownloads()
+	{
+		return( canPauseDownloads(true));
+	}
+	
+	public boolean 
+	canPauseDownloads(
+		boolean pause_force_start );
 
 	/**
 	 * Resumes (starts) all downloads paused by the previous pauseDownloads call.
@@ -233,7 +249,7 @@ public interface GlobalManager extends CoreComponent, TaggableResolver, DataSour
 	 * This reports that a download is being resumed in order to remove it from the paused set
 	 * Don't use this to actually resume a download, use resumeDownload !
 	 * @param dm
-	 * @return
+	 * @return true if download was paused AND was force started
 	 */
 	public boolean resumingDownload(DownloadManager dm);
 
@@ -346,6 +362,8 @@ public interface GlobalManager extends CoreComponent, TaggableResolver, DataSour
 	 * @param newPosition position to place
 	 */
 	public void moveTo(DownloadManager manager, int newPosition);
+	
+	public void moveTo(List<DownloadManager> managers, List<Integer> newPositions);
 
 	/**
 	 * Verifies the positions of the DownloadManagers,
@@ -413,7 +431,8 @@ public interface GlobalManager extends CoreComponent, TaggableResolver, DataSour
 	public void
 	fireGlobalManagerEvent(
 		int					type,
-		DownloadManager 	param );
+		DownloadManager 	dm,
+		Object				data );
 
 	/**
 	 * @param listener

@@ -30,14 +30,14 @@ import com.biglybt.util.JSONUtils;
 
 /**
  * A set of utility methods to decode a bencoded array of byte into a Map.
- * integer are represented as Long, String as byte[], dictionnaries as Map, and list as List.
+ * integer are represented as Long, String as byte[], dictionaries as Map, and list as List.
  *
  * @author TdC_VgA
  *
  */
 public class BDecoder
 {
-	public static final int MAX_BYTE_ARRAY_SIZE		= 128*1024*1024;
+	public static final int MAX_BYTE_ARRAY_SIZE		= 192*1024*1024;
 
 	private static final int MAX_MAP_KEY_SIZE		= 64*1024;
 
@@ -332,7 +332,7 @@ public class BDecoder
 
 						if ( value == null ){
 
-							System.err.println( "Invalid encoding - value not serialsied for binary key " +  Base32.encode( keyBytes ) + " - ignoring: map so far=" + dict + ",loc=" + Debug.getCompressedStackTrace());
+							System.err.println( "Invalid encoding - value not serialised for binary key " +  Base32.encode( keyBytes ) + " - ignoring: map so far=" + dict + ",loc=" + Debug.getCompressedStackTrace());
 
 							break;
 						}
@@ -550,7 +550,7 @@ public class BDecoder
 	
 						if ( value == null ){
 	
-							System.err.println( "Invalid encoding - value not serialsied for '" + key + "' - ignoring: map so far=" + tempMap + ",loc=" + Debug.getCompressedStackTrace());
+							System.err.println( "Invalid encoding - value not serialised for '" + key + "' - ignoring: map so far=" + tempMap + ",loc=" + Debug.getCompressedStackTrace());
 	
 							break;
 						}
@@ -802,7 +802,7 @@ public class BDecoder
 
 						if ( value == null ){
 
-							System.err.println( "Invalid encoding - value not serialsied for binary key " +  Base32.encode( keyBytes ) + " - ignoring: map so far=" + dict + ",loc=" + Debug.getCompressedStackTrace());
+							System.err.println( "Invalid encoding - value not serialised for binary key " +  Base32.encode( keyBytes ) + " - ignoring: map so far=" + dict + ",loc=" + Debug.getCompressedStackTrace());
 
 							break;
 						}
@@ -969,7 +969,7 @@ public class BDecoder
 
 						if ( value == null ){
 
-							System.err.println( "Invalid encoding - value not serialsied for '" + key + "' - ignoring: map so far=" + tempMap + ",loc=" + Debug.getCompressedStackTrace());
+							System.err.println( "Invalid encoding - value not serialised for '" + key + "' - ignoring: map so far=" + tempMap + ",loc=" + Debug.getCompressedStackTrace());
 
 							break;
 						}

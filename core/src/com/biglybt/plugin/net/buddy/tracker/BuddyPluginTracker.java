@@ -20,7 +20,6 @@
 
 package com.biglybt.plugin.net.buddy.tracker;
 
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -29,7 +28,6 @@ import com.biglybt.core.CoreFactory;
 import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.global.GlobalManager;
 import com.biglybt.core.global.GlobalManagerAdapter;
-import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.util.*;
 import com.biglybt.pif.PluginInterface;
@@ -64,6 +62,11 @@ BuddyPluginTracker
 	public static final int BUDDY_NETWORK_INBOUND		= 3;
 	public static final int BUDDY_NETWORK_INOUTBOUND	= 4;
 
+		// 1 - initial version, no version actually sent
+		// 2 - added whether download active (seeding or downloading) to state
+	
+	private static final int	VERSION	= 2;
+	
 	private static final int	TRACK_CHECK_PERIOD		= 15*1000;
 	private static final int	TRACK_CHECK_TICKS		= TRACK_CHECK_PERIOD/ BuddyPlugin.TIMER_PERIOD;
 
@@ -99,6 +102,12 @@ BuddyPluginTracker
 	private static final int	BUDDY_MAYBE		= 1;
 	private static final int	BUDDY_YES		= 2;
 
+	private static final int	ACTIVE_UNKNOWN	= 0;
+	private static final int	ACTIVE_NO		= 1;
+	private static final int	ACTIVE_YES		= 2;
+
+	private static final String[]	ACTIVE_STRS = { "unknown", "no", "yes" };
+	
 	private final BuddyPlugin		plugin;
 
 	private final TorrentAttribute		ta_networks;
@@ -406,6 +415,8 @@ BuddyPluginTracker
 
 			List<Download>	downloads = (List<Download>)entry.getValue();
 
+			BuddyTrackingData tracking_data = getBuddyData( buddy );
+			
 			for (int i=0;i<downloads.size();i++){
 
 				Download	download = downloads.get(i);
@@ -455,17 +466,24 @@ BuddyPluginTracker
 					continue;
 				}
 
-				log( download.getName() + " - connecting to peer " +  host );
-
-				PEPeerManager c_pm = PluginCoreUtils.unwrap( pm );
-
-				Map	user_data = new LightHashMap();
-
-				user_data.put( PEER_DOWNLOAD_KEY, new Object[]{ download, false });
-
-				user_data.put( Peer.PR_PRIORITY_CONNECTION, Boolean.TRUE);
-
-				c_pm.addPeer( host, tcp_port, udp_port, true, user_data );
+				if ( !tracking_data.isDownloadInactive( download )){
+				
+					log( download.getName() + " - connecting to peer " +  host );
+	
+					PEPeerManager c_pm = PluginCoreUtils.unwrap( pm );
+	
+					Map	user_data = new LightHashMap();
+	
+					user_data.put( PEER_DOWNLOAD_KEY, new Object[]{ download, false });
+	
+					user_data.put( Peer.PR_PRIORITY_CONNECTION, Boolean.TRUE);
+	
+					try{
+						c_pm.addPeer( host, tcp_port, udp_port, true, user_data );
+						
+					}catch( Throwable e ){
+					}
+				}
 			}
 		}
 	}
@@ -504,7 +522,7 @@ BuddyPluginTracker
 
 		Map	diff_map = new HashMap();
 
-		Set<Download>	downloads_with_remote_incomplete = new HashSet<>();
+		Set<Download>	downloads_with_remote_active_incomplete = new HashSet<>();
 		
 		for (int i=0;i<online.size();i++){
 
@@ -512,24 +530,38 @@ BuddyPluginTracker
 
 			BuddyTrackingData buddy_data = getBuddyData( buddy );
 
-			buddy_data.updateLocal( downloads, downloads_id, diff_map, downloads_with_remote_incomplete );
+			buddy_data.updateLocal( downloads, downloads_id, diff_map, downloads_with_remote_active_incomplete );
 		}
 		
 		Set<Download>	temp = new HashSet<>( downloads );
 		
 		if ( plugin.getFPEnabled()){
 			
-			for ( Download d: downloads_with_remote_incomplete ){
+			for ( Download d: downloads_with_remote_active_incomplete ){
 				
 				temp.remove( d );
 				
-				PluginCoreUtils.unwrap( d ).getDownloadState().setTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP, true );
+				DownloadManagerState state = PluginCoreUtils.unwrap( d ).getDownloadState();
+				
+				if ( !state.getTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP )){
+				
+					state.setTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP, true );
+					
+					log( "Download '" + d.getName() + "' set first priority, common active download" );
+				}
 			}
 		}
 		
 		for ( Download d: temp ){
-						
-			PluginCoreUtils.unwrap( d ).getDownloadState().setTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP, false );
+				
+			DownloadManagerState state = PluginCoreUtils.unwrap( d ).getDownloadState();
+			
+			if ( state.getTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP )){
+			
+				state.setTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP, false );
+				
+				log( "Download '" + d.getName() + "' unset first priority, no common active download" );
+			}
 		}
 	}
 
@@ -567,9 +599,13 @@ BuddyPluginTracker
 		}
 		
 		if ( buddy.isOnline( false )){
+				
+			BuddyTrackingData btd = addBuddy( buddy );
 
-			addBuddy( buddy );
-
+			if ( btd != null ){
+					
+				btd.setConnected( buddy.isConnected());
+			}
 		}else{
 
 			removeBuddy( buddy );
@@ -1227,6 +1263,15 @@ outer:
 
 			if ( tracked_downloads.remove( download )){
 
+				DownloadManagerState state = PluginCoreUtils.unwrap( download ).getDownloadState();
+				
+				if ( state.getTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP )){
+					
+					state.setTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP, false );
+					
+					log( "Download '" + download.getName() + "' unset first priority, not tracking" );
+				}
+				
 				download_set_id++;
 
 				downloadData download_data = (downloadData)download.getUserData( BuddyPluginTracker.class );
@@ -1289,7 +1334,7 @@ outer:
 			}
 		}else{
 
-			log( "Tracking peers for " + download.getName());
+			// log( "Tracking peers for " + download.getName());
 
 			download.addPeerListener( this );
 		}
@@ -1451,7 +1496,7 @@ outer:
 
 			if ( !buddy_peers.contains( peer )){
 
-				log( "Adding buddy peer " + peer.getIp());
+				// log( "Adding buddy peer " + peer.getIp());
 
 				if ( buddy_peers.size() == 0 ){
 
@@ -1515,7 +1560,7 @@ outer:
 					
 				}
 				
-				log( download.getName() + ": adding buddy peer " + peer.getIp());
+				// log( download.getName() + ": adding buddy peer " + peer.getIp());
 
 				peer.addListener(
 					new PeerListener2()
@@ -1581,7 +1626,7 @@ outer:
 					}
 				}
 
-				log( ((Download)details[0]).getName() + ": removing buddy peer " + peer.getIp());
+				// log( ((Download)details[0]).getName() + ": removing buddy peer " + peer.getIp());
 			}
 
 			peer.setUserData( PEER_DOWNLOAD_KEY, null );
@@ -1948,6 +1993,34 @@ outer:
 		return( data.getStatus());
 	}
 
+	public void
+	getProperties(
+		BuddyPluginBuddy	buddy,
+		IndentWriter		writer )
+	{
+		BuddyTrackingData data  = getTrackingData( buddy );
+		
+		if ( data == null ){
+			
+			writer.println( "Tracker: Inactive" );
+			
+		}else{
+			
+			writer.println( "Tracker: Active" );
+			
+			writer.indent();
+			
+			try{
+				
+				data.getProperties( writer );
+				
+			}finally{
+				
+				writer.exdent();
+			}
+		}
+	}
+	
 	protected boolean
 	okToTrack(
 		Download	d )
@@ -2036,6 +2109,9 @@ outer:
 	public class
 	BuddyTrackingData
 	{
+		private static final byte	STATE_COMPLETE	= 0x01;
+		private static final byte	STATE_ACTIVE	= 0x02;
+				
 		private BuddyPluginBuddy		buddy;
 
 		private Set<Download>	downloads_sent;
@@ -2043,7 +2119,7 @@ outer:
 
 		private int 			tracking_remote;
 
-		private Map<Download,buddyDownloadData>		downloads_in_common;
+		private Map<Download,BuddyDownloadData>		downloads_in_common;
 		private boolean	buddy_seeding_only;
 
 		private int		consecutive_fails;
@@ -2058,6 +2134,53 @@ outer:
 			buddy	= _buddy;
 		}
 
+		protected void
+		getProperties(
+			IndentWriter	writer )
+		{
+			writer.println( "tracking remote: " + tracking_remote );
+			writer.println( "seeding only: " + buddy_seeding_only );
+			
+			String str = "";
+			
+			for ( String ip: current_ips ){
+					
+				str += (str.isEmpty()?"":", ") + ip;
+			}
+			
+			writer.println( "current ips: " + str );
+			
+			writer.println( "consec fails: " + consecutive_fails );
+			writer.println( "last_fail: " + last_fail );
+			
+			Map<Download,BuddyDownloadData> dic = downloads_in_common;
+			
+			writer.println( "downloads in common: " + (dic==null?0:dic.size()));
+			
+			if ( dic != null ){
+				
+				writer.indent();
+				
+				try{
+					for (Map.Entry<Download,BuddyDownloadData>	entry: dic.entrySet()){
+						
+						Download download = entry.getKey();
+						
+						DownloadManagerState state = PluginCoreUtils.unwrap( download ).getDownloadState();
+						
+						boolean fp = state.getTransientFlag( DownloadManagerState.TRANSIENT_FLAG_FRIEND_FP );
+						
+						writer.println( download.getName() + ", FP=" + fp );
+						
+						entry.getValue().getProperties( writer );
+					}
+				}finally{
+					
+					writer.exdent();
+				}
+			}
+		}
+		
 		protected void
 		updateIPs()
 		{
@@ -2176,6 +2299,50 @@ outer:
 			}
 		}
 
+		protected boolean
+		isDownloadInactive(
+			Download		download )
+		{
+			BuddyDownloadData bdd = getBuddyDownloadData( download );
+			
+			if ( bdd != null ){
+				
+				return( bdd.getRemoteActive() == ACTIVE_NO );
+			}
+			
+			return( false );
+		}
+		
+		protected BuddyDownloadData
+		getBuddyDownloadData(
+			Download		download )
+		{
+			synchronized( this ){
+				
+				if ( downloads_in_common != null ){
+					
+					return( downloads_in_common.get(download));
+				}
+			}
+			
+			return( null );
+		}
+		
+		protected void
+		setConnected(
+			boolean	connected )
+		{
+		
+			if ( !connected ){
+				
+				synchronized( this ){
+
+					downloads_sent 		= null;
+					downloads_sent_id	= 0;
+				}
+			}
+		}
+		
 		protected void
 		setAlive(
 			boolean		alive )
@@ -2184,7 +2351,14 @@ outer:
 
 				if ( alive ){
 
-					consecutive_fails		= 0;
+					if ( consecutive_fails > 0 ){
+						
+						consecutive_fails		= 0;
+						
+						downloads_sent 		= null;
+						downloads_sent_id	= 0;
+					}
+					
 					last_fail				= 0;
 
 				}else{
@@ -2201,7 +2375,7 @@ outer:
 			Set<Download>		downloads,
 			int					id,
 			Map					diff_map,
-			Set<Download>		downloads_with_remote_incomplete )
+			Set<Download>		downloads_with_remote_active_incomplete )
 		{
 			if ( consecutive_fails > 0 ){
 
@@ -2232,44 +2406,70 @@ outer:
 				}
 			}
 
-				// first check to see if completion state changed for any common downloads
+				// first check to see if completion or active state changed for any common downloads
 
-			List<Download>	comp_changed = new ArrayList<>();
+			List<Download>	comp_or_active_changed = new ArrayList<>();
 
 			synchronized( this ){
 
 				if ( downloads_in_common != null ){
 
-					Iterator<Map.Entry<Download,buddyDownloadData>>  it = downloads_in_common.entrySet().iterator();
+					Iterator<Map.Entry<Download,BuddyDownloadData>>  it = downloads_in_common.entrySet().iterator();
 
 					while( it.hasNext()){
 
-						Map.Entry<Download,buddyDownloadData>	entry = it.next();
+						Map.Entry<Download,BuddyDownloadData>	entry = it.next();
 
 						Download d = entry.getKey();
 
-						buddyDownloadData	bdd = entry.getValue();
+						BuddyDownloadData	bdd = entry.getValue();
 
 						if ( !bdd.isRemoteComplete()){
 							
-							downloads_with_remote_incomplete.add( d );
+							int active = bdd.getRemoteActive();
+							
+								// unknown for old peers that don't support the active flag so have to assume active
+								// for migration purposes
+							
+							if ( active == ACTIVE_UNKNOWN || active == ACTIVE_YES ){
+							
+								downloads_with_remote_active_incomplete.add( d );
+							}
 						}
 						
 						boolean	local_complete = d.isComplete( false );
 
+						boolean added = false;
+						
 						if ( local_complete != bdd.isLocalComplete()){
 
 							bdd.setLocalComplete( local_complete );
 
-							comp_changed.add( d );
+							comp_or_active_changed.add( d );
+							
+							added = true;
+						}
+						
+						int dl_state = d.getState();
+						
+						int	local_active = ( dl_state == Download.ST_DOWNLOADING || dl_state == Download.ST_SEEDING )?ACTIVE_YES:ACTIVE_NO;
+
+						if ( local_active != bdd.getLocalActive()){
+
+							bdd.setLocalActive( local_active );
+
+							if ( !added ){
+							
+								comp_or_active_changed.add( d );
+							}
 						}
 					}
 				}
 			}
 
-			if ( comp_changed.size() > 0 ){
+			if ( comp_or_active_changed.size() > 0 ){
 
-				byte[][] change_details = exportFullIDs( comp_changed );
+				byte[][] change_details = exportFullIDs( comp_or_active_changed );
 
 				if ( change_details[0].length > 0 ){
 
@@ -2277,7 +2477,7 @@ outer:
 
 					msg.put( "seeding", new Long( seeding_only?1:0 ));
 
-					msg.put( "changed", 		change_details[0] );
+					msg.put( "changed", 	change_details[0] );
 					msg.put( "changed_s", 	change_details[1] );
 
 					sendTrackerMessage( REQUEST_TRACKER_CHANGE, msg );
@@ -2378,7 +2578,8 @@ outer:
 
 		protected Map
 		updateRemote(
-			Map		msg )
+			int					version,
+			Map<String,Object>	msg )
 		{
 			byte[] added_bytes 		= (byte[])msg.get( "added" );
 
@@ -2400,7 +2601,7 @@ outer:
 
 					byte[] removed_bytes	= (byte[])msg.get( "removed" );
 
-					Map removed = importFullIDs( removed_bytes, null );
+					Map removed = importFullIDs( version, removed_bytes, null );
 
 					Iterator it = removed.keySet().iterator();
 
@@ -2410,7 +2611,7 @@ outer:
 
 						if ( downloads_in_common.remove( d ) != null ){
 
-							log( "Removed " + d.getName() + " common download", false, true );
+							log( "Removed " + d.getName() + " common download", false, false );
 						}
 					}
 
@@ -2450,7 +2651,7 @@ outer:
 
 							if ( !downloads.containsKey( download )){
 
-								log( "Removing " + download.getName() + " from common downloads", false, true );
+								log( "Removing " + download.getName() + " from common downloads", false, false );
 
 								it.remove();
 							}
@@ -2466,13 +2667,13 @@ outer:
 
 					Download d = (Download)entry.getKey();
 
-					buddyDownloadData	bdd = (buddyDownloadData)entry.getValue();
+					BuddyDownloadData	bdd = (BuddyDownloadData)entry.getValue();
 
-					buddyDownloadData existing = (buddyDownloadData)downloads_in_common.get( d );
+					BuddyDownloadData existing = (BuddyDownloadData)downloads_in_common.get( d );
 
 					if ( existing == null ){
 
-						log( "Adding " + d.getName() + " to common downloads (bdd=" + bdd.getString() + ")", false, true );
+						log( "Adding " + d.getName() + " to common downloads (bdd={" + bdd.getString() + "})", false, false );
 
 						downloads_in_common.put( d, bdd );
 
@@ -2481,11 +2682,28 @@ outer:
 						boolean	old_rc = existing.isRemoteComplete();
 						boolean	new_rc = bdd.isRemoteComplete();
 
+						boolean changed = false;
+						
 						if ( old_rc != new_rc ){
 
 							existing.setRemoteComplete( new_rc );
 
-							log( "Changing " + d.getName() + " common downloads (bdd=" + existing.getString() + ")", false, true );
+							changed = true;
+						}
+						
+						int old_la	= existing.getRemoteActive();
+						int new_la	= bdd.getRemoteActive();
+						
+						if ( old_la != new_la ){
+
+							existing.setRemoteActive(new_la);
+							
+							changed = true;
+						}
+						
+						if ( changed ){
+							
+							log( "Changing " + d.getName() + " common downloads (bdd=" + existing.getString() + ")", false, false );
 						}
 					}
 				}
@@ -2512,6 +2730,8 @@ outer:
 			int						type,
 			Map<String,Object>		body )
 		{
+			body.put( "ver", VERSION );
+			
 			body.put( "track", tracked_downloads.size());
 
 			sendMessage( buddy, type, body );
@@ -2524,6 +2744,10 @@ outer:
 		{
 			int	reply_type	= -1;
 
+			Long l_version = (Long)msg_in.get( "ver" );
+			
+			int version = l_version==null?1:l_version.intValue();
+			
 			Map<String,Object>	msg_out		= null;
 
 			Long	l_track = (Long)msg_in.get( "track" );
@@ -2551,7 +2775,7 @@ outer:
 
 				reply_type	= REPLY_TRACKER_SUMMARY;
 
-				msg_out = updateRemote( msg_in );
+				msg_out = updateRemote( version, msg_in );
 
 				msg_out.put( "inc", msg_in.get( "inc" ));
 
@@ -2567,13 +2791,13 @@ outer:
 				
 				if ( msg_in.containsKey( "change" )){
 					
-					Map downloads = importFullIDs((byte[])msg_in.get( "change" ), (byte[])msg_in.get( "change_s" ));
+					Map downloads = importFullIDs( version, (byte[])msg_in.get( "change" ), (byte[])msg_in.get( "change_s" ));
 
 					updateCommonDownloads( downloads, true );
 
 				}else{
 					
-					Map downloads = importFullIDs((byte[])msg_in.get( "changed" ), (byte[])msg_in.get( "changed_s" ));
+					Map downloads = importFullIDs( version, (byte[])msg_in.get( "changed" ), (byte[])msg_in.get( "changed_s" ));
 
 					updateCommonDownloads( downloads, true );
 				}
@@ -2581,7 +2805,7 @@ outer:
 
 				reply_type	= REPLY_TRACKER_ADD;
 
-				Map downloads = importFullIDs((byte[])msg_in.get( "added" ), (byte[])msg_in.get( "added_s" ));
+				Map downloads = importFullIDs( version, (byte[])msg_in.get( "added" ), (byte[])msg_in.get( "added_s" ));
 
 				updateCommonDownloads( downloads, true );
 
@@ -2596,7 +2820,7 @@ outer:
 
 				if ( possible_matches != null && possible_match_states != null ){
 
-					Map downloads = importFullIDs( possible_matches, possible_match_states );
+					Map downloads = importFullIDs( version, possible_matches, possible_match_states );
 
 					if ( downloads.size() > 0 ){
 
@@ -2641,6 +2865,8 @@ outer:
 
 				msg_out.put( "seeding", new Long( seeding_only?1:0 ));
 
+				msg_out.put( "ver", version );
+				
 				reply.put( "msg", msg_out );
 
 				return( reply );
@@ -2733,18 +2959,33 @@ outer:
 					i * FULL_ID_SIZE,
 					FULL_ID_SIZE );
 
-				states[i] = download.isComplete( false )?(byte)0x01:(byte)0x00;
+				byte state = 0;
+				
+				if (  download.isComplete( false )){
+					
+					state |= STATE_COMPLETE;
+				}
+				
+				int dl_state = download.getState();
+				
+				if ( dl_state == Download.ST_DOWNLOADING || dl_state == Download.ST_SEEDING ){
+					
+					state |= STATE_ACTIVE;
+				}
+				
+				states[i] = state;
    			}
 
    			return( new byte[][]{ hashes, states });
    		}
 
-		protected Map<Download,buddyDownloadData>
+		protected Map<Download,BuddyDownloadData>
 		importFullIDs(
+			int			version,
 			byte[]		ids,
 			byte[]		states )
 		{
-			Map<Download,buddyDownloadData>	res = new HashMap<>();
+			Map<Download,BuddyDownloadData>	res = new HashMap<>();
 
 			if ( ids != null ){
 
@@ -2756,11 +2997,21 @@ outer:
 
 						if ( dl != null ){
 
-							buddyDownloadData bdd = new buddyDownloadData( dl );
+							BuddyDownloadData bdd = new BuddyDownloadData( dl );
 
 							if ( states != null ){
 
-								bdd.setRemoteComplete(( states[i/FULL_ID_SIZE] & 0x01 ) != 0 );
+								byte state = states[i/FULL_ID_SIZE];
+								
+								bdd.setRemoteComplete(( state & STATE_COMPLETE ) != 0 );
+								
+								if ( version >= 2 ){
+									
+									bdd.setRemoteActive(( state & STATE_ACTIVE ) != 0 ? ACTIVE_YES:ACTIVE_NO );
+								}else{
+									
+									bdd.setRemoteActive( ACTIVE_UNKNOWN );
+								}
 							}
 
 							res.put( dl, bdd );
@@ -2796,15 +3047,15 @@ outer:
 					return( res );
 				}
 
-				Iterator<Map.Entry<Download,buddyDownloadData>> it = downloads_in_common.entrySet().iterator();
+				Iterator<Map.Entry<Download,BuddyDownloadData>> it = downloads_in_common.entrySet().iterator();
 
 				while( it.hasNext()){
 
-					Map.Entry<Download,buddyDownloadData>	entry = it.next();
+					Map.Entry<Download,BuddyDownloadData>	entry = it.next();
 
 					Download d = entry.getKey();
 
-					buddyDownloadData	bdd = entry.getValue();
+					BuddyDownloadData	bdd = entry.getValue();
 
 					if ( d.isComplete( false ) && bdd.isRemoteComplete()){
 
@@ -2819,7 +3070,7 @@ outer:
 						if ( 	last_check == 0 ||
 								now - last_check >= PEER_CHECK_INTERVAL ){
 
-							log( d.getName() + " - checking peer", false, true );
+							// log( d.getName() + " - checking peer", false, true );
 
 							bdd.setPeerCheckTime( now );
 
@@ -2854,7 +3105,7 @@ outer:
 		protected String
 		getStatus()
 		{
-			Map<Download,buddyDownloadData> c = downloads_in_common;
+			Map<Download,BuddyDownloadData> c = downloads_in_common;
 
 			String str = String.valueOf( tracked_downloads.size());
 
@@ -2881,19 +3132,39 @@ outer:
 	}
 
 	private static class
-	buddyDownloadData
+	BuddyDownloadData
 	{
 		private boolean	local_is_complete;
 		private boolean	remote_is_complete;
+		
+		private int		local_active	= ACTIVE_UNKNOWN;
+		private int		remote_active	= ACTIVE_UNKNOWN;
+		
 		private long	last_peer_check;
 
 		protected
-		buddyDownloadData(
+		BuddyDownloadData(
 			Download		download )
 		{
 			local_is_complete = download.isComplete( false );
+			
+			int dl_state = download.getState();
+			
+			local_active = ( dl_state == Download.ST_DOWNLOADING || dl_state == Download.ST_SEEDING )?ACTIVE_YES:ACTIVE_NO;
 		}
 
+		protected void
+		getProperties(
+			IndentWriter	writer )
+		{
+			writer.indent();
+			
+			writer.println( "complete: " + local_is_complete + "/" + remote_is_complete );
+			writer.println( "active: " + ACTIVE_STRS[local_active] + "/" + ACTIVE_STRS[remote_active] );
+			
+			writer.exdent();
+		}
+		
 		protected void
 		setLocalComplete(
 			boolean		b )
@@ -2921,6 +3192,32 @@ outer:
 		}
 
 		protected void
+		setLocalActive(
+			int		a )
+		{
+			local_active	= a;
+		}
+
+		protected int
+		getLocalActive()
+		{
+			return( local_active );
+		}
+		
+		protected void
+		setRemoteActive(
+			int		a )
+		{
+			remote_active	= a;
+		}
+
+		protected int
+		getRemoteActive()
+		{
+			return( remote_active );
+		}
+		
+		protected void
 		setPeerCheckTime(
 			long	time )
 		{
@@ -2936,7 +3233,7 @@ outer:
 		protected String
 		getString()
 		{
-			return( "lic=" + local_is_complete + ",ric=" + remote_is_complete + ",lpc=" + last_peer_check );
+			return( "lic=" + local_is_complete + ",ric=" + remote_is_complete + ",lia=" + ACTIVE_STRS[local_active] + ",ria=" + ACTIVE_STRS[remote_active] + ",lpc=" + last_peer_check );
 		}
 	}
 

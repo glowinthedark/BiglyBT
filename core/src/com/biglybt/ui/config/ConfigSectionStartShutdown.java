@@ -177,15 +177,15 @@ public class ConfigSectionStartShutdown
 
 		List<Parameter> listStop = new ArrayList<>();
 
-		// done downloading
+			// done downloading
 
 		addDoneDownloadingOption(listStop, true);
 
-		// done seeding
+			// done seeding
 
 		addDoneSeedingOption(listStop, true);
 
-		// reset on trigger
+			// reset on trigger
 
 		BooleanParameterImpl resetOnTrigger = new BooleanParameterImpl(
 				BCFG_STOP_TRIGGERS_AUTO_RESET, "");
@@ -195,6 +195,11 @@ public class ConfigSectionStartShutdown
 					MessageText.getString("ConfigView.label.stop.Nothing")
 				}));
 
+		DateTimeParameterImpl stopTime = new DateTimeParameterImpl(ICFG_STOP_DATE_TIME, "ConfigView.label.shutdown.explicit.time" );
+		add(stopTime, Parameter.MODE_INTERMEDIATE, listStop);
+		
+		addTimedCloseOption(stopTime, listStop);
+
 		// prompt to allow abort
 
 		BooleanParameterImpl enablePrompt = new BooleanParameterImpl(
@@ -202,22 +207,40 @@ public class ConfigSectionStartShutdown
 		enablePrompt.setAllowedUiTypes(UIInstance.UIT_SWT);
 		add(enablePrompt, Parameter.MODE_INTERMEDIATE, listStop);
 
+		IntParameterImpl paramTerminateAfter = new IntParameterImpl(
+				ICFG_STOP_FORCE_TERMINATE_AFTER, "ConfigView.label.stop.term.after", 2, 100000);
+		paramTerminateAfter.setSuffixLabelKey("ConfigView.text.minutes");
+		add(paramTerminateAfter, Parameter.MODE_INTERMEDIATE, listStop);
+		
 		add("pgStop", new ParameterGroupImpl("ConfigView.label.stop", listStop));
-
+		
+		
 		//// Restart
 
 		IntParameterImpl paramRestartWhenIdle = new IntParameterImpl(
-				ICFG_AUTO_RESTART_WHEN_IDLE, "ConfigView.label.restart.auto", 0,
-				100000);
+				ICFG_AUTO_RESTART_WHEN_IDLE, "ConfigView.label.restart.auto", 0, 100000);
 		paramRestartWhenIdle.setSuffixLabelKey("ConfigView.text.minutes");
 		add(paramRestartWhenIdle);
 		paramRestartWhenIdle.setMinimumRequiredUserMode(
 				Parameter.MODE_INTERMEDIATE);
 
+		BooleanParameterImpl paramRestartWhenIdlePrompt = new BooleanParameterImpl(
+				BCFG_AUTO_RESTART_WHEN_IDLE_PROMPT, "label.prompt.when.restart" );
+		paramRestartWhenIdlePrompt.setMinimumRequiredUserMode(Parameter.MODE_INTERMEDIATE);
+		paramRestartWhenIdlePrompt.setAllowedUiTypes(UIInstance.UIT_SWT);
+		paramRestartWhenIdlePrompt.setIndent(1, true);
+		add(paramRestartWhenIdlePrompt);
+
+		paramRestartWhenIdle.addAndFireListener((n)->{
+			paramRestartWhenIdlePrompt.setEnabled(paramRestartWhenIdle.getValue() > 0 );
+		});
+		
 		add("pgRestart",
-				new ParameterGroupImpl("label.restart", paramRestartWhenIdle));
+				new ParameterGroupImpl("label.restart", paramRestartWhenIdle, paramRestartWhenIdlePrompt ));
 
 
+			// JVM
+		
 		List<Parameter> listJVM = new ArrayList<>();
 
 		if (platform.hasCapability(
@@ -697,7 +720,7 @@ public class ConfigSectionStartShutdown
 		return (value);
 	}
 
-	public static String[][] getActionDetails() {
+	public static String[][] getActionDetails( boolean for_timed_stop) {
 		final PlatformManager platform = PlatformManagerFactory.getPlatformManager();
 
 		int shutdown_types = platform.getShutdownTypes();
@@ -705,7 +728,10 @@ public class ConfigSectionStartShutdown
 		List<String> l_action_values = new ArrayList<>();
 		List<String> l_action_descs = new ArrayList<>();
 
-		l_action_values.add("Nothing");
+		if ( !for_timed_stop ){
+			l_action_values.add("Nothing");
+		}
+		
 		l_action_values.add("QuitVuze");
 
 		if ((shutdown_types & PlatformManager.SD_SLEEP) != 0) {
@@ -743,7 +769,7 @@ public class ConfigSectionStartShutdown
 
 	public void addDoneDownloadingOption(List<Parameter> listStop,
 			boolean include_script_setting) {
-		String[][] action_details = getActionDetails();
+		String[][] action_details = getActionDetails(false);
 
 		StringListParameterImpl dc = new StringListParameterImpl(
 				SCFG_ON_DOWNLOADING_COMPLETE_DO, "ConfigView.label.stop.downcomp",
@@ -768,7 +794,7 @@ public class ConfigSectionStartShutdown
 
 	private void addDoneSeedingOption(List<Parameter> listStop,
 			boolean include_script_setting) {
-		String[][] action_details = getActionDetails();
+		String[][] action_details = getActionDetails(false);
 
 		StringListParameterImpl sc = new StringListParameterImpl(
 				SCFG_ON_SEEDING_COMPLETE_DO, "ConfigView.label.stop.seedcomp",
@@ -789,5 +815,39 @@ public class ConfigSectionStartShutdown
 			sc.addListener(
 					p -> sc_script.setEnabled(sc.getValue().startsWith("RunScript")));
 		}
+	}
+	
+	private void
+	addTimedCloseOption(
+		DateTimeParameterImpl	param,
+		List<Parameter>			listStop )
+	{
+		String[][] action_details = getActionDetails( true );
+		
+		StringListParameterImpl sc = new StringListParameterImpl(
+				SCFG_STOP_DATE_TIME_DO, "label.do.the.following",
+				action_details[1], action_details[0]);
+		add(sc, Parameter.MODE_INTERMEDIATE, listStop);
+		sc.setIndent(1, true);
+		
+		FileParameterImpl sc_script = new FileParameterImpl(
+				SCFG_STOP_DATE_TIME_SCRIPT, "label.script.to.run");
+		add(sc_script, Parameter.MODE_INTERMEDIATE, listStop);
+		sc_script.setIndent(2, true);
+
+		com.biglybt.pif.ui.config.ParameterListener pl = (p)->{
+			
+			long time = param.getValue();
+			
+			boolean is_script = sc.getValue().startsWith("RunScript");
+
+			sc.setEnabled(time>0);
+			sc_script.setEnabled(time>0&&is_script);
+		};
+		
+		pl.parameterChanged(null);
+
+		param.addListener( pl );
+		sc.addListener( pl );
 	}
 }

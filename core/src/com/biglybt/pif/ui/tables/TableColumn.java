@@ -454,6 +454,10 @@ public interface TableColumn {
   */
   public void removeCellMouseListener(TableCellMouseListener listener);
 
+  public void addCellMenuListener(TableCellMenuListener listener);
+ 
+  public void removeCellMenuListener(TableCellMenuListener listener);
+
   /**
    * A listener is added for every type of cell listener the supplied object
    * implements
@@ -570,6 +574,15 @@ public interface TableColumn {
 	 */
 	public String getIconReference();
 
+	/**
+	 * @since 3.6.0.1
+	 */
+	public boolean getIconReferenceEnabled();
+	
+	/**
+	 * @since 3.6.0.1
+	 */
+	public void setIconReferenceEnabled( boolean b );
 	/**
 	 * *since 4501
 	 * @param mode from Parameter. constants

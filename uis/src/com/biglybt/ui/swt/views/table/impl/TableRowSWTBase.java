@@ -21,14 +21,9 @@ package com.biglybt.ui.swt.views.table.impl;
 import java.util.*;
 
 import org.eclipse.swt.graphics.*;
-import org.eclipse.swt.widgets.Display;
-import com.biglybt.core.config.COConfigurationManager;
-import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.Debug;
 import com.biglybt.pif.ui.tables.*;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
-import com.biglybt.ui.swt.Utils;
-import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.views.table.TableCellSWT;
 import com.biglybt.ui.swt.views.table.TableRowSWT;
 import com.biglybt.ui.swt.views.table.TableViewSWT;
@@ -36,7 +31,6 @@ import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.ui.common.table.TableCellCore;
 import com.biglybt.ui.common.table.TableRowCore;
 import com.biglybt.ui.common.table.TableView;
-import com.biglybt.ui.swt.utils.ColorCache;
 
 @SuppressWarnings("rawtypes")
 public abstract class TableRowSWTBase
@@ -56,7 +50,7 @@ public abstract class TableRowSWTBase
 
 	private int visibleRowIndex = -1;
 	
-	protected Map<String, TableCellCore> mTableCells;
+	protected Map<String, TableCellSWTBase> mTableCells;
 
 	private boolean bDisposed;
 
@@ -94,7 +88,7 @@ public abstract class TableRowSWTBase
 		invalidate(false);
 	}
 	@Override
-	public void invalidate(boolean mustRefersh) {
+	public void invalidate(boolean mustRefresh) {
 		synchronized (lock) {
   		if (bDisposed || mTableCells == null) {
   			return;
@@ -102,7 +96,7 @@ public abstract class TableRowSWTBase
 
   		for (TableCellCore cell : mTableCells.values()) {
   			if (cell != null) {
-  				cell.invalidate(mustRefersh);
+  				cell.invalidate(mustRefresh);
   			}
   		}
 		}
@@ -436,7 +430,7 @@ public abstract class TableRowSWTBase
 	 * @see TableRowCore#getView()
 	 */
 	@Override
-	public TableView getView() {
+	public TableViewSWT<?> getView() {
 		return tv;
 	}
 
@@ -550,14 +544,6 @@ public abstract class TableRowSWTBase
 	}
 
 	/* (non-Javadoc)
-	 * @see TableRowCore#isInPaintItem()
-	 */
-	@Override
-	public boolean isInPaintItem() {
-		return false;
-	}
-
-	/* (non-Javadoc)
 	 * @see com.biglybt.pif.ui.tables.TableRow#getDataSource()
 	 */
 	@Override
@@ -589,65 +575,6 @@ public abstract class TableRowSWTBase
 		return( isAttention );
 	}
 	
-	/* (non-Javadoc)
-	 * @see com.biglybt.ui.swt.views.table.TableRowSWT#setForeground(org.eclipse.swt.graphics.Color)
-	 */
-	@Override
-	public abstract boolean setForeground(Color c);
-
-	/* (non-Javadoc)
-	 * @see com.biglybt.pif.ui.tables.TableRow#setForeground(int, int, int)
-	 */
-	@Override
-	public void setForeground(int red, int green, int blue) {
-		setForeground2(red, green, blue);
-	}
-
-	public boolean setForeground2(int red, int green, int blue) {
-		if (red < 0 || green < 0 || blue < 0) {
-			return setForeground((Color) null);
-		}
-		return setForeground(new RGB(red, green, blue));
-	}
-
-	private boolean setForeground(final RGB rgb) {
-		Color colorFG = getForeground();
-		boolean changed = colorFG == null || colorFG.isDisposed()
-				|| !colorFG.getRGB().equals(rgb);
-		if (changed) {
-			Utils.execSWTThread(new AERunnable() {
-				@Override
-				public void runSupport() {
-					setForeground(ColorCache.getColor(Display.getCurrent(), rgb));
-				}
-			});
-		}
-		return changed;
-	}
-
-	/* (non-Javadoc)
-	 * @see com.biglybt.pif.ui.tables.TableRow#setForeground(int[])
-	 */
-	@Override
-	public void setForeground(int[] rgb) {
-		setForeground2(rgb);
-	}
-
-	public boolean setForeground2(int[] rgb) {
-		if (rgb == null || rgb.length < 3) {
-			return setForeground((Color) null);
-		}
-		return setForeground2(rgb[0], rgb[1], rgb[2]);
-	}
-
-	/* (non-Javadoc)
-	 * @see com.biglybt.pif.ui.tables.TableRow#setForegroundToErrorColor()
-	 */
-	@Override
-	public void setForegroundToErrorColor() {
-		this.setForeground(Colors.colorError);
-	}
-
 	/* (non-Javadoc)
 	 * @see com.biglybt.pif.ui.tables.TableRow#isValid()
 	 */

@@ -28,14 +28,14 @@ import java.util.Date;
 import org.eclipse.swt.graphics.Image;
 import com.biglybt.core.util.Base32;
 import com.biglybt.core.util.LightHashMap;
-
+import com.biglybt.ui.swt.search.SBC_SearchResultsView.ImageLoadListener;
 import com.biglybt.core.metasearch.Engine;
 import com.biglybt.core.metasearch.Result;
 import com.biglybt.core.subs.util.SearchSubsResultBase;
 
 public class
 SBC_SearchResult
-	implements SearchSubsResultBase, SBC_SearchResultsView.ImageLoadListener
+	implements SearchSubsResultBase
 {
 	private final SBC_SearchResultsView		view;
 
@@ -46,6 +46,8 @@ SBC_SearchResult
 	private final String			seeds_peers;
 	private final long				seeds_peers_sort;
 	private final int				seed_count;
+	private final int				peer_count;
+	private final int				completed_count;
 	private final long				votes_comments_sort;
 	private final String			votes_comments;
 
@@ -88,6 +90,7 @@ SBC_SearchResult
 		}
 		
 		seed_count = seeds<0?0:seeds;
+		peer_count = leechers<0?0:leechers;
 		
 		seeds_peers = (seeds<0?"--":String.valueOf(seeds)) + "/" + (leechers<0?"--":String.valueOf(leechers));
 
@@ -105,6 +108,8 @@ SBC_SearchResult
 
 		seeds_peers_sort = ((seeds&0x7fffffff)<<32) | ( leechers & 0xffffffff );
 
+		completed_count = result.getNbCompleted();
+		
 		long votes		= result.getVotes();
 		long comments 	= result.getComments();
 
@@ -138,6 +143,13 @@ SBC_SearchResult
 		return( engine );
 	}
 
+	@Override
+	public String 
+	getID()
+	{
+		return( result.getUID());
+	}
+	
 	@Override
 	public final String
 	getName()
@@ -181,6 +193,13 @@ SBC_SearchResult
 	}
 	
 	@Override
+	public int 
+	getNbPeers()
+	{
+		return( peer_count );
+	}
+	
+	@Override
 	public String
 	getSeedsPeers()
 	{
@@ -194,6 +213,13 @@ SBC_SearchResult
 		return( seeds_peers_sort );
 	}
 
+	@Override
+	public int 
+	getNbCompleted() 
+	{
+		return( completed_count );
+	}
+	
 	@Override
 	public String
 	getVotesComments()
@@ -246,6 +272,21 @@ SBC_SearchResult
 	}
 
 	@Override
+	public String[] 
+	getTags()
+	{
+		return( result.getTags());
+	}
+	
+	
+	@Override
+	public String 
+	getDescription()
+	{
+		return( result.getDescription());
+	}
+	
+	@Override
 	public long
 	getTime()
 	{
@@ -261,10 +302,22 @@ SBC_SearchResult
 		return( d==null?0:d.getTime());
 	}
 	
-	public Image
-	getIcon()
+	public void
+	getIcon(
+		ImageLoadListener	listener )
 	{
-		return( view.getIcon( engine, this ));
+		view.getIcon( 
+			engine,
+			(img)->{
+				
+				try{
+					listener.imageLoaded(img);
+					
+				}finally{
+					
+					view.invalidate( this );
+				}
+			});
 	}
 
 	@Override
@@ -279,14 +332,6 @@ SBC_SearchResult
 	setRead(
 		boolean		read )
 	{
-	}
-
-	@Override
-	public void
-	imageLoaded(
-		Image		image )
-	{
-		view.invalidate( this );
 	}
 
 	@Override

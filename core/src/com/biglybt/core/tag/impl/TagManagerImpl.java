@@ -32,9 +32,12 @@ import com.biglybt.core.Core;
 import com.biglybt.core.CoreComponent;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.CoreLifecycleAdapter;
+import com.biglybt.core.CoreOperation;
+import com.biglybt.core.CoreOperationTask;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.download.DownloadManager;
+import com.biglybt.core.download.DownloadManagerException;
 import com.biglybt.core.download.DownloadManagerInitialisationAdapter;
 import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.global.GlobalManager;
@@ -92,6 +95,8 @@ TagManagerImpl
 
 	private static TagManagerImpl	singleton;
 
+	private static Object KEY_TG_COLUMNS = new Object();
+	
 	public static synchronized TagManagerImpl
 	getSingleton()
 	{
@@ -462,7 +467,7 @@ TagManagerImpl
 
 						pw.println( "<?xml version=\"1.0\" encoding=\"utf-8\"?>" );
 
-						pw.println( "<rss version=\"2.0\" xmlns:media=\"http://search.yahoo.com/mrss/\" xmlns:vuze=\"http://www.vuze.com\">" );
+						pw.println( "<rss version=\"2.0\" xmlns:media=\"http://search.yahoo.com/mrss/\" " + Constants.XMLNS_VUZE + ">" );
 
 						pw.println( "<channel>" );
 
@@ -629,6 +634,35 @@ TagManagerImpl
 								}
 							}
 
+							String dl_cat = download.getCategoryName();
+							
+							if ( dl_cat != null && dl_cat.length() > 0 ){
+
+								if ( !dl_cat.equalsIgnoreCase("Categories.uncategorized")){
+									
+									pw.println( "<category>" + escape( dl_cat ) + "</category>" );
+								}
+							}
+							
+							List<Tag> dl_tags = TagManagerFactory.getTagManager().getTagsForTaggable( core_download );
+
+							for ( Tag dl_tag : dl_tags) {
+
+								TagType tt = dl_tag.getTagType();
+								
+								if ( tt.isTagTypeAuto() || tt.getTagType() != TagType.TT_DOWNLOAD_MANUAL ){
+									
+									continue;
+								}
+								
+								boolean[] autos = dl_tag.isTagAuto();
+								
+								if (!( autos[0] || autos[1] )){
+									
+									pw.println( "<tag>" + escape( dl_tag.getTagName(true )) + "</tag>" );
+								}
+							}
+							
 							pw.println( "</item>" );
 						}
 
@@ -774,6 +808,8 @@ TagManagerImpl
 								}
 							}
 							
+							List<Tag> imported_tags = new ArrayList<>();
+							
 							for (int j=0;j<comps.length;j++){
 
 								VuzeFileComponent comp = comps[j];
@@ -788,18 +824,40 @@ TagManagerImpl
 									
 										comp.setProcessed();
 										
-										UIManager ui_manager = StaticUtilities.getUIManager( 120*1000 );
+										imported_tags.add( tag );
+									}
+								}
+							}
+							
+							if ( !imported_tags.isEmpty()){
+								
+								UIManager ui_manager = StaticUtilities.getUIManager( 120*1000 );
 
+								if ( imported_tags.size() < 5 ){
+									
+									for ( Tag tag: imported_tags ){
+										
 										String details = MessageText.getString(
 												"tag.import.ok.desc",
 												new String[]{ tag.getTagName( true )});
-
+		
 										ui_manager.showMessageBox(
 												"tag.import.ok.title",
 												"!" + details + "!",
 												UIManagerEvent.MT_OK );
 									}
+								}else{
+									
+									String details = MessageText.getString(
+											"tag.imports.ok.desc",
+											new String[]{ String.valueOf( imported_tags.size()) });
+	
+									ui_manager.showMessageBox(
+											"tag.import.ok.title",
+											"!" + details + "!",
+											UIManagerEvent.MT_OK );
 								}
+
 							}
 						}
 					}
@@ -850,6 +908,8 @@ TagManagerImpl
 				{
 					if ( component instanceof GlobalManager ){
 
+						initializeSwarmTags();
+						
 						GlobalManager global_manager = (GlobalManager)component;
 
 						global_manager.addDownloadManagerInitialisationAdapter(
@@ -1188,8 +1248,89 @@ TagManagerImpl
 										Thread.sleep( 1000 );
 									}
 
-									manager.copyDataFiles( new_loc );
+									// manager.copyDataFiles( new_loc );
 
+									
+									try{
+										FileUtil.runAsTask(
+												CoreOperation.OP_DOWNLOAD_COPY,
+												new CoreOperationTask()
+												{
+													private ProgressCallback cb = new CoreOperationTask.ProgressCallbackAdapter();
+													
+													@Override
+													public String 
+													getName()
+													{
+														return( manager.getDisplayName());
+													}
+
+													@Override
+													public DownloadManager 
+													getDownload()
+													{
+														return( manager );
+													}
+
+													@Override
+													public String[] 
+													getAffectedFileSystems()
+													{
+														return( FileUtil.getFileStoreNames( manager.getAbsoluteSaveLocation(), new_loc ));
+													}
+
+													@Override
+													public boolean
+													runOperation(
+														CoreOperation operation)
+													{
+														try{
+															manager.copyDataFiles( new_loc, cb );
+
+														}catch( Throwable e ){
+
+															throw( new RuntimeException( e ));
+														}
+														
+														return( true );
+													}
+
+													@Override
+													public ProgressCallback 
+													getProgressCallback()
+													{
+														return( cb );
+													}
+												});
+
+									}catch( Throwable e ){
+
+										Throwable f = e.getCause();
+
+										if ( f instanceof DownloadManagerException ){
+
+											throw((DownloadManagerException)f);
+										}
+
+										throw( new DownloadManagerException( "Copy failed", e ));
+									}
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
+									
 									Logger.logTextResource(
 										new LogAlert(
 											manager,
@@ -1238,33 +1379,40 @@ TagManagerImpl
 
 	protected Object
 	evalScript(
-		Tag					tag,
-		String				script,
-		DownloadManager		dm,
-		String				intent_key )
+		Tag						tag,
+		String					script,
+		List<DownloadManager>	dms,
+		String					intent_key )
 	{
 		String script_type = "";
 
-		if ( script.length() >=10 && script.substring(0,10).toLowerCase( Locale.US ).startsWith( "javascript" )){
-
-			int	p1 = script.indexOf( '(' );
-
-			int	p2 = script.lastIndexOf( ')' );
-
-			if ( p1 != -1 && p2 != -1 ){
-
-				script = script.substring( p1+1, p2 ).trim();
-
-				if ( script.startsWith( "\"" ) && script.endsWith( "\"" )){
-
-					script = script.substring( 1, script.length()-1 );
+		script = script.trim();
+		
+		if ( script.length() >=10 ){
+			
+			String start = script.substring(0,10).toLowerCase( Locale.US );
+		
+			if ( start.startsWith( "javascript" ) || start.startsWith( "plugin" )){
+				
+				int	p1 = script.indexOf( '(' );
+	
+				int	p2 = script.lastIndexOf( ')' );
+	
+				if ( p1 != -1 && p2 != -1 ){
+	
+					script = script.substring( p1+1, p2 ).trim();
+	
+					if ( script.startsWith( "\"" ) && script.endsWith( "\"" )){
+	
+						script = script.substring( 1, script.length()-1 );
+					}
+	
+						// allow people to escape " if it makes them feel better
+	
+					script = script.replaceAll( "\\\\\"", "\"" );
+	
+					script_type = start.startsWith( "javascript" )?ScriptProvider.ST_JAVASCRIPT:ScriptProvider.ST_PLUGIN;
 				}
-
-					// allow people to escape " if it makes them feel better
-
-				script = script.replaceAll( "\\\\\"", "\"" );
-
-				script_type = ScriptProvider.ST_JAVASCRIPT;
 			}
 		}
 
@@ -1287,46 +1435,116 @@ TagManagerImpl
 
 				provider_found = true;
 
-				Download plugin_dm = PluginCoreUtils.wrap( dm );
+				if ( dms.size() > 1 && p.canEvalBatch( script )){
+													
+					Map<String,Object>	bindings = new HashMap<>();
+	
+					List<String>	intents 	= new ArrayList<>();
+					List<Download>	plugin_dms	= new ArrayList<>();
+						
+					for ( DownloadManager dm: dms ){
 
-				if ( plugin_dm == null ){
+						Download plugin_dm = PluginCoreUtils.wrap( dm );
+						
+						if ( plugin_dm == null ){
+		
+							continue;
+						}
 
-					return( null );	// deleted in the meantime
-				}
-
-				Map<String,Object>	bindings = new HashMap<>();
-
-
-				String dm_name = dm.getDisplayName();
-
-				if ( dm_name.length() > 32 ){
-
-					dm_name = dm_name.substring( 0, 29 ) + "...";
-				}
-
-				String intent = intent_key + "(\"" + tag.getTagName() + "\",\"" + dm_name + "\")";
-
-				bindings.put( "intent", intent );
-
-				bindings.put( "download", plugin_dm );
-
-				bindings.put( "tag", tag );
-
-				try{
-					Object result = p.eval( script, bindings );
-
-					return( result );
-
-				}catch( Throwable e ){
-
-					Debug.out( e );;
+						String dm_name = dm.getDisplayName();
+		
+						if ( dm_name.length() > 32 ){
+		
+							dm_name = dm_name.substring( 0, 29 ) + "...";
+						}
+		
+						String intent = intent_key + "(\"" + tag.getTagName() + "\",\"" + dm_name + "\")";
+						
+						intents.add( intent );
+						
+						plugin_dms.add( plugin_dm );
+					}
 					
-					return( e );
+					if ( intents.isEmpty()){
+						
+						return( null );
+					}
+					
+					bindings.put( "intents", intents );
+	
+					bindings.put( "downloads", plugin_dms );
+	
+					bindings.put( "tag", tag );
+	
+					try{
+						Object result = p.eval( script, bindings );
+	
+						return( result );
+	
+					}catch( Throwable e ){
+	
+						Debug.out( e );
+						
+						return( e );
+					}
+					
+				}else{
+					
+					List<Object>	results = new ArrayList<>();
+					
+					for ( DownloadManager dm: dms ){
+						
+						Download plugin_dm = PluginCoreUtils.wrap( dm );
+		
+						if ( plugin_dm == null ){
+		
+							continue; // deleted in the meantime
+						}
+		
+						Map<String,Object>	bindings = new HashMap<>();
+		
+		
+						String dm_name = dm.getDisplayName();
+		
+						if ( dm_name.length() > 32 ){
+		
+							dm_name = dm_name.substring( 0, 29 ) + "...";
+						}
+		
+						String intent = intent_key + "(\"" + tag.getTagName() + "\",\"" + dm_name + "\")";
+		
+						bindings.put( "intent", intent );
+		
+						bindings.put( "download", plugin_dm );
+		
+						bindings.put( "tag", tag );
+		
+						try{
+							Object result = p.eval( script, bindings );
+		
+							results.add( result );
+		
+						}catch( Throwable e ){
+		
+							Debug.out( e );
+							
+							results.add( e );
+						}
+					}
+					
+					if ( results.size() == 1 && dms.size() == 1 ){
+						
+						return( results.get( 0 ));
+						
+					}else{
+						
+						return( results );
+					}
 				}
 			}
 		}
 
-		if ( !provider_found ){
+		if ( script_type == ScriptProvider.ST_JAVASCRIPT && !provider_found ){
 
 			if ( !js_plugin_install_tried ){
 
@@ -1340,18 +1558,16 @@ TagManagerImpl
 	}
 
 	private void
-	resolverInitialized(
-		TaggableResolver		resolver )
+	loadTags(
+		TagTypeWithState		tt_with_state )
 	{
-		TagTypeDownloadManual ttdm = new TagTypeDownloadManual( resolver );
-
 		List<Tag> tags = new ArrayList<>();
 
 		synchronized( this ){
 
 			Map config = getConfig();
 
-			Map<String,Object> tt = (Map<String,Object>)config.get( String.valueOf( ttdm.getTagType()));
+			Map<String,Object> tt = (Map<String,Object>)config.get( String.valueOf( tt_with_state.getTagType()));
 
 			if ( tt != null ){
 
@@ -1365,7 +1581,7 @@ TagManagerImpl
 							int	tag_id 	= Integer.parseInt( key );
 							Map m		= (Map)entry.getValue();
 
-							tags.add( ttdm.createTag( tag_id, m ));
+							tags.add( tt_with_state.createTag( tag_id, m ));
 						}
 					}catch( Throwable e ){
 
@@ -1377,8 +1593,25 @@ TagManagerImpl
 
 		for ( Tag tag: tags ){
 
-			ttdm.addTag( tag );
+			tt_with_state.addTag( tag );
 		}
+	}
+	
+	private void
+	initializeSwarmTags()
+	{
+		TagTypeSwarmTag stt = new TagTypeSwarmTag();
+
+		loadTags( stt );
+	}
+	
+	private void
+	resolverInitialized(
+		TaggableResolver		resolver )
+	{
+		TagTypeDownloadManual ttdm = new TagTypeDownloadManual( resolver );
+
+		loadTags( ttdm );
 		
 		TagTypeDownloadInternal ttdi = new TagTypeDownloadInternal( resolver );
 	}
@@ -1686,19 +1919,50 @@ TagManagerImpl
 		}
 	}
 
+	private static final String TTP_TAGS_FOR_TAGGABLE_CACHE = "TagManagerImpl::tags_for_taggable_cache";
+
 	@Override
 	public List<Tag>
 	getTagsForTaggable(
 		Taggable	taggable )
 	{
-		Set<Tag>	result = new HashSet<>();
+		int mut = TagTypeBase.getTagAndTaggableMut();
+		
+		Object[] cache = (Object[])taggable.getTaggableTransientProperty( TTP_TAGS_FOR_TAGGABLE_CACHE );
+		
+		if ( cache != null ){
+			
+			if (((Integer)cache[0]) == mut ){
+				
+				return((List<Tag>)cache[1]);
+			}
+		}
+		
+		List<Tag>	result = null;
 
 		for ( TagType tt: tag_types ){
 
-			result.addAll( tt.getTagsForTaggable( taggable ));
+			List<Tag> tags = tt.getTagsForTaggable( taggable );
+			
+			if ( !tags.isEmpty()){
+			
+				if ( result == null ){
+					
+					result = new ArrayList<>();
+				}
+				
+				result.addAll( tags );
+			}
 		}
 
-		return(new ArrayList<>(result));
+		if ( result == null ){
+		
+			result = Collections.emptyList();
+		}
+		
+		taggable.setTaggableTransientProperty( TTP_TAGS_FOR_TAGGABLE_CACHE, new Object[]{ mut, result });
+		
+		return( result );
 	}
 
 	@Override
@@ -1707,17 +1971,15 @@ TagManagerImpl
 		int			tag_type,
 		Taggable	taggable )
 	{
-		Set<Tag>	result = new HashSet<>();
-
 		for ( TagType tt: tag_types ){
 
 			if ( tt.getTagType() == tag_type ){
 
-				result.addAll( tt.getTagsForTaggable( taggable ));
+				return( tt.getTagsForTaggable( taggable ));
 			}
 		}
 
-		return(new ArrayList<>(result));
+		return( Collections.emptyList());
 	}
 
 	@Override
@@ -1726,24 +1988,36 @@ TagManagerImpl
 		int[]		tts,
 		Taggable	taggable )
 	{
-		Set<Tag>	result = new HashSet<>();
-
-		Set<Integer>	tt_set = new HashSet<>();
+		List<Tag> result = null;
 		
 		for ( int tt: tts ){
-			
-			tt_set.add( tt );
-		}
+
+			TagType tag_type = getTagType( tt );
 		
-		for ( TagType tt: tag_types ){
-
-			if ( tt_set.contains( tt.getTagType())){
-
-				result.addAll( tt.getTagsForTaggable( taggable ));
+			if ( tag_type != null ){
+				
+				List<Tag> temp = tag_type.getTagsForTaggable( taggable );
+				
+				if ( !temp.isEmpty()){
+					
+					if ( result == null ){
+						
+						result = new ArrayList<>();
+					}
+					
+					result.addAll( temp );
+				}
 			}
 		}
 
-		return(new ArrayList<>(result));
+		if ( result == null ){
+			
+			return( Collections.emptyList());
+			
+		}else{
+			
+			return( result );
+		}
 	}
 	
 	@Override
@@ -1892,8 +2166,9 @@ TagManagerImpl
 
 	protected void
 	tagGroupCreated(
-		TagTypeBase		tag_type,
-		TagGroupImpl	group )
+		TagTypeBase			tag_type,
+		TagGroupImpl		group,
+		TagGroupImpl		old_group )
 	{
 		Map<String,Object> conf = getConf( tag_type, false );
 		
@@ -1912,20 +2187,44 @@ TagManagerImpl
 		UIManager ui_manager = pi.getUIManager();
 		
 		TableManager tm = ui_manager.getTableManager();
+			
+		List<TableColumn> old_cols = null;
+		
+		if ( old_group != null ){
+			
+			String old_col_id_text 	= "tag.group.col." + old_group.getGroupID();
+			String old_col_id_icons = "tag.group.col.icons." + old_group.getGroupID();
+
+			tm.unregisterColumn( Download.class, old_col_id_text );
+			tm.unregisterColumn( Download.class, old_col_id_icons );
+			
+			synchronized( KEY_TG_COLUMNS ){
 				
+				old_cols = (List<TableColumn>)old_group.getUserData( KEY_TG_COLUMNS );
+			}
+			
+			if ( old_cols != null ){
+				
+				for (TableColumn tc: old_cols ){
+					
+					tc.remove();
+				}
+			}
+		}
+		
 		Properties props = new Properties();
 		
 		String col_id_text 	= "tag.group.col." + group.getGroupID();
 		String col_id_icons = "tag.group.col.icons." + group.getGroupID();
 
 		props.put( "TableColumn.header." + col_id_text, group.getName());
-		props.put( "TableColumn.header." + col_id_text + ".info", MessageText.getString( "label.tag.names" ));
+		props.put( "TableColumn.header." + col_id_text + ".info", MessageText.getString( "label.tags" ));
 		props.put( "TableColumn.header." + col_id_icons, group.getName());
 		props.put( "TableColumn.header." + col_id_icons + ".info", MessageText.getString( "TableColumn.header.tag_icons" ));
 		
 		pi.getUtilities().getLocaleUtilities().integrateLocalisedMessageBundle( props );
 		
-		int[]	interesting_tts = { TagType.TT_DOWNLOAD_MANUAL, TagType.TT_DOWNLOAD_CATEGORY };
+		// int[]	interesting_tts = { TagType.TT_DOWNLOAD_MANUAL, TagType.TT_DOWNLOAD_CATEGORY };
 		
 		tm.registerColumn(
 			Download.class,
@@ -1933,7 +2232,25 @@ TagManagerImpl
 			new TableColumnCreationListener(){
 				
 				@Override
-				public void tableColumnCreated(TableColumn column){
+				public void 
+				tableColumnCreated(
+					TableColumn column)
+				{
+					synchronized( KEY_TG_COLUMNS ){
+						
+						List<TableColumn> cols = (List<TableColumn>)group.getUserData( KEY_TG_COLUMNS );
+						
+						if ( cols == null ){
+							
+							cols = new ArrayList<>();
+							
+							group.setUserData( KEY_TG_COLUMNS, cols );
+						}
+						
+						cols.add( column );
+					}
+					
+					/*
 					column.setAlignment(TableColumn.ALIGN_CENTER);
 					column.setPosition(TableColumn.POSITION_INVISIBLE);
 					column.setWidth(70);
@@ -1978,6 +2295,17 @@ TagManagerImpl
 
 							cell.setText((sTags == null) ? "" : sTags );
 						});
+						*/
+					
+					try{
+						Class cla = Class.forName( "com.biglybt.ui.swt.columns.tag.ColumnTagGroupTags");
+						
+						cla.getConstructor( TableColumn.class, TagGroup.class ).newInstance( column, group );
+						
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
 				}
 			});
 		
@@ -1987,7 +2315,24 @@ TagManagerImpl
 				new TableColumnCreationListener(){
 					
 					@Override
-					public void tableColumnCreated(TableColumn column){
+					public void 
+					tableColumnCreated(
+						TableColumn column)
+					{
+						synchronized( KEY_TG_COLUMNS ){
+							
+							List<TableColumn> cols = (List<TableColumn>)group.getUserData( KEY_TG_COLUMNS );
+							
+							if ( cols == null ){
+								
+								cols = new ArrayList<>();
+								
+								group.setUserData( KEY_TG_COLUMNS, cols );
+							}
+							
+							cols.add( column );
+						}
+						
 						try{
 							Class cla = Class.forName( "com.biglybt.ui.swt.columns.tag.ColumnTagGroupIcons");
 							
@@ -2024,6 +2369,33 @@ TagManagerImpl
 		setDirty();
 	}
 	
+	protected void
+	tagGroupDeleted(
+		TagTypeBase		tag_type,
+		TagGroupImpl	group )
+	{
+		Map<String,Object> conf = getConf( tag_type, true );
+		
+		String id = group.getGroupID();
+					
+		if ( conf.remove( id ) != null ){
+		
+			setDirty();
+		}
+	}
+	
+	protected void
+	tagGroupRenamed(
+		TagTypeBase		tag_type,
+		TagGroupImpl	old_group,
+		TagGroupImpl	new_group )
+	{
+		tagGroupDeleted( tag_type, old_group );
+		
+		tagGroupCreated( tag_type, new_group, old_group );
+		
+		tagGroupUpdated( tag_type, new_group );
+	}
 	
 	protected void
 	checkRSSFeeds(
@@ -2247,7 +2619,7 @@ TagManagerImpl
 			return;
 		}
 
-		if ( tag.isRemoved() && type != CU_TAG_REMOVE ){
+		if ( tag.isTagRemoved() && type != CU_TAG_REMOVE ){
 
 			return;
 		}
@@ -2271,7 +2643,7 @@ TagManagerImpl
 			int				type	= (Integer)update[0];
 			TagWithState	tag 	= (TagWithState)update[1];
 
-			if ( tag.isRemoved()){
+			if ( tag.isTagRemoved()){
 
 				type = CU_TAG_REMOVE;
 			}
@@ -3348,6 +3720,20 @@ TagManagerImpl
 		}
 	}
 	
+	
+	@Override
+	public TagConstraint 
+	compileConstraint(
+		String expression ) 
+	{
+		if ( constraint_handler == null ){
+			
+			return( null );
+		}
+		
+		return( constraint_handler.compileConstraint( expression ));
+	}
+	
 	@Override
 	public VuzeFile 
 	exportTags(
@@ -3380,7 +3766,42 @@ TagManagerImpl
 		return( vf );
 	}
 	
-	protected String
+	@Override
+	public Tag 
+	duplicate(
+		Tag tag)
+	{
+		if ( tag.getTagType().getTagType() == TagType.TT_DOWNLOAD_MANUAL ){
+			
+			TagTypeDownloadManual tt = (TagTypeDownloadManual)tag.getTagType();
+
+			TagWithState tws = (TagWithState)tag;
+
+			Map	map = new HashMap();
+		
+			Map tag_map = new HashMap();
+	
+			VuzeFile	vf = VuzeFileHandler.getSingleton().create();
+			
+			tws.exportDetails( vf, tag_map, false );
+			
+			Map conf = getConf( tt, tws, false );
+				
+			tag_map	= BEncoder.cloneMap(tag_map);
+			conf 	= BEncoder.cloneMap( conf );
+			
+			TagDownloadWithState dup_tag = tt.importTag( tag_map, conf );
+			
+			tt.addTag( dup_tag );
+			
+			return( dup_tag );
+		}else{
+			
+			return( null );
+		}
+	}
+	
+	protected String[]
 	explain(
 		Tag				tag,
 		TagProperty		property,
@@ -3392,7 +3813,7 @@ TagManagerImpl
 			
 		}else{
 			
-			return( "" );
+			return( new String[0] );
 		}
 	}
 	@Override

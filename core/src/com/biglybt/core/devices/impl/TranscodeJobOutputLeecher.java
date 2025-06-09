@@ -98,6 +98,13 @@ TranscodeJobOutputLeecher
 	}
 
 	@Override
+	public Boolean 
+	isSkipping()
+	{
+		return( null );
+	}
+	
+	@Override
 	public void
 	setDeleted(boolean b)
 	{
@@ -106,7 +113,8 @@ TranscodeJobOutputLeecher
 	@Override
 	public void
 	setLink(
-		File	link_destination )
+		File	link_destination,
+		boolean	dont_delete )
 	{
 		throw( new RuntimeException( "Not supported" ));
 	}

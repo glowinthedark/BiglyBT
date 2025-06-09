@@ -17,8 +17,6 @@
  */
 package com.biglybt.ui.swt;
 
-import java.applet.Applet;
-import java.applet.AudioClip;
 import java.awt.Image;
 import java.awt.MenuItem;
 import java.awt.PopupMenu;
@@ -28,15 +26,15 @@ import java.awt.TrayIcon;
 import java.awt.TrayIcon.MessageType;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.io.File;
-import java.net.URL;
 import java.util.List;
 import java.util.Map;
+
 
 import com.biglybt.activities.ActivitiesConstants;
 import com.biglybt.activities.ActivitiesEntry;
 import com.biglybt.activities.ActivitiesListener;
 import com.biglybt.activities.ActivitiesManager;
+import com.biglybt.core.CoreFactory;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.disk.*;
 import com.biglybt.core.download.DownloadManager;
@@ -45,14 +43,18 @@ import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.download.impl.DownloadManagerAdapter;
 import com.biglybt.core.global.GlobalManager;
 import com.biglybt.core.global.GlobalManagerAdapter;
+import com.biglybt.core.global.GlobalManagerEvent;
+import com.biglybt.core.global.GlobalManagerEventListener;
 import com.biglybt.core.internat.MessageText;
-import com.biglybt.core.logging.LogAlert;
-import com.biglybt.core.logging.Logger;
 import com.biglybt.core.util.*;
 import com.biglybt.platform.PlatformManager;
 import com.biglybt.platform.PlatformManagerCapabilities;
 import com.biglybt.platform.PlatformManagerFactory;
+import com.biglybt.pif.PluginInterface;
+import com.biglybt.pif.logging.LoggerChannel;
 import com.biglybt.pif.platform.PlatformManagerException;
+import com.biglybt.pif.ui.UIManager;
+import com.biglybt.pif.ui.model.BasicPluginViewModel;
 import com.biglybt.ui.swt.minibar.DownloadBar;
 
 import com.biglybt.ui.UIFunctions;
@@ -72,6 +74,7 @@ UserAlerts
 	private final DiskManagerListener disk_listener;
 	private final DownloadManagerDiskListener dm_disk_listener;
 	private final GlobalManagerAdapter globalManagerListener;
+	private final GlobalManagerEventListener globalManagerEventListener;
 	private final ActivitiesListener activitiesListener;
 	private final GlobalManager global_manager;
 
@@ -87,10 +90,7 @@ UserAlerts
 			singleton = null;
 		}
 	}
-
-  	private AudioClip 	audio_clip 		= null;
-  	private String		audio_resource	= "";
-
+	
     private AEMonitor	this_mon 	= new AEMonitor( "UserAlerts" );
 
     private boolean startup = true;
@@ -98,13 +98,29 @@ UserAlerts
     private TrayIcon	native_tray_icon;
     private int			native_message_count;
     
+    private final LoggerChannel log;
+    
 	public
 	UserAlerts(
 		GlobalManager	global_manager )
  	{
 	  this.global_manager = global_manager;
 	  singleton = this;
+	  
+	  PluginInterface plugin_interface = CoreFactory.getSingleton().getPluginManager().getDefaultPluginInterface();
 
+	  log = plugin_interface.getLogger().getChannel( "Alerts" );
+
+	  UIManager	ui_manager = plugin_interface.getUIManager();
+
+	  BasicPluginViewModel model = ui_manager.createBasicPluginViewModel("ConfigView.section.interface.alerts" );
+
+	  model.getActivity().setVisible( false );
+	  model.getProgress().setVisible( false );
+
+	  model.attachLoggerChannel( log );
+
+		
 	  // @see com.biglybt.core.download.impl.DownloadManagerAdapter#stateChanged(com.biglybt.core.download.DownloadManager, int)
 // if state == STARTED, then open the details window (according to config)
 	  download_manager_listener = new DownloadManagerAdapter()
@@ -179,21 +195,23 @@ UserAlerts
 		  @Override
 		  public void
 		  stateChanged(
+				  DiskManager	dm,
 			  int oldState,
 			  int	newState )
 		  {
 		  }
 
 		  @Override
-		  public void
+		  public void 
 		  filePriorityChanged(
-			  DiskManagerFileInfo file )
+				 DiskManager dm, 
+				 List<DiskManagerFileInfo> files)
 		  {
 		  }
-
 		  @Override
 		  public void
 		  pieceDoneChanged(
+				  DiskManager	dm,
 			  DiskManagerPiece piece )
 		  {
 		  }
@@ -201,6 +219,7 @@ UserAlerts
 		  @Override
 		  public void
 		  fileCompleted(
+			  DiskManager				diskManager,
 			  DiskManagerFileInfo		file )
 		  {
 			  DownloadManager dm = file.getDownloadManager();
@@ -283,6 +302,27 @@ UserAlerts
 	  };
 	  global_manager.addListener(globalManagerListener);
 
+	  globalManagerEventListener = new GlobalManagerEventListener(){
+		
+		@Override
+		public void 
+		eventOccurred(
+			GlobalManagerEvent event)
+		{
+			if ( event.getEventType() == GlobalManagerEvent.ET_RECHECK_COMPLETE ){
+				
+				Object[] params = (Object[])event.getEventData();
+				
+				boolean explicit 	= (Boolean)params[0];
+				boolean cancelled 	= (Boolean)params[1];
+				
+				checkComplete( event.getDownload(), explicit, cancelled );
+			}
+		}
+	  };
+	  
+	  global_manager.addEventListener( globalManagerEventListener );
+	  
 	  activitiesListener = new ActivitiesListener() {
 
 		  @Override
@@ -400,6 +440,29 @@ UserAlerts
   			do_sound, sound_file );
   	}
 
+ 	private void
+  	checkComplete(
+  		DownloadManager			manager,
+  		boolean					explicit,
+  		boolean					cancelled )
+  	{
+  		DownloadManagerState dm_state = manager.getDownloadState();
+
+		if ( cancelled || dm_state.getFlag( DownloadManagerState.FLAG_LOW_NOISE) && !explicit ) {
+
+			return;
+		}
+		
+    	boolean do_popup 	= 	COConfigurationManager.getBooleanParameter( "Popup Check Complete" );
+
+		doStuff(
+	  			manager, manager.getDisplayName(),
+	  			do_popup, "popup.check.complete", false, 
+	  			false, null,
+	  			false, null,
+	  			false, null );
+  	}
+ 	
   	private long	last_error_speech;
   	private long	last_error_sound;
 
@@ -481,9 +544,7 @@ UserAlerts
   		boolean			do_sound,
   		String			sound_file )
   	{
-  		final String default_sound 	= "com/biglybt/ui/icons/downloadFinished.wav";
-
-  		try{
+   		try{
   			this_mon.enter();
 
   			if (  do_popup ) {
@@ -516,85 +577,36 @@ UserAlerts
 			if ( do_sound ){
 
 	    		String	file = COConfigurationManager.getStringParameter( sound_file );
-
-    			file = file.trim();
-
-	    			// turn "<default>" into blank
-
-	    		if ( file.startsWith( "<" )){
-
-	    			file	= "";
-	    		}
-
-	    		if ( audio_clip == null || !file.equals( audio_resource )){
-
-	    			audio_clip	= null;
-
-	    				// try explicit file
-
-	    			if ( file.length() != 0 ){
-
-	    				File	f = new File( file );
-
-	    				try{
-
-			    			if ( f.exists()){
-
-		    					URL	file_url = f.toURI().toURL();
-
-		    					audio_clip = Applet.newAudioClip( file_url );
-			    			}
-
-	    				}catch( Throwable  e ){
-
-	    					Debug.printStackTrace(e);
-
-	    				}finally{
-
-	    					if ( audio_clip == null ){
-	    						Logger.log(new LogAlert(relatedObject, LogAlert.UNREPEATABLE,
-										LogAlert.AT_ERROR, "Failed to load audio file '" + file
-												+ "'"));
-	    					}
-	    				}
-	    			}
-
-	    				// either non-explicit or explicit missing
-
-	    			if ( audio_clip == null ){
-
-	    				audio_clip = Applet.newAudioClip(UserAlerts.class.getClassLoader().getResource( default_sound ));
-
-	    			}
-
-	    			audio_resource	= file;
-	    		}
-
-	    		if ( audio_clip != null ){
-
-	            	new AEThread2("DownloadSound")
-					{
-		        		@Override
-				        public void
-		        		run()
-		        		{
-		        			try{
-		        				audio_clip.play();
-
-		        				Thread.sleep(2500);
-
-		        			}catch( Throwable e ){
-
-		        			}
-		        		}
-		        	}.start();
-		        }
+	    		
+	    		GeneralUtils.playSound( file );
 	    	}
 			
 			if ( do_native_tray ){
 				
-				if ( native_tray_icon == null ){
-					
+				displayNativeMessage( MessageText.getString( native_text ), item_name, popup_is_error );
+			}
+  		}catch( Throwable e ){
+
+  			Debug.printStackTrace( e );
+
+  		}finally{
+
+  			this_mon.exit();
+  		}
+  	}
+
+  	public boolean
+  	displayNativeMessage(
+  		String		caption,
+  		String		text,
+  		boolean		is_error )
+  	{
+  		try{ 		
+  			this_mon.enter();
+  			
+			if ( native_tray_icon == null ){
+				
+				try{
 					if ( SystemTray.isSupported()){
 						
 						SystemTray st = SystemTray.getSystemTray();
@@ -612,7 +624,10 @@ UserAlerts
 							
 							native_tray_icon.setPopupMenu( menu );
 							
-							MenuItem mi = new MenuItem( MessageText.getString( "sharing.progress.hide" ));
+							// Bug with internationalised text - https://github.com/BiglySoftware/BiglyBT/issues/3376
+							// so just use an X which should be pretty obvious to most
+							// MenuItem mi = new MenuItem( MessageText.getString( "sharing.progress.hide" ));
+							MenuItem mi = new MenuItem( "X" );
 							
 							mi.addActionListener(
 								new ActionListener(){
@@ -647,59 +662,62 @@ UserAlerts
 						
 				        st.add( native_tray_icon );
 					}
-				}
-			
-				if ( native_tray_icon != null ){
-				        					
-					native_tray_icon.displayMessage( MessageText.getString( native_text ), item_name, popup_is_error?MessageType.ERROR:MessageType.INFO );
+				}catch( Throwable e ){
 					
-					/* Unfortunately removing the icon also removes any messages associated with it
-					 * that may be in the notification area (on Windows 10 for example)
-					 
-					final int mine = ++native_message_count;
-					
-					SimpleTimer.addEvent(
-						"iconhider",
-						SystemTime.getOffsetTime( 30*1000 ),
-						new TimerEventPerformer(){
-							
-							@Override
-							public void perform(TimerEvent event){
-								try{
-									this_mon.enter();
-									
-									if ( native_message_count == mine ){
-										
-										try{
-											SystemTray st = SystemTray.getSystemTray();
-										
-											st.remove( native_tray_icon );
-											
-											native_tray_icon = null;
-											
-										}catch( Throwable e ){										
-										}
-									}
-									
-								}finally{
-									
-									this_mon.exit();
-								}
-							}
-						});
-					*/
+					Debug.out( e );
 				}
 			}
-  		}catch( Throwable e ){
-
-  			Debug.printStackTrace( e );
-
+		
+			if ( native_tray_icon != null ){
+			        					
+				native_tray_icon.displayMessage( caption, text, is_error?MessageType.ERROR:MessageType.INFO );
+				
+				/* Unfortunately removing the icon also removes any messages associated with it
+				 * that may be in the notification area (on Windows 10 for example)
+				 
+				final int mine = ++native_message_count;
+				
+				SimpleTimer.addEvent(
+					"iconhider",
+					SystemTime.getOffsetTime( 30*1000 ),
+					new TimerEventPerformer(){
+						
+						@Override
+						public void perform(TimerEvent event){
+							try{
+								this_mon.enter();
+								
+								if ( native_message_count == mine ){
+									
+									try{
+										SystemTray st = SystemTray.getSystemTray();
+									
+										st.remove( native_tray_icon );
+										
+										native_tray_icon = null;
+										
+									}catch( Throwable e ){										
+									}
+								}
+								
+							}finally{
+								
+								this_mon.exit();
+							}
+						}
+					});
+				*/
+				
+				return( true );
+			}
+			
+			return( false );
+			
   		}finally{
-
+  			
   			this_mon.exit();
   		}
   	}
-
 
   	private boolean
   	isDLFEnabled(
@@ -722,6 +740,16 @@ UserAlerts
 		final int iconID, final String title, final String text, final String details,
 		final Object[] relatedObjects, final int timeoutSecs)
 	{
+		if ( title != null && !title.isEmpty()){
+			log.log( title );
+		}
+		if ( text != null && !text.isEmpty()){
+			log.log( text );
+		}
+		if ( details != null && !details.isEmpty()){
+			log.log( details );
+		}
+		
 		UIFunctionsManager.execWithUIFunctions(
 			new UIFunctionsManager.UIFCallback() {
 
@@ -740,7 +768,7 @@ UserAlerts
 		The Java audio system keeps some threads running even after playback is finished.
 		One of them, named "Java Sound event dispatcher", is *not* a daemon
 		thread and keeps the VM alive.
-		We have to locate and interrupt it explicitely.
+		We have to locate and interrupt it explicitly.
 		*/
 
 		try{
@@ -797,26 +825,26 @@ UserAlerts
   		}
   	}
 
-	public void dispose() {
-    if (singleton == this) {
-      singleton = null;
-	  }
+  	public void dispose() {
+  		if (singleton == this) {
+  			singleton = null;
+  		}
 
-		if (globalManagerListener != null) {
-    	global_manager.removeListener(globalManagerListener);
+  		global_manager.removeListener(globalManagerListener);
+  		global_manager.removeEventListener(globalManagerEventListener);
+  		
+  		List<DownloadManager> dms = global_manager.getDownloadManagers();
+  		for (DownloadManager dm : dms) {
+  			dm.removeListener(download_manager_listener);
+  			dm.removeDiskListener(dm_disk_listener);
 
-			List<DownloadManager> dms = global_manager.getDownloadManagers();
-			for (DownloadManager dm : dms) {
-				dm.removeListener(download_manager_listener);
-				dm.removeDiskListener(dm_disk_listener);
+  			DiskManager diskManager = dm.getDiskManager();
+  			if (diskManager != null) {
+  				diskManager.removeListener(disk_listener);
+  			}
+  		}
 
-				DiskManager diskManager = dm.getDiskManager();
-				if (diskManager != null) {
-					diskManager.removeListener(disk_listener);
-				}
-			}
-		}
 
-		ActivitiesManager.removeListener(activitiesListener);
-	}
+  		ActivitiesManager.removeListener(activitiesListener);
+  	}
 }

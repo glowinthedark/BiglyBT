@@ -28,6 +28,9 @@ import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -924,7 +927,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		String		value )
 	{
 		try{
-			setByteArrayOption( net, key, name, value.getBytes( "UTF-8" ));
+			setByteArrayOption( net, key, name, value.getBytes( Constants.UTF_8 ));
 
 		}catch( Throwable e ){
 
@@ -943,7 +946,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		if ( bytes != null ){
 
 			try{
-				return( new String( bytes, "UTF-8" ));
+				return( new String( bytes, Constants.UTF_8 ));
 
 			}catch( Throwable e ){
 
@@ -984,7 +987,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		String	key )
 	{
 		try{
-			return( Base32.encode( key.getBytes( "UTF-8" )));
+			return( Base32.encode( key.getBytes( Constants.UTF_8 )));
 
 		}catch( Throwable e ){
 
@@ -999,7 +1002,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		String		key )
 	{
 		try{
-			return( new String( Base32.decode( key ),"UTF-8" ));
+			return( new String( Base32.decode( key ), Constants.UTF_8 ));
 
 		}catch( Throwable e ){
 
@@ -1396,7 +1399,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 										checked.add( tracker );
 										
 										try{
-											String config_key = "azbuddy.dchat.autotracker.host." + Base32.encode( tracker.getBytes( "UTF-8" ));
+											String config_key = "azbuddy.dchat.autotracker.host." + Base32.encode( tracker.getBytes( Constants.UTF_8 ));
 										
 											boolean done = COConfigurationManager.getBooleanParameter( config_key, false );
 											
@@ -1501,7 +1504,78 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 	protected void
 	closedown()
 	{
+		if ( azmsgsync_pi != null ){
+			
+				// clear up any dead download chat configs as they build up...
+			
+			try{
+				List<Map<String,Object>> reply = (List<Map<String,Object>>)azmsgsync_pi.getIPC().invoke( "listMessageHandlers", new Object[]{ new HashMap<String,Object>() });
+				
+				for ( Map<String,Object> map: reply ){
+					
+					String key = new String((byte[])map.get( "key" ), Constants.UTF_8 );
+					
+					if ( BuddyPluginUtils.isUnknownDownloadChatKey( key )){
+						
+						try{
+							String net = (String)map.get( "network" );
+							
+							if ( getFavourite( net, key )){
+							
+								continue;
+							}
+							
+							azmsgsync_pi.getIPC().invoke( "destroyMessageHandler", new Object[]{ map });
+							
+						}catch( Throwable e ){
+							
+							Debug.out( e );
+						}
+					}
+				}
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
+		
+		synchronized( opts_map ){
+			
+			boolean dirty = false;
+			
+			Iterator<String> it = opts_map.keySet().iterator();
+			
+			while( it.hasNext()){
+				
+				String 	net_key = it.next();
 
+				String[] bits = net_key.split( ":", 2 );
+
+				String key	= decodeKey( bits[1] );
+				
+				if ( BuddyPluginUtils.isUnknownDownloadChatKey( key )){
+					
+					String net = bits[0];
+					
+					if ( getFavourite( net, key )){
+						
+						continue;
+					}
+					
+					it.remove();
+					
+					dirty = true;
+				}
+			}
+			
+			if ( dirty ){
+			
+				COConfigurationManager.setParameter( "azbuddy.dchat.optsmap", opts_map );
+				
+				COConfigurationManager.setDirty();
+			}
+		}
 	}
 
 	private void
@@ -1775,11 +1849,11 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 			ByteArrayOutputStream baos = new ByteArrayOutputStream( 10*1024 );
 
-			PrintWriter pw = new PrintWriter( new OutputStreamWriter( baos, "UTF-8" ));
+			PrintWriter pw = new PrintWriter( new OutputStreamWriter( baos, Constants.UTF_8 ));
 
 			pw.println( "<?xml version=\"1.0\" encoding=\"utf-8\"?>" );
 
-			pw.println( "<rss version=\"2.0\" xmlns:vuze=\"http://www.vuze.com\">" );
+			pw.println( "<rss version=\"2.0\" " + Constants.XMLNS_VUZE + ">" );
 
 			pw.println( "<channel>" );
 
@@ -2298,7 +2372,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 		try{
 
-			pw = new PrintWriter( new OutputStreamWriter( FileUtil.newFileOutputStream( log_file, true ), "UTF-8" ));
+			pw = new PrintWriter( new OutputStreamWriter( FileUtil.newFileOutputStream( log_file, true ), Constants.UTF_8 ));
 
 			SimpleDateFormat time_format 	= new SimpleDateFormat( "yyyy/MM/dd HH:mm" );
 
@@ -2387,11 +2461,11 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 		Map<String,Object>		options = new HashMap<>();
 
-		options.put( "import_data", import_data.getBytes( "UTF-8" ));
+		options.put( "import_data", import_data.getBytes( Constants.UTF_8 ));
 
 		Map<String,Object> reply = (Map<String,Object>)azmsgsync_pi.getIPC().invoke( "importMessageHandler", new Object[]{ options } );
 
-		String	key			= new String((byte[])reply.get( "key" ), "UTF-8" );
+		String	key			= new String((byte[])reply.get( "key" ), Constants.UTF_8 );
 		String	network	 	= (String)reply.get( "network" );
 		Object	handler 	= reply.get( "handler" );
 
@@ -2987,11 +3061,15 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				Map<String,Object>		options = new HashMap<>();
 
 				options.put( "network", network );
-				options.put( "key", key.getBytes( "UTF-8" ));
+				options.put( "key", key.getBytes( Constants.UTF_8 ));
 
-				options.put( "timeout", 60*1000 );
+				if ( network == AENetworkClassifier.AT_PUBLIC ){
 
-				if ( network != AENetworkClassifier.AT_PUBLIC ){
+					options.put( "timeout", 30*1000 );
+
+				}else{
+					
+					options.put( "timeout", 60*1000 );
 
 					options.put( "server_id", getSharedAnonEndpoint()?"dchat_shared":"dchat" );
 				}
@@ -3061,6 +3139,16 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 					cb_data );
 			}
 		}
+	}
+
+	public long
+	getMyZoneOffset()
+	{
+		ZoneId zid = TimeZone.getDefault().toZoneId();
+		
+		ZoneOffset zo = LocalDateTime.now().atZone( zid ).getOffset();
+		
+		return( zo.getTotalSeconds());
 	}
 
 	@Override
@@ -3216,7 +3304,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		
 		private volatile String		last_bind_fail = null;
 		
-		private boolean		destroyed;
+		private volatile boolean		destroyed;
 
 		private
 		ChatInstance(
@@ -3281,6 +3369,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 			}
 		}
 		
+		@Override
 		public ExportedDataSource
 		exportDataSource()
 		{
@@ -3288,13 +3377,17 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				new ExportedDataSource(){
 					
 					@Override
-					public Class<? extends DataSourceImporter> getExporter(){
+					public Class<? extends DataSourceImporter>
+					getExporter()
+					{
 						
 						return( BuddyPluginBeta.class );
 					}
 					
 					@Override
-					public Map<String, Object> getExport(){
+					public Map<String, Object> 
+					getExport()
+					{
 						Map<String,Object>	map = new HashMap<>();
 						
 						map.put( "network", network );
@@ -3314,6 +3407,23 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				});
 		}
 
+		@Override
+		public Boolean
+		getBooleanOption(
+			int		opt )
+		{
+			if ( opt == DataSourceResolver.ExportableDataSource.OPT_CAN_MINIMIZE ){
+			
+				return( true );
+				
+			}else if ( opt == DataSourceResolver.ExportableDataSource.OPT_ON_TOP ){
+				
+				return( !plugin.getBeta().getStandAloneWindows());
+			}
+			
+			return( null );
+		}
+		
 		protected void
 		addVirtualReference()
 		{
@@ -3330,8 +3440,13 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		
 		protected void
 		addReference()
-		{
+		{			
 			synchronized( chat_lock ){
+
+				if ( isDestroyed()){
+					
+					Debug.out( "Adding reference to a destroyed chat..." );
+				}
 
 				if ( virtual_reference_count > 0 ){
 					
@@ -3374,6 +3489,26 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				return( dn );
 			}
 			
+			String str = getShortKey();
+
+			if ( abbreviated ){
+
+				return( MessageText.getString(
+						network==AENetworkClassifier.AT_PUBLIC?"label.public.medium":"label.anon.medium") +
+						" - '" + str + "'" );
+
+			}else{
+
+				return(
+					MessageText.getString(
+						network==AENetworkClassifier.AT_PUBLIC?"label.public":"label.anon") +
+						" - '" + str + "'" );
+			}
+		}
+
+		public String
+		getShortKey()
+		{
 			String str = key;
 
 			int pos = str.lastIndexOf( '[' );
@@ -3398,22 +3533,10 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 					str = str.substring( 0, pos );
 				}
 			}
-
-			if ( abbreviated ){
-
-				return( MessageText.getString(
-						network==AENetworkClassifier.AT_PUBLIC?"label.public.medium":"label.anon.medium") +
-						" - '" + str + "'" );
-
-			}else{
-
-				return(
-					MessageText.getString(
-						network==AENetworkClassifier.AT_PUBLIC?"label.public":"label.anon") +
-						" - '" + str + "'" );
-			}
+			
+			return( str );
 		}
-
+		
 		public String
 		getShortName()
 		{
@@ -3963,7 +4086,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 							Map<String,Object>		options = new HashMap<>();
 
 							options.put( "network", network );
-							options.put( "key", key.getBytes( "UTF-8" ));
+							options.put( "key", key.getBytes( Constants.UTF_8 ));
 
 							if ( private_target != null ){
 
@@ -4366,9 +4489,11 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 					if ( Constants.isCVSVersion()){
 
-						str += ", Refs=" + reference_count;
+						str += ", refs=" + reference_count;
 					}
 
+					str += ": '" + getShortKey() + "'";
+					
 					return( str );
 
 				}else{
@@ -5276,9 +5401,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 			
 			return( magnet );
 		}
-		
-		
-		
+				
 		AsyncDispatcher	dispatcher = new AsyncDispatcher( "sendAsync" );
 
 		public void
@@ -5777,14 +5900,14 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 					if ( o_message instanceof String ){
 
-						payload.put( "msg", ((String)o_message).getBytes( "UTF-8" ));
+						payload.put( "msg", ((String)o_message).getBytes( Constants.UTF_8 ));
 
 					}else{
 
 						payload.put( "msg", (byte[])o_message );
 					}
 
-					payload.put( "nick", getNickname( false ).getBytes( "UTF-8" ));
+					payload.put( "nick", getNickname( false ).getBytes( Constants.UTF_8 ));
 
 					if ( prev_message != null ){
 
@@ -5818,6 +5941,15 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 							Debug.out(e);
 						}
 					}
+					
+					try{
+						if ( getNetwork() == AENetworkClassifier.AT_PUBLIC ){
+							
+							payload.put( "zo", getMyZoneOffset());
+						}
+					}catch( Throwable e ){
+						
+					}
 
 					options.put( "content", BEncoder.encode( payload ));
 
@@ -5834,7 +5966,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				}
 			}
 		}
-
+		
 		public String
 		export()
 		{
@@ -6353,7 +6485,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 		public boolean
 		isDestroyed()
-		{
+		{				
 			return( destroyed );
 		}
 
@@ -6367,6 +6499,8 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		destroy(
 			boolean		force )
 		{
+			boolean do_destroy;
+
 			synchronized( chat_lock ){
 
 				if ( force ){
@@ -6386,86 +6520,94 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 						return;
 					}
 				}
+				
+				if ( !( keep_alive || (have_interest && !is_private_chat ))){
+
+					do_destroy = !destroyed;
+					
+					if ( do_destroy ){
+					
+						destroyed = true;
+					}
+				}else{
+					
+					do_destroy = false;
+				}
 			}
 
-			if ( !( keep_alive || (have_interest && !is_private_chat ))){
+			if ( do_destroy ){
+				
+				for ( ChatListener l: listeners ){
 
-				if ( !destroyed ) {
-					
-					destroyed = true;
+					try{
+						l.stateChanged( false );
+
+					}catch( Throwable e ){
+
+						Debug.out( e );
+					}
+				}
+				
+				try{
+					if ( handler != null ){
 	
-					for ( ChatListener l: listeners ){
+						if ( is_private_chat ){
+	
+							Map<String,Object>		flags = new HashMap<>();
+	
+							flags.put( FLAGS_MSG_STATUS_KEY, FLAGS_MSG_STATUS_CHAT_QUIT );
+	
+							sendMessageSupport( "", flags, new HashMap<String, Object>());
+						}
+	
+						Map<String,Object>		options = new HashMap<>();
 
-						try{
-							l.stateChanged( false );
+						options.put( "handler", handler );
+	
+						Map<String,Object> reply = (Map<String,Object>)msgsync_pi.getIPC().invoke( "removeMessageHandler", new Object[]{ options } );
+					}
+				}catch( Throwable e ){
 
-						}catch( Throwable e ){
+					Debug.out( e );
 
-							Debug.out( e );
+				}finally{
+
+					String meta_key = network + ":" + key;
+
+					ChatInstance	removed = null;
+
+					synchronized( chat_instances_map ){
+
+						ChatInstance inst = chat_instances_map.remove( meta_key );
+
+						if ( inst != null ){
+
+							removed = inst;
+
+							chat_instances_list.remove( inst );
+						}
+
+						if ( chat_instances_map.size() == 0 ){
+
+							if ( timer != null ){
+
+								timer.cancel();
+
+								timer = null;
+							}
 						}
 					}
-					
-					try{
-						if ( handler != null ){
-		
-							if ( is_private_chat ){
-		
-								Map<String,Object>		flags = new HashMap<>();
-		
-								flags.put( FLAGS_MSG_STATUS_KEY, FLAGS_MSG_STATUS_CHAT_QUIT );
-		
-								sendMessageSupport( "", flags, new HashMap<String, Object>());
-							}
-		
-							Map<String,Object>		options = new HashMap<>();
-	
-							options.put( "handler", handler );
-		
-							Map<String,Object> reply = (Map<String,Object>)msgsync_pi.getIPC().invoke( "removeMessageHandler", new Object[]{ options } );
-						}
-					}catch( Throwable e ){
-	
-						Debug.out( e );
-	
-					}finally{
-	
-						String meta_key = network + ":" + key;
 
-						ChatInstance	removed = null;
+					if ( removed != null ){
 
-						synchronized( chat_instances_map ){
+						for ( ChatManagerListener l: BuddyPluginBeta.this.listeners ){
 
-							ChatInstance inst = chat_instances_map.remove( meta_key );
+							try{
+								l.chatRemoved( removed );
 
-							if ( inst != null ){
+							}catch( Throwable e ){
 
-								removed = inst;
-
-								chat_instances_list.remove( inst );
-							}
-
-							if ( chat_instances_map.size() == 0 ){
-
-								if ( timer != null ){
-
-									timer.cancel();
-
-									timer = null;
-								}
-							}
-						}
-
-						if ( removed != null ){
-
-							for ( ChatManagerListener l: BuddyPluginBeta.this.listeners ){
-
-								try{
-									l.chatRemoved( removed );
-
-								}catch( Throwable e ){
-
-									Debug.out( e );
-								}
+								Debug.out( e );
 							}
 						}
 					}
@@ -6491,6 +6633,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		private Boolean				is_me;
 
 		private byte[]				friend_key;
+		private long				zone_offset;
 		
 		private List<String>		profile_data_cache;
 		
@@ -6679,10 +6822,25 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				
 				if ( buddy != null ){
 					
+					if ( buddy.isTransient()){
+						
+							// we don't want to keep hitting a transient buddy
+							// when failing
+						
+						long age = getProfileDataAgeMillis();
+						
+						if ( age >= 0 && age < 60*60*1000 ){
+							
+							buddy.remove();
+							
+							return;
+						}
+					}
+					
 					buddy.getProfileInfo(
-						(profile_info)->{
-														
-							setProfileData( profile_info );
+						(profile_info, failed )->{
+								
+							setProfileData( profile_info, failed );
 							
 							if ( buddy.isTransient()){
 							
@@ -6691,6 +6849,57 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 						});
 				}
 			}
+		}
+		
+		public String
+		getZoneOffset()
+		{
+			long zo = zone_offset;
+					
+			if ( zo == Long.MIN_VALUE ){
+				
+				return( MessageText.getString( "SpeedView.stats.unknown" ));
+				
+			}else{
+
+				long my_zo = getMyZoneOffset();
+				
+				if ( my_zo == zo ){
+					
+					return( "0" );
+					
+				}else{
+					
+					String str = new SimpleDateFormat("E hh:mm a").format( new Date( SystemTime.getCurrentTime() + ( zo - my_zo )*1000 ));
+					
+					return( "" + formatZone( zo ) + " (" + formatZone( my_zo ) + ") -> " + formatZone( zo - my_zo ) + " -> "+ str);
+				}
+			}
+		}
+		
+		private String
+		formatZone(
+			long	zone_secs )
+		{
+			long z = Math.abs( zone_secs );
+			
+			long hour 	= z/(60*60);
+			long sec	= z%(60*60);
+			
+			String str = (zone_secs>=0?"+":"-") + String.valueOf(hour);
+			
+			if ( sec != 0 ){
+				
+				String m = String.valueOf( sec/60 );
+				
+				if ( m.length() < 2 ){
+					m = "0" + m;
+				}
+				
+				str += ":" + m;
+			}
+			
+			return( str );
 		}
 		
 		public List<String>
@@ -6797,19 +7006,26 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		
 		public void
 		setProfileData(
-			List<String>		d )
+			List<String>		d,
+			boolean 			failed )
 		{
-			profile_data		= d;
+				// always record update time as this controls re-tries
+			
 			profile_data_set	= SystemTime.getMonotonousTime();
-			
-			profile_data_cache = null;
-			
-			if ( !isMe()){
+
+			if ( !failed ){
 				
-				setProperty( "profile", d );
+				profile_data		= d;
+						
+				profile_data_cache = null;
+				
+				if ( !isMe()){
+					
+					setProperty( "profile", d );
+				}
+				
+				chat.updated( this );
 			}
-			
-			chat.updated( this );
 		}
 		
 		private long
@@ -6844,6 +7060,8 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 			if ( message.getMessageType() == ChatMessage.MT_NORMAL ){
 				
 				friend_key = message.getFriendKey();
+				
+				zone_offset = message.getZoneOffset();
 			}
 			
 			String new_nickname = message.getNickName();
@@ -6875,6 +7093,8 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 			if ( message.getMessageType() == ChatMessage.MT_NORMAL ){
 				
 				friend_key = message.getFriendKey();
+				
+				zone_offset = message.getZoneOffset();
 			}
 			
 			String new_nickname = message.getNickName();
@@ -7118,41 +7338,48 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				
 				String key =  getPropsKey();
 				
-				Map<String,Object> props 	= COConfigurationManager.getMapParameter( key, null );
+				Map<String,Object> old_props 	= COConfigurationManager.getMapParameter( key, null );
 				
-				if ( props == null ){
+				Map<String,Object> new_props;
+				
+				if ( old_props == null ){
 					
 					if ( value == null ){
 						
 						return;
 					}
 					
-					props = new HashMap<>();
+					new_props = new HashMap<>();
 					
 				}else{
 					
-					props = BEncoder.cloneMap( props );
+					new_props = BEncoder.cloneMap( old_props );
 				}
 	
 				if ( value != null ){
 					
-					props.put( name, value );
+					new_props.put( name, value );
 					
 				}else{
 					
-					props.remove( name );
+					new_props.remove( name );
 				}
 				
-				if ( props.isEmpty() ){
+				if ( new_props.isEmpty() ){
 	
 					COConfigurationManager.removeParameter( key );
 					
+					COConfigurationManager.setDirty();
+					
 				}else{
 					
-					COConfigurationManager.setParameter( key, props );
+					if ( !BEncoder.mapsAreIdentical(old_props, new_props)){
+					
+						COConfigurationManager.setParameter( key, new_props );
+						
+						COConfigurationManager.setDirty();
+					}
 				}
-	
-				COConfigurationManager.setDirty();
 			}
 		}
 		
@@ -7234,6 +7461,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		private int[]							nick_locations;
 
 		private byte[]		friend_key;
+		private long		zone_offset;
 		
 		private
 		ChatMessage(
@@ -7256,6 +7484,10 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 			sequence = l_seq==null?0:l_seq.longValue();
 			
 			friend_key = (byte[])payload.get( "f_pk" );
+			
+			Number	l_zo = (Number)payload.get( "zo" );
+						
+			zone_offset = l_zo==null?Long.MIN_VALUE:l_zo.longValue();
 		}
 
 		protected int
@@ -7281,6 +7513,12 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		getFriendKey()
 		{
 			return( friend_key );
+		}
+		
+		public long
+		getZoneOffset()
+		{
+			return( zone_offset );
 		}
 		
 		private void
@@ -7584,13 +7822,13 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 					if ( msg_bytes != null ){
 
-						return( new String( msg_bytes, "UTF-8" ));
+						return( new String( msg_bytes, Constants.UTF_8 ));
 					}
 				}
 
 
 
-				return( new String((byte[])map.get( "content" ), "UTF-8" ));
+				return( new String((byte[])map.get( "content" ), Constants.UTF_8 ));
 
 			}catch( Throwable e ){
 
@@ -7706,7 +7944,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				
 				if ( is_ip_filtered == null ){
 					
-					is_ip_filtered = ip_filter.isInRange( AddressUtils.getHostAddress( getAddress()), "D-Chat", null, true );
+					is_ip_filtered = ip_filter.isInRange( AddressUtils.getHostAddress( getAddress()), "D-Chat", null, false, true );
 				}
 				
 				return( is_ip_filtered );
@@ -7804,7 +8042,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				if ( nick != null ){
 
 					try{
-						String str = new String( nick, "UTF-8" );
+						String str = new String( nick, Constants.UTF_8 );
 
 						if ( str.length() > 0 ){
 

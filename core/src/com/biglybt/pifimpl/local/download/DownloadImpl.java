@@ -1557,6 +1557,13 @@ DownloadImpl
 						}
 		
 						@Override
+						public String 
+						getDetails()
+						{
+							return( getName());
+						}
+						
+						@Override
 						public int
 						getSeedCount()
 						{
@@ -1668,6 +1675,46 @@ DownloadImpl
 	{
 		String class_name = getTrackingName( result );
 
+		String plugin_id;
+		
+		if ( class_name == null ){
+			
+			plugin_id = "azbpdhdtracker";
+			
+		}else{
+			
+			if ( class_name.equalsIgnoreCase( "I2P" )){
+				
+				plugin_id = "azneti2phelper";
+				
+			}else{
+				
+				plugin_id = class_name;
+			}
+		}
+		
+		boolean skip_announce = false;
+		
+		if ( plugin_id != null ){
+			
+			Map all_opts = download_manager.getDownloadState().getMapAttribute( DownloadManagerState.AT_PLUGIN_OPTIONS );
+			
+			if ( all_opts != null ){
+				
+				Map opts = (Map)all_opts.get( plugin_id.toLowerCase( Locale.US ));
+				
+				if ( opts != null ){
+					
+					Number e = (Number)opts.get( DownloadManagerState.AT_PO_ENABLE_ANNOUNCE );
+					
+					if ( e != null && e.intValue() == 0 ){
+						
+						skip_announce = true;
+					}
+				}
+			}
+		}
+		
 		boolean new_entry = false;
 		
 		if ( class_name != null ){
@@ -1718,7 +1765,10 @@ DownloadImpl
 			}
 		}
 
-		download_manager.setAnnounceResult( result );
+		if ( !skip_announce ){
+		
+			download_manager.setAnnounceResult( result );
+		}
 		
 		if ( new_entry ){
 			

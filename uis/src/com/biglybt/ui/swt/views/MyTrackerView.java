@@ -28,7 +28,6 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URL;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 
 import org.eclipse.swt.SWT;
@@ -106,6 +105,7 @@ public class MyTrackerView
 		new StatusItem(),
 		new CategoryItem(),
 		new PassiveItem(),
+		new ExternalItem(),
 		new PersistentItem(),
 		new SeedCountItem(),
 		new PeerCountItem(),
@@ -129,6 +129,8 @@ public class MyTrackerView
 		tcManager.setDefaultColumnNames( TableManager.TABLE_MYTRACKER, basicItems );
 	}
 	
+	private static TableViewSWT.ColorRequester	color_requester = ()-> 20;
+
 	private Menu			menuCategory;
 
 	private TableViewSWT<TRHostTorrent> tv;
@@ -137,7 +139,7 @@ public class MyTrackerView
 		super("MyTrackerView");
 	
 		tv = TableViewFactory.createTableViewSWT(TrackerTorrent.class,
-				TableManager.TABLE_MYTRACKER, getPropertiesPrefix(), basicItems, "name",
+				TableManager.TABLE_MYTRACKER, getTextPrefixID(), basicItems, "name",
 				SWT.MULTI | SWT.FULL_SELECTION | SWT.BORDER | SWT.VIRTUAL);
 		tv.addLifeCycleListener(this);
 		tv.addSelectionListener(this, false);
@@ -342,9 +344,6 @@ public class MyTrackerView
   		uiFunctions.refreshIconBar();
   	}
 
-		// Store values for columns that are calculate from peer information, so
-		// that we only have to do one loop.  (As opposed to each cell doing a loop)
-		// Calculate code copied from TrackerTableItem
 		TableRowCore[] rows = tv.getRows();
 		for (int x = 0; x < rows.length; x++) {
 		  TableRowSWT row = (TableRowSWT)rows[x];
@@ -359,25 +358,16 @@ public class MyTrackerView
 			  continue;
 		  }
 
-		  long	uploaded	= host_torrent.getTotalUploaded();
-		  long	downloaded	= host_torrent.getTotalDownloaded();
-		  long	left		= host_torrent.getTotalLeft();
-
 		  int		seed_count	= host_torrent.getSeedCount();
-
-		  host_torrent.setData("GUI_PeerCount", new Long(host_torrent.getLeecherCount()));
-		  host_torrent.setData("GUI_SeedCount", new Long(seed_count));
-		  host_torrent.setData("GUI_BadNATCount", new Long(host_torrent.getBadNATCount()));
-		  host_torrent.setData("GUI_Uploaded", new Long(uploaded));
-		  host_torrent.setData("GUI_Downloaded", new Long(downloaded));
-		  host_torrent.setData("GUI_Left", new Long(left));
 
 		  if ( seed_count != 0 ){
 			  Color fg = row.getForeground();
 
-			  if (fg != null && fg.equals(Colors.blues[Colors.BLUES_MIDDARK])) {
-				  row.setForeground(Colors.blues[Colors.BLUES_MIDDARK]);
+			  if (fg== null || !fg.equals(Colors.blues[Colors.BLUES_MIDDARK])) {
+				  row.requestForegroundColor( color_requester, Colors.blues[Colors.BLUES_MIDDARK]);
 			  }
+		  }else{
+			  row.requestForegroundColor( color_requester, null );
 		  }
 		}
 	}

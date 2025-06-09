@@ -21,14 +21,12 @@
 
 package com.biglybt.ui.swt.views.configsections;
 
-import java.applet.Applet;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
 import com.biglybt.core.config.COConfigurationManager;
-import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.Constants;
+import com.biglybt.core.util.GeneralUtils;
 import com.biglybt.pifimpl.local.ui.config.*;
 import com.biglybt.ui.config.ConfigSectionImpl;
 
@@ -134,6 +132,10 @@ public class ConfigSectionInterfaceAlertsSWT
 		BooleanParameterImpl popup_dl_error = new BooleanParameterImpl(
 				"Popup Download Error", "ConfigView.label.popupdownloaderror");
 		add(popup_dl_error, listPopup);
+		
+		BooleanParameterImpl popup_dl_checked = new BooleanParameterImpl(
+				"Popup Check Complete", "ConfigView.label.popupdownloadchecked");
+		add(popup_dl_checked, listPopup);
 
 		BooleanParameterImpl popup_file_completed = new BooleanParameterImpl(
 				"Popup File Finished", "ConfigView.label.popupfilefinished");
@@ -204,20 +206,7 @@ public class ConfigSectionInterfaceAlertsSWT
 				"ConfigView.section.interface.wavlocation");
 
 		e_pathParameter.addListener(param -> {
-			new AEThread2("SoundTest") {
-				@Override
-				public void run() {
-					try {
-						Applet.newAudioClip(
-								new File(e_pathParameter.getValue()).toURI().toURL()).play();
-
-						Thread.sleep(2500);
-
-					} catch (Throwable e) {
-
-					}
-				}
-			}.start();
+			GeneralUtils.playSound( e_pathParameter.getValue());
 		});
 	}
 }

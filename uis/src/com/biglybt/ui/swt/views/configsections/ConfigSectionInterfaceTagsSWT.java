@@ -18,22 +18,53 @@
 
 package com.biglybt.ui.swt.views.configsections;
 
-import java.util.ArrayList;
-import java.util.List;
+import static com.biglybt.core.config.ConfigKeys.File.ICFG_FILES_AUTO_TAG_COUNT;
+import static com.biglybt.core.config.ConfigKeys.File.SCFG_FILE_AUTO_TAG_NAME_DEFAULT;
+import static com.biglybt.core.config.ConfigKeys.File.SCFG_PREFIX_FILE_AUTO_TAG_EXTS;
+import static com.biglybt.core.config.ConfigKeys.File.SCFG_PREFIX_FILE_AUTO_TAG_NAME;
+
+import java.util.*;
+
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Menu;
+
+import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.tag.*;
 
 import com.biglybt.pif.ui.config.Parameter;
+import com.biglybt.pifimpl.local.ui.config.ActionParameterImpl;
 import com.biglybt.pifimpl.local.ui.config.BooleanParameterImpl;
+import com.biglybt.pifimpl.local.ui.config.IntListParameterImpl;
+import com.biglybt.pifimpl.local.ui.config.LabelParameterImpl;
 import com.biglybt.pifimpl.local.ui.config.ParameterGroupImpl;
+import com.biglybt.pifimpl.local.ui.config.ParameterImpl;
 import com.biglybt.ui.config.ConfigSectionInterfaceTags;
 import com.biglybt.ui.swt.Utils;
+import com.biglybt.ui.swt.config.BaseSwtParameter;
+import com.biglybt.ui.swt.views.utils.TagUIUtils;
+import com.biglybt.ui.swt.views.utils.TagUIUtils.TagMenuOptions;
 
 public class 
 ConfigSectionInterfaceTagsSWT
 	extends ConfigSectionInterfaceTags
+	implements BaseConfigSectionSWT
 {
+	private Map<ParameterImpl, BaseSwtParameter>		paramMap;
+	
 	@Override
 	public void 
-	build() 
+	configSectionCreate(
+		Composite 								parent,
+		Map<ParameterImpl, BaseSwtParameter> 	mapParamToSwtParam )
+	{
+		paramMap = mapParamToSwtParam;
+	}
+	
+	@Override
+	protected void 
+	buildUISpecific() 
 	{
 		boolean isAZ3 = Utils.isAZ3UI();
 		
@@ -51,6 +82,12 @@ ConfigSectionInterfaceTagsSWT
 		add(new BooleanParameterImpl("Library.ShowCatButtons",
 				"ConfigView.section.style.ShowCatButtons"), listLibrary);
 
+		BooleanParameterImpl show_cat_comp_only = new BooleanParameterImpl(
+				"Library.ShowCatButtons.CompOnly",
+				"ConfigView.section.style.ShowTagButtons.CompOnly");
+		add(show_cat_comp_only,listLibrary);
+		show_cat_comp_only.setIndent(1, true);
+		
 		if (isAZ3) {
 			
 			BooleanParameterImpl show_tags = new BooleanParameterImpl(
@@ -103,8 +140,20 @@ ConfigSectionInterfaceTagsSWT
 		add(tag_inclusive,listLibrary);
 		tag_inclusive.setIndent(1, true);
 
-		show_tag.addEnabledOnSelection(show_filters_only, show_tag_comp_only, tag_inclusive);
+		show_tag.addEnabledOnSelection( show_filters_only, image_override, show_tag_comp_only, tag_inclusive );
 
+		IntListParameterImpl tag_align = new IntListParameterImpl(
+				"Library.ShowTagButtons.Align",
+				"ConfigView.section.style.ShowTagButtons.Align",
+				new int[]{ 0, 1, 2, 3 },
+				new String[]{ 
+					"", 
+					MessageText.getString( "label.left" ),
+					MessageText.getString( "label.center" ),
+					MessageText.getString( "label.right" )});					
+		
+		add(tag_align,listLibrary);
+		
 		BooleanParameterImpl col_config = new BooleanParameterImpl(
 				"Library.EnableSepColConfig",
 				"ConfigView.section.style.enableSeparateColConfig");
@@ -116,7 +165,122 @@ ConfigSectionInterfaceTagsSWT
 		
 		add(new ParameterGroupImpl("ConfigView.section.style.library",
 				listLibrary));
+	}
+	
+	@Override
+	protected boolean
+	isSWT()
+	{
+		return( true );
+	}
+	
+	@Override
+	protected void
+	addAutoTagLine(
+		List<Parameter> listAutoTag,
+		int				index )
+	{
+		super.addAutoTagLine(listAutoTag, index);
+		
+		String paramName;
+		
+		if ( index == -1 ){
+			paramName = SCFG_FILE_AUTO_TAG_NAME_DEFAULT;
+		}else{
+			paramName = SCFG_PREFIX_FILE_AUTO_TAG_NAME + (index == 0 ? "" : (" " + index));
+		}
+		
+		ActionParameterImpl selectTag = new ActionParameterImpl(
+				"", "GeneralView.menu.selectTracker");
+		add( selectTag, listAutoTag);
+		
+		selectTag.addListener(param -> {
+			
+			Utils.execSWTThread(()->{
+				BaseSwtParameter swtParam = paramMap.get(  selectTag );
+				
+				Control c = swtParam.getMainControl();
+				
+				Menu menu = new Menu( c );
+				
+				c.setMenu(menu);
 
-		super.build();
+				Map<Tag, Integer> mapTaggableCount = new HashMap<>();
+				String tagName = COConfigurationManager.getStringParameter(paramName);
+				if (tagName != null && !tagName.isEmpty()) {
+					TagManager tm = TagManagerFactory.getTagManager();
+					TagType tt = tm.getTagType(TagType.TT_DOWNLOAD_MANUAL);
+					Tag tag = tt.getTag(tagName, true);
+					if (tag != null) {
+						mapTaggableCount.put(tag, 1);
+					}
+				}
+				TagMenuOptions.Builder builder = TagMenuOptions.Builder()
+					.setTagMenuFilter(TagMenuOptions.FILTER_NO_AUTOADDREMOVE)
+					.setMapTaggableCount(mapTaggableCount, 1)
+					.setTagSelectionListener(
+						(tag, checked) -> COConfigurationManager.setParameter(paramName,
+							tag.getTagName(true)));
+				TagUIUtils.createTagSelectionMenu(builder, menu);
+				
+				menu.setVisible( true );
+			});
+		});
+		
+		if ( index == -1 ){
+			
+			add("swt_f0.1", new LabelParameterImpl(""), listAutoTag);
+			
+		}else{
+			ActionParameterImpl deleteRow = new ActionParameterImpl( "", "" );
+			
+			deleteRow.setImageID( "smallx-c" );
+			
+			add( deleteRow, listAutoTag);
+	
+			deleteRow.addListener(param -> {
+				
+				Utils.execSWTThread(()->{
+					skipTidy = true;
+
+					int num_tags = COConfigurationManager.getIntParameter( ICFG_FILES_AUTO_TAG_COUNT, 1);
+
+						// always blank the current row as we don't want the values re-appearing
+						// if rows re-added
+					
+					setAutoTagExts( index, "" );
+					setAutoTagTag( index, "" );
+					
+					if ( index == num_tags-1 ){
+						
+							// last one
+						
+						if ( index > 0 ){
+						
+								// remove last
+							
+							COConfigurationManager.setParameter( ICFG_FILES_AUTO_TAG_COUNT, num_tags-1);
+						}
+					}else{
+						
+							// copy down 
+						
+						for ( int i=index+1; i<= num_tags;i++ ){
+							
+							String exts = getAutoTagExts( i );
+							String tag	= getAutoTagTag( i );
+						
+							setAutoTagExts( i-1, exts );
+							setAutoTagTag( i-1, tag );
+						}
+						
+							// remove last
+						
+						COConfigurationManager.setParameter( ICFG_FILES_AUTO_TAG_COUNT, num_tags-1);
+					}
+					requestRebuild();
+				});
+			});
+		}
 	}
 }

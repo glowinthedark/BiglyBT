@@ -40,6 +40,7 @@ import com.biglybt.core.networkmanager.admin.NetworkAdminASN;
 import com.biglybt.core.networkmanager.admin.NetworkAdminASNListener;
 import com.biglybt.core.networkmanager.admin.NetworkAdminException;
 import com.biglybt.core.peer.PEPeer;
+import com.biglybt.core.peermanager.peerdb.PeerItemFactory;
 import com.biglybt.core.util.*;
 import com.biglybt.pif.peers.Peer;
 import com.biglybt.pif.utils.LocationProvider;
@@ -126,6 +127,12 @@ public class PeerUtils {
 			});
    }
 
+   public static void
+   initialise()
+   {
+	   PeerItemFactory.initialise();
+   }
+   
    public static int
    getPeerPriority(
 	   String 	address,
@@ -355,7 +362,7 @@ public class PeerUtils {
 	 int 					specific_max )
   {
 	 // max will have been adjusted based on network selection so we don't actually need to use
-	 // nework info any further during this calculation
+	 // network info any further during this calculation
 
     int curConnPerTorrent = PeerIdentityManager.getIdentityCount( data_id );
 
@@ -546,6 +553,10 @@ public class PeerUtils {
 
 		return( country_provider );
 	}
+	
+	public static boolean hasCountryProvider() {
+		return getCountryProvider() != null;
+	}
 
 	public static String[]
  	getCountryDetails(
@@ -668,6 +679,8 @@ public class PeerUtils {
 	private static final Object	ni_key 		= new Object();
 	private static final Object	ni_null 	= new Object();
 
+	private static final Object	ni_address_key 		= new Object();
+
 	public static NetworkInterface
 	getLocalNetworkInterface(
 		PEPeer	peer )
@@ -719,6 +732,8 @@ public class PeerUtils {
 									result = (NetworkInterface)o;
 									
 									peer.setUserData( ni_key, result );
+									
+									peer.setUserData( ni_address_key, address );
 									
 								}else{
 									
@@ -780,6 +795,8 @@ public class PeerUtils {
 										
 										peer.setUserData( ni_key, result );
 										
+										peer.setUserData( ni_address_key, udp_bind );
+										
 									}else{
 										
 										peer.setUserData( ni_key, ni_null );
@@ -815,6 +832,8 @@ public class PeerUtils {
 															result = (NetworkInterface)o;
 															
 															peer.setUserData( ni_key, result );
+															
+															peer.setUserData( ni_address_key, local );
 															
 														}else{
 															
@@ -853,9 +872,23 @@ public class PeerUtils {
 		return( result );
 	}
 	
+	public static InetAddress
+	getLocalAddress(
+		PEPeer	peer )
+	{
+		if ( peer.getUserData( ni_key ) == null ){
+			
+			getLocalNetworkInterface( peer );
+		}
+		
+		return(InetAddress)peer.getUserData( ni_address_key );
+	}
+	
 	private static final Object	asn_key 		= new Object();
 	private static final Object	asn_pending 	= new Object();
 
+	private static final String[]	asn_failed = { "", "" };
+	
 		/**
 		 * 
 		 * @param peer
@@ -866,16 +899,36 @@ public class PeerUtils {
 	getASN(
 		PEPeer		peer )
 	{
+		String[] result = getASandASN( peer );
+		
+		if ( result != null ){
+			
+			return( result[1] );
+		}
+		
+		return( null );
+	}
+	
+		/**
+		 * 
+		 * @param peer
+		 * @return null if pending, String[] of { as, asn } or { "", "" } if unavailable
+		 */
+	
+	public static String[]
+	getASandASN(
+		PEPeer		peer )
+	{
 		if ( network_admin == null ){
 			
-			return( "" );
+			return( asn_failed );
 		}
 
     	Object o = peer.getUserData( asn_key );
 
-    	if ( o instanceof String ){
+    	if ( o instanceof String[] ){
     		
-    		return((String)o);
+    		return((String[])o);
     		
     	}else if ( o == asn_pending ){   	
     		
@@ -899,7 +952,7 @@ public class PeerUtils {
 		    				success(
 		    					NetworkAdminASN		asn )
 		    				{
-		    					peer.setUserData( asn_key, asn.getASName());
+		    					peer.setUserData( asn_key, new String[]{ asn.getAS(), asn.getASName() });
 		    				}
 
 		    				@Override
@@ -907,7 +960,7 @@ public class PeerUtils {
 		    				failed(
 		    					NetworkAdminException	error )
 		    				{
-		    					peer.setUserData( asn_key, "" );
+		    					peer.setUserData( asn_key, asn_failed );
 		    				}
 		    			});
 		    		
@@ -915,18 +968,19 @@ public class PeerUtils {
 
 		    	}catch( Throwable e ){
 		    		
-		    		peer.setUserData( asn_key, "" );
+		    		peer.setUserData( asn_key, asn_failed );
 		    		
-		    		return( "" );
+		    		return( asn_failed );
 		    	}
     		}else{
     			
-    			peer.setUserData( asn_key, "" );
+    			peer.setUserData( asn_key, asn_failed );
     			
-    			return( "" );
+    			return( asn_failed );
     		}
     	}
 	}
+	
 	/*
 	public static void
 	main(

@@ -28,10 +28,13 @@ import org.eclipse.swt.graphics.*;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
+import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.*;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.util.Constants;
+import com.biglybt.ui.swt.TextWithHistory;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.utils.FontUtils;
@@ -51,8 +54,6 @@ public class BubbleTextBox
 
 	public static final String REGEX_BUTTON_TEXT = ".\u2731";
 
-	public static final int PADDING_RIGHT_DEF = -15;
-
 	private static final int REGEX_BUTTON_PADDING = 4;
 
 	private static final int BUTTON_NONE = 0;
@@ -62,8 +63,6 @@ public class BubbleTextBox
 	private static final int BUTTON_CLEAR = 1;
 
 	private static Font FONT_REGEX_BUTTON;
-
-	private final Composite cCenterV;
 
 	private static Color COLOR_FILTER_REGEX;
 
@@ -79,9 +78,7 @@ public class BubbleTextBox
 
 	private final Composite cBubble;
 
-	private static final int PADDING_TOP = (Utils.isGTK3) ? 1 : 2;
-
-	private static final int PADDING_BOTTOM = (Utils.isGTK3) ? 2 : 2;
+	private static final int TEXTBOX_VPADDING = (Utils.isGTK3) ? 1 : 3;
 
 	private final int INDENT_OVAL;
 
@@ -121,11 +118,23 @@ public class BubbleTextBox
 	public BubbleTextBox(Composite parent, int style) {
 		cBubble = new Composite(parent, SWT.DOUBLE_BUFFERED);
 		FormLayout layout = new FormLayout();
-		layout.marginTop = PADDING_TOP;
-		layout.marginBottom = PADDING_BOTTOM;
 		cBubble.setLayout(layout);
 
-		textWidget = new Text(cBubble, style & ~(SWT.BORDER | SWT.SEARCH)) {
+		int textStyle;
+		if ( Constants.isOSX && Utils.isDarkAppearanceNative()){
+			
+				// if we don't force a border on OSX dark mode then it messes up
+			
+			textStyle = ( style | SWT.BORDER ) & ~(SWT.SEARCH);
+		}else{
+			textStyle = style & ~(SWT.BORDER | SWT.SEARCH);
+		}
+		textWidget = new Text(cBubble, textStyle ) {
+			
+			{
+				Utils.setSkinnedControlType( this, Utils.SCT_BUBBLE_TEXT_BOX );
+			}
+			
 			@Override
 			protected void checkSubclass() {
 			}
@@ -133,22 +142,21 @@ public class BubbleTextBox
 			@Override
 			public Point computeSize(int wHint, int hHint, boolean changed) {
 				Point point = super.computeSize(wHint, hHint, changed);
-				if (Utils.isGTK3) {
+				if (Utils.isGTK3|| (Constants.isOSX && Utils.isDarkAppearanceNative())){
 					Rectangle area = getParent().getClientArea();
 					//System.out.println("computedSize = " + point  + "; parent.h=" + area.height);
 
-					// Bug in SWT: When there's no border, computed size chops off a few
-					// pixels in height (probably because GTK3 shows a border when focused)
-					point.y += 2;
-
 					// Bug in SWT: Seems Text widget on GTK3 doesn't obey parent's fixed height
-					if (area.height > 0 && point.y > area.height) {
-						point.y = area.height;
+					int diff = TEXTBOX_VPADDING * 2;
+					if (area.height > diff) {
+						//if (point.y != area.height - diff) System.out.println("Set textbox height=" + point.y);
+						point.y = area.height - diff;
 					}
 				}
 				return point;
 			}
 		};
+		cBubble.addListener(SWT.Resize, e -> setupTextWidgetLayoutData());
 
 		// Temporary hack until we remove TableViewPainted.enableFilterCheck(Text txtFilter, TableViewFilterCheck<Object> filterCheck)
 		textWidget.setData("BubbleTextBox", this);
@@ -156,10 +164,10 @@ public class BubbleTextBox
 		Runnable runOnFontSizeChange = () -> {
 			boolean existingFont = FONT_REGEX_BUTTON != null;
 			if (existingFont) {
-				FONT_REGEX_BUTTON.dispose();
+				FontUtils.uncache( FONT_REGEX_BUTTON );
 			}
-			FONT_REGEX_BUTTON = FontUtils.getFontWithStyle(textWidget.getFont(),
-					SWT.NORMAL, 1.0f);
+			FONT_REGEX_BUTTON = FontUtils.cache( FontUtils.getFontWithStyle(textWidget.getFont(),
+					SWT.NORMAL, 1.0f));
 			if (existingFont) {
 				cBubble.redraw();
 			}
@@ -168,7 +176,7 @@ public class BubbleTextBox
 		FontUtils.fontToWidgetHeight(textWidget, runOnFontSizeChange);
 		textWidget.addDisposeListener(e -> {
 			if (FONT_REGEX_BUTTON != null) {
-				FONT_REGEX_BUTTON.dispose();
+				FontUtils.uncache( FONT_REGEX_BUTTON );
 				FONT_REGEX_BUTTON = null;
 			}
 		});
@@ -181,22 +189,11 @@ public class BubbleTextBox
 					Colors.getSystemColor(display, SWT.COLOR_LIST_FOREGROUND));
 		}
 
-		FormData fd;
-
-		cCenterV = new Composite(cBubble, SWT.NO_BACKGROUND);
-		fd = new FormData();
-		fd.width = 1;
-		fd.height = 1;
-		fd.top = new FormAttachment(0);
-		fd.bottom = new FormAttachment(100);
-		cCenterV.setVisible(false);
-		cCenterV.setLayoutData(fd);
-
-		setupTextWidgetLayoutData();
-
 		INDENT_OVAL = 6;
 		WIDTH_CLEAR = 7;
 		WIDTH_PADDING = 6;
+
+		setupTextWidgetLayoutData();
 
 		cBubble.addPaintListener(this);
 
@@ -221,7 +218,7 @@ public class BubbleTextBox
 		cBubble.addListener(SWT.MouseMove, event -> {
 			int mouseNowOverButton = BUTTON_NONE;
 			Rectangle r = (Rectangle) event.widget.getData("XArea");
-			if (r != null && r.contains(event.x, event.y)) {
+			if (r != null && r.contains(event.x, event.y) && !text.isEmpty()) {
 				mouseNowOverButton = BUTTON_CLEAR;
 			} else {
 				r = (Rectangle) event.widget.getData("RegexArea");
@@ -279,8 +276,11 @@ public class BubbleTextBox
 			boolean textIsBlank = text.length() == 0;
 			validateFilterRegex();
 			if (textWasBlank != textIsBlank) {
+				setupTextWidgetLayoutData();
 				cBubble.redraw();
 			}
+				// indicate that an escape key should clear the content not close the shell
+			textWidget.setData( "BubbleTextBox::hasContent", textIsBlank?null:"1" );
 			refilter();
 		});
 
@@ -307,7 +307,7 @@ public class BubbleTextBox
 					}
 				}
 
-				if (keyListener != null) {
+				if (keyListener != null && !ignoreListener( e )) {
 					keyListener.keyPressed(e);
 					if (!e.doit) {
 						return;
@@ -322,7 +322,7 @@ public class BubbleTextBox
 					return;
 				}
 
-				if (keyListener != null) {
+				if (keyListener != null && !ignoreListener( e )) {
 					keyListener.keyReleased(e);
 					if (!e.doit) {
 						return;
@@ -330,9 +330,62 @@ public class BubbleTextBox
 				}
 				super.keyReleased(e);
 			}
+			
+			private boolean
+			ignoreListener(
+				KeyEvent e )
+			{
+				if ( e.stateMask == SWT.MOD1 ){
+					int keyCode = e.keyCode;
+						// we want copy/paste to be handled by the text box
+					if ( keyCode == 'c' || keyCode == 'v' ){
+						return(true);
+					}
+				}
+				return( false );
+			}
 		});
 	}
 
+	private int
+	getBubbleLayoutHeight()
+	{
+			// Note we have the equivalent skin settings for this (in two places as of now)
+			// 		filterbox.height=1.4rem
+			//		filterbox.height._mac._dark=2.0rem
+		
+		float fontHeight = FontUtils.getFontHeightInPX(textWidget.getFont());
+		
+		if ( Constants.isOSX && Utils.isDarkAppearanceNative()){
+			
+			return((int)( fontHeight * 2.0 ));
+			
+		}else{
+			
+			return((int)( fontHeight * 1.4 ));
+		}
+	}
+	
+	public void
+	setMessageAndLayout(
+		String		msg,
+		GridData	gridData )
+	{
+		textWidget.setMessage( msg );
+		gridData.heightHint = getBubbleLayoutHeight();
+		cBubble.setLayoutData(gridData);
+	}
+	
+	public void
+	setMessageAndLayout(
+		String		msg,
+		FormData	formData )
+	{
+		textWidget.setMessage( msg );
+	    formData.height = getBubbleLayoutHeight();
+	    cBubble.setLayoutData(formData);
+	}	
+	
 	@Override
 	public void paintControl(PaintEvent e) {
 		Rectangle clientArea = cBubble.getClientArea();
@@ -342,11 +395,12 @@ public class BubbleTextBox
 		e.gc.setAntialias(SWT.ON);
 		e.gc.fillRoundRectangle(clientArea.x, clientArea.y, clientArea.width - 1,
 				clientArea.height - 1, clientArea.height, clientArea.height);
-		e.gc.setAlpha(127);
-		e.gc.drawRoundRectangle(clientArea.x, clientArea.y, clientArea.width - 1,
-				clientArea.height - 1, clientArea.height, clientArea.height);
-
-		e.gc.setAlpha(255);
+		if ( !Utils.isDarkAppearanceNative()){
+			e.gc.setAlpha(127);
+			e.gc.drawRoundRectangle(clientArea.x, clientArea.y, clientArea.width - 1,
+					clientArea.height - 1, clientArea.height, clientArea.height);
+			e.gc.setAlpha(255);
+		}
 		e.gc.setLineCap(SWT.CAP_FLAT);
 
 		int fontHeight = FontUtils.getFontHeightInPX(textWidget.getFont());
@@ -356,8 +410,15 @@ public class BubbleTextBox
 		float heightOval = fontHeight * 0.7f;
 		float widthOval = heightOval;
 
-		Color colorFadedText = Colors.getSystemColor(e.display,
-				SWT.COLOR_WIDGET_NORMAL_SHADOW);
+		Color colorFadedText;
+		
+		if ( Utils.isGTK3 && Utils.isDarkAppearanceNative()){
+			colorFadedText = Colors.light_grey;		// COLOR_WIDGET_NORMAL_SHADOW is black :(
+		}else if ( Utils.isDarkAppearanceNativeWindows()){
+			colorFadedText = Colors.grey;
+		}else{
+			colorFadedText = Colors.getSystemColor(e.display, SWT.COLOR_WIDGET_NORMAL_SHADOW);
+		}
 		e.gc.setForeground(colorFadedText);
 
 		int iconY = clientArea.y + ((clientArea.height - fontHeight + 1) / 2);
@@ -388,8 +449,8 @@ public class BubbleTextBox
 			cBubble.setData("XArea", rXArea);
 
 			if (mouseOverButton == BUTTON_CLEAR) {
-				e.gc.setBackground(
-						Colors.getSystemColor(e.display, SWT.COLOR_WIDGET_LIGHT_SHADOW));
+				//e.gc.setBackground(
+				//		Colors.getSystemColor(e.display, SWT.COLOR_WIDGET_LIGHT_SHADOW));
 				e.gc.fillOval(rXArea.x, rXArea.y, rXArea.width, rXArea.height);
 
 				e.gc.setForeground(textWidget.getForeground());
@@ -421,17 +482,20 @@ public class BubbleTextBox
 					clientArea.height - 2);
 			cBubble.setData("RegexArea", regexArea);
 
+			/*
 			if (mouseOverButton == BUTTON_REGEX) {
 				e.gc.setBackground(
 						Colors.getSystemColor(e.display, SWT.COLOR_WIDGET_LIGHT_SHADOW));
-				e.gc.fillRoundRectangle(regexArea.x, regexArea.y, regexArea.width,
-						regexArea.height, 5, 5);
+				e.gc.fillRoundRectangle(regexArea.x, regexArea.y, regexArea.width-2,
+						regexArea.heigh-1, 5, 5);
 			}
-
+			*/
+			
 			if (regexEnabled) {
 				if (mouseOverButton != BUTTON_REGEX) {
-					e.gc.setBackground(
-							regexIsError ? Colors.colorErrorBG : Colors.colorAltRow);
+					if ( regexIsError ){
+						e.gc.setBackground(Colors.fadedRed );
+					}
 					e.gc.fillRoundRectangle(regexArea.x, clientArea.y,
 							regexArea.width - 2, clientArea.height - 1, 5, 5);
 					e.gc.setForeground(colorFadedText);
@@ -459,19 +523,36 @@ public class BubbleTextBox
 	}
 
 	private void setupTextWidgetLayoutData() {
+		int bubbleHeight = cBubble.getClientArea().height;
+		//System.out.println("setupTextWidgetLayoutData; bubbleHeight=" + bubbleHeight);
 		FormData fd = new FormData();
-		fd.top = new FormAttachment(cCenterV, 0, SWT.CENTER);
+		fd.top = new FormAttachment(0, TEXTBOX_VPADDING);
+		fd.bottom = new FormAttachment(100, -TEXTBOX_VPADDING);
+		if (bubbleHeight > 0) {
+			fd.height = Math.max(1, bubbleHeight - (TEXTBOX_VPADDING * 2));
+		}
 		fd.left = new FormAttachment(0, 17);
+		boolean isClearButtonVisible = !textWidget.getText().isEmpty();
 		int right;
-		if (allowRegex) {
-			GC gc = new GC(this.textWidget);
-			gc.setFont(FONT_REGEX_BUTTON);
-			Point regexTextSize = gc.textExtent(REGEX_BUTTON_TEXT);
-			gc.dispose();
-			right = PADDING_RIGHT_DEF - regexTextSize.x - WIDTH_PADDING
-					- REGEX_BUTTON_PADDING - 1;
+		if (!allowRegex && !isClearButtonVisible && bubbleHeight > 0) {
+			right = -(bubbleHeight / 2);
 		} else {
-			right = PADDING_RIGHT_DEF;
+			right = -WIDTH_PADDING;
+			if (isClearButtonVisible) {
+				right -= (WIDTH_PADDING + WIDTH_CLEAR + (WIDTH_PADDING / 2));
+			}
+			if (allowRegex) {
+				GC gc = new GC(this.textWidget);
+				gc.setFont(FONT_REGEX_BUTTON);
+				Point regexTextSize = gc.textExtent(REGEX_BUTTON_TEXT);
+				gc.dispose();
+				right -= (regexTextSize.x + REGEX_BUTTON_PADDING);
+				if (isClearButtonVisible) {
+					right -= WIDTH_PADDING;
+				} else {
+					right -= (WIDTH_PADDING / 2);
+				}
+			}
 		}
 		fd.right = new FormAttachment(100, right);
 		textWidget.setLayoutData(fd);
@@ -553,12 +634,12 @@ public class BubbleTextBox
 	public void validateFilterRegex() {
 		Color old_bg = (Color) textWidget.getData("TVSWTC:filter.bg");
 		if (old_bg == null) {
-			old_bg = textWidget.getBackground();
+			old_bg = Utils.getSkinnedBackground( textWidget );
 			textWidget.setData("TVSWTC:filter.bg", old_bg);
 		}
 		Color old_fg = (Color) textWidget.getData("TVSWTC:filter.fg");
 		if (old_fg == null) {
-			old_fg = textWidget.getForeground();
+			old_fg = Utils.getSkinnedForeground( textWidget );
 			textWidget.setData("TVSWTC:filter.fg", old_fg);
 		}
 		boolean old = regexIsError;
@@ -603,7 +684,7 @@ public class BubbleTextBox
 				regexIsError = false;
 
 				textWidget.setBackground(COLOR_FILTER_REGEX);
-				textWidget.setForeground(old_fg);
+				textWidget.setForeground(Colors.getInstance().getReadableColor(COLOR_FILTER_REGEX));
 				textWidget.setFont(FONT_REGEX);
 			} catch (Exception e) {
 				regexIsError = true;
@@ -637,6 +718,47 @@ public class BubbleTextBox
 		}
 	}
 
+	public void 
+	setState(
+		String		s, 
+		boolean	r) 
+	{
+		Utils.execSWTThread(()->{
+			boolean changed = false;
+		
+			if ( allowRegex ){
+				
+				if ( regexEnabled != r ){
+				
+					regexEnabled = r;
+					
+					changed = true;
+				}
+			}
+			
+			if ( !s.equals( getText())){
+				
+					// hack to prevent the history popup annoyingly appearing when
+					// setting the value
+				
+				textWidget.setData( TextWithHistory.HISTORY_POPUP_DISABLE, "" );
+				
+				textWidget.setText(s);
+				
+				textWidget.setData( TextWithHistory.HISTORY_POPUP_DISABLE, null );
+				
+				changed = true;
+			}
+			
+			if ( changed ){
+				cBubble.redraw();
+				setupTextWidgetLayoutData();
+				validateFilterRegex();
+				refilter();
+			}
+		});
+	}
+	
 	public void setText(String s) {
 		if (s.equals(text)) {
 			return;

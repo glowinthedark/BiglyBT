@@ -35,7 +35,6 @@ import com.biglybt.pifimpl.local.PluginInitializer;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.common.table.TableView;
-import com.biglybt.ui.mdi.MdiEntry;
 import com.biglybt.ui.mdi.MultipleDocumentInterface;
 import com.biglybt.ui.selectedcontent.ISelectedContent;
 import com.biglybt.ui.selectedcontent.SelectedContentListener;
@@ -157,7 +156,7 @@ public class TableViewSWT_TabsCommon implements SelectedContentListener
 			return null;
 		}
 
-		return tabbedMDI.getCurrentEntry();
+		return tabbedMDI.getSelectedEntry();
 	}
 
 		// TabViews Functions
@@ -188,7 +187,7 @@ public class TableViewSWT_TabsCommon implements SelectedContentListener
 			return tableComposite;
 		}
 
-		final String	props_prefix = tv.getTableID() + "." + tv.getPropertiesPrefix();
+		final String	props_prefix = tv.getTableID() + "." + tv.getTextPrefixID();
 
 		FormData formData;
 

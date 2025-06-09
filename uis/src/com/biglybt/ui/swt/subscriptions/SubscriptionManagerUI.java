@@ -48,7 +48,6 @@ import com.biglybt.pifimpl.local.PluginCoreUtils;
 import com.biglybt.pifimpl.local.PluginInitializer;
 import com.biglybt.pifimpl.local.utils.FormattersImpl;
 import com.biglybt.ui.UIFunctions;
-import com.biglybt.ui.UIFunctions.TagReturner;
 import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.UserPrompterResultListener;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
@@ -61,10 +60,12 @@ import com.biglybt.ui.swt.mdi.MultipleDocumentInterfaceSWT;
 import com.biglybt.ui.swt.pif.*;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.shells.MessageBoxShell;
-import com.biglybt.ui.swt.utils.TagUIUtilsV3;
 import com.biglybt.ui.swt.views.table.TableCellSWT;
 import com.biglybt.ui.swt.views.utils.CategoryUIUtils;
 import com.biglybt.ui.swt.views.utils.TagUIUtils;
+import com.biglybt.ui.swt.views.utils.TagUIUtils.TagMenuOptions;
+import com.biglybt.util.MapUtils;
+import com.biglybt.util.StringCompareUtils;
 
 import com.biglybt.pif.PluginConfigListener;
 import com.biglybt.pif.PluginInterface;
@@ -107,7 +108,7 @@ SubscriptionManagerUI
 
 	private boolean	sidebar_setup_done;
 
-	private Map<String,MdiEntry>		parent_views = new TreeMap<>( new FormattersImpl().getAlphanumericComparator( true ));
+	private final Map<String,MdiEntry>		parent_views = new TreeMap<>( new FormattersImpl().getAlphanumericComparator( true ));
 	private SubscriptionManagerListener subman_listener_quick;
 	private SubscriptionManagerListener subman_listener_delayed;
 	private TableColumnCreationListener columnCreationSubs;
@@ -451,22 +452,23 @@ SubscriptionManagerUI
 			@Override
 			public void
 			subscriptionAdded(
-					Subscription 		subscription )
+				Subscription 		subscription )
 			{
 			}
 
 			@Override
 			public void
 			subscriptionChanged(
-					Subscription		sub )
+				Subscription		sub,
+				int					reason )
 			{
-				changeSubscription( sub );
+				changeSubscription( sub, reason );
 			}
 
 			@Override
 			public void
 			subscriptionSelected(
-					Subscription sub )
+				Subscription sub )
 			{
 				showSubscriptionMDI( sub );
 			}
@@ -474,7 +476,7 @@ SubscriptionManagerUI
 			@Override
 			public void
 			subscriptionRemoved(
-					Subscription 		subscription )
+				Subscription 		subscription )
 			{
 				removeSubscription( subscription );
 			}
@@ -482,15 +484,15 @@ SubscriptionManagerUI
 			@Override
 			public void
 			associationsChanged(
-					byte[]		association_hash )
+				byte[]		association_hash )
 			{
 			}
 
 			@Override
 			public void
 			subscriptionRequested(
-					URL					url,
-					Map<String,Object>	options )
+				URL					url,
+				Map<String,Object>	options )
 			{
 			}
 		};
@@ -522,13 +524,13 @@ SubscriptionManagerUI
 		try {
 			TableManager tableManager = PluginInitializer.getDefaultInterface().getUIManager().getTableManager();
 			if (columnCreationSubs != null) {
-				tableManager.unregisterColumn(Download.class, "azsubs.ui.column.subs",
-						columnCreationSubs);
+				tableManager.unregisterColumn(Download.class, "azsubs.ui.column.subs" );
+						
 				columnCreationSubs = null;
 			}
 			if (columnCreationSubsLink != null) {
-				tableManager.unregisterColumn(Download.class, "azsubs.ui.column.subs_link",
-						columnCreationSubsLink);
+				tableManager.unregisterColumn(Download.class, "azsubs.ui.column.subs_link" );
+						
 				columnCreationSubsLink = null;
 			}
 		} catch (Throwable ignore) {
@@ -559,7 +561,7 @@ SubscriptionManagerUI
 			@Override
 			public void
 			subscriptionAdded(
-					Subscription subscription )
+				Subscription subscription )
 			{
 				checkSubscriptionForStuff( subscription );
 			}
@@ -567,28 +569,30 @@ SubscriptionManagerUI
 			@Override
 			public void
 			subscriptionChanged(
-					Subscription		subscription )
+				Subscription		subscription,
+				int					reason )
 			{
+				changeSubscription(subscription, reason);
 			}
 
 			@Override
 			public void
 			subscriptionSelected(
-					Subscription subscription )
+				Subscription subscription )
 			{
 			}
 
 			@Override
 			public void
 			subscriptionRemoved(
-					Subscription subscription )
+				Subscription subscription )
 			{
 			}
 
 			@Override
 			public void
 			associationsChanged(
-					byte[] hash )
+				byte[] hash )
 			{
 				refreshColumns();
 			}
@@ -596,8 +600,8 @@ SubscriptionManagerUI
 			@Override
 			public void
 			subscriptionRequested(
-					final URL					url,
-					final Map<String,Object>	options )
+				final URL					url,
+				final Map<String,Object>	options )
 			{
 				Utils.execSWTThread(
 						new AERunnable()
@@ -898,6 +902,25 @@ SubscriptionManagerUI
 				}
 			});
 
+			// mark results in library read
+	
+		final BooleanParameter mark_lib_results_read =
+			configModel.addBooleanParameter2(
+				"subscriptions.mark_results_in_lib.enable", "subscriptions.mark_results_in_lib.enable",
+				subs_man.getMarkResultsInLibraryRead());
+	
+		mark_lib_results_read.addListener(
+			new ParameterListener()
+			{
+				@Override
+				public void
+				parameterChanged(
+					Parameter param)
+				{
+					subs_man.setMarkResultsInLibraryRead( mark_lib_results_read.getValue());
+				}
+			});		
+		
 		final IntParameter def_check =
 				configModel.addIntParameter2(
 					"subscriptions.config.def.check",
@@ -1150,6 +1173,13 @@ SubscriptionManagerUI
 
 						cell.setSortValue( 0 );
 					}
+					
+					TableColumn tableColumn = cell.getTableColumn();
+					
+					if ( tableColumn != null && tableColumn.getPreferredWidth() < 32 ){
+					
+						cell.getTableColumn().setPreferredWidth( 32 );
+					}
 				}
 			};
 
@@ -1180,8 +1210,6 @@ SubscriptionManagerUI
 								event.skipCoreFunctionality	= true;
 
 								new SubscriptionWizard(PluginCoreUtils.unwrap(dl));
-
-								COConfigurationManager.setParameter( "subscriptions.wizard.shown", true );
 
 								refreshTitles( mdiEntryOverview );
 
@@ -1405,6 +1433,31 @@ SubscriptionManagerUI
 				}
 			});
 
+		mi = menu_manager.addMenuItem( parentID, "Subscription.menu.clearall" );
+		mi.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+
+		mi.addListener(
+			new MenuItemListener()
+			{
+				@Override
+				public void
+				selected(
+					MenuItem menu, Object target )
+				{
+					SubscriptionManager subs_man = SubscriptionManagerFactory.getSingleton();
+
+					Subscription[] subs = subs_man.getSubscriptions( true );
+
+					for ( Subscription sub: subs ){
+
+						if ( !sub.isSearchTemplate()){
+
+							sub.getHistory().markAllResultsRead();
+						}
+					}
+				}
+			});
+		
 		mi = menu_manager.addMenuItem( parentID, "sep1" );
 		mi.setDisposeWithUIDetach(UIInstance.UIT_SWT);
 
@@ -1446,8 +1499,6 @@ SubscriptionManagerUI
 				public void mdiEntryVitalityImage_clicked(int x, int y) {
 					new SubscriptionWizard();
 
-					COConfigurationManager.setParameter( "subscriptions.wizard.shown", true );
-
 					refreshTitles( mdiEntryOverview );
 				}
 			});
@@ -1477,15 +1528,12 @@ SubscriptionManagerUI
 				{
 					Object result = null;
 
-					// COConfigurationManager.setParameter( "subscriptions.wizard.shown", false );
-
 					if (propertyID == TITLE_INDICATOR_TEXT) {
 
 						//boolean expanded = headerEntry.isExpanded();
 
-							// always treat as collasped - due to various sidebar restructuring this had effectively been
+							// always treat as collapsed - due to various sidebar restructuring this had effectively been
 							// the case for quite a while and people complained when it reverted to the original way of working
-							// http://forum.vuze.com/Thread-Total-subscription-results-gone-in-Beta-19
 
 						boolean expanded = false;
 
@@ -1587,7 +1635,8 @@ SubscriptionManagerUI
 
 	protected void
 	changeSubscription(
-		final Subscription	subs )
+		final Subscription	subs,
+		int					reason )
 	{
 		refreshTitles( mdiEntryOverview );
 
@@ -1634,8 +1683,6 @@ SubscriptionManagerUI
 	{
 		if (!subs.isSubscribed()){
 
-				// user may have deleted subscrtipion, but our register is staill there
-
 			return null;
 		}
 
@@ -1664,7 +1711,7 @@ SubscriptionManagerUI
 		name_map.put( subs_name, key );
 
 		MdiEntry[] existing = mdi.getEntries();
-
+		
 		for ( MdiEntry e: existing ){
 
 			String id = e.getViewID();
@@ -1786,12 +1833,14 @@ SubscriptionManagerUI
 							null,
 							parent_name,
 							parent, null, false, parent_prev_id );
+					
+					parent_views.put( parent_name, parent_entry );
 				}
 			}
 
 			entry = mdi.createEntry(new UISWTViewBuilderCore(key, null,
 					SubscriptionView.class).setParentEntryID(
-							parent_entry.getViewID()).setInitialDatasource(subs),
+							parent_entry.getViewID()).setInitialDatasource(subs).setPreferredAfterID(prev_id),
 					true);
 		}
 
@@ -1893,6 +1942,7 @@ SubscriptionManagerUI
 
 		while( entry != null ){
 
+			entry.redraw();
 			ViewTitleInfoManager.refreshTitleInfo(entry.getViewTitleInfo());
 
 			String key = entry.getParentID();
@@ -1941,14 +1991,35 @@ SubscriptionManagerUI
 		return( graphic );
 	}
 
-	protected interface
+	protected abstract static class
 	MenuCreator
 	{
-		public MenuItem
-		createMenu(
-			String 	resource_id );
+		long sepID = 0;
+		public final MenuItem
+		newItem(String resource_id) {
+			return newItem(resource_id, null);
+		}
 
-		public void
+		public final MenuItem
+		newCheckItem(String resource_id, MenuItemListener multiListener) {
+			MenuItem menuItem = newItem(resource_id, multiListener);
+			menuItem.setStyle(MenuItem.STYLE_CHECK);
+			return menuItem;
+		}
+
+		public final MenuItem
+		newSeparator() {
+			MenuItem menuItem = newItem("subsep-" + sepID++, null);
+			menuItem.setStyle(MenuItem.STYLE_SEPARATOR);
+			return menuItem;
+		}
+
+		public abstract MenuItem
+		newItem(
+			String resource_id,
+			MenuItemListener multiListener);
+
+		public abstract void
 		refreshView();
 	}
 
@@ -1956,812 +2027,709 @@ SubscriptionManagerUI
 	createMenus(
 		final MenuManager		menu_manager,
 		final MenuCreator		menu_creator,
-		final Subscription[]	all_subs )
-	{
-		if ( all_subs.length > 1 ){
-
-			MenuItem menuItem = menu_creator.createMenu( "menu.set.parent");
-
-			menuItem.addMultiListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(final Subscription[] subs) {
-					UISWTInputReceiver entry = new SimpleTextEntryWindow();
-					if ( subs.length==1 ){
-						entry.setPreenteredText(subs[0].getParent(), false );
-					}
-					entry.maintainWhitespace(false);
-					entry.allowEmptyInput( true );
-					entry.setLocalisedTitle(MessageText.getString("label.set.parent"));
-
-					entry.prompt(new UIInputReceiverListener() {
-						@Override
-						public void UIInputReceiverClosed(UIInputReceiver entry) {
-							if (!entry.hasSubmittedInput()){
-
-								return;
-							}
-
-							String input = entry.getSubmittedInput().trim();
-
-							if ( input.length() == 0 ){
-
-								input = null;
-							}
-
-							for ( Subscription sub: subs ){
-
-								sub.setParent( input );
-							}
-						}
-					});
-				}
-			});
+		final SubsLists createFor ) {
+		int total = createFor.templates.size() + createFor.subs.size();
+		if (total == 0) {
 			return;
 		}
+		boolean hasSubs = !createFor.subs.isEmpty();
 
-		final Subscription subs = all_subs[0];
+		boolean hasMany = total > 1;
+		boolean hasSingleSub = !hasMany && hasSubs;
+		MenuItem mi;
 
-		boolean is_search_template = subs.isSearchTemplate();
+		if (hasSubs) {
 
-		if ( !is_search_template ){
+			menu_creator.newItem("Subscription.menu.forcecheck",
+				(Selection_NoTemplates) (menu, sub) -> sub.getManager()
+					.getScheduler()
+					.downloadAsync(sub, true));
 
-			MenuItem menuItem = menu_creator.createMenu( "Subscription.menu.forcecheck" );
-			menuItem.setText(MessageText.getString("Subscription.menu.forcecheck"));
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					try {
-						subs.getManager().getScheduler().downloadAsync( subs, true );
-					} catch (SubscriptionException e) {
-						Debug.out(e);
+			menu_creator.newSeparator();
+			
+			menu_creator.newItem("Subscription.menu.clearall",
+				(SelectionList_NoTemplates) (subs) -> {
+					for (Subscription sub : subs) {
+						try {
+							sub.getHistory().markAllResultsRead();
+						} catch (Throwable t) {
+							Debug.out(t);
+						}
 					}
-				}
-			});
-
-			menuItem = menu_creator.createMenu( "Subscription.menu.clearall");
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					subs.getHistory().markAllResultsRead();
 					menu_creator.refreshView();
-				}
-			});
+				});
 
-			menuItem = menu_creator.createMenu( "Subscription.menu.dirtyall");
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					subs.getHistory().markAllResultsUnread();
+			menu_creator.newItem("Subscription.menu.dirtyall",
+				(SelectionList_NoTemplates) (subs) -> {
+					for (Subscription sub : subs) {
+						try {
+							sub.getHistory().markAllResultsUnread();
+						} catch (Throwable t) {
+							Debug.out(t);
+						}
+					}
 					menu_creator.refreshView();
-				}
-			});
+				});
 
-			menuItem = menu_creator.createMenu( "Subscription.menu.deleteall");
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					subs.getHistory().deleteAllResults();
+			menu_creator.newItem("Subscription.menu.deleteall",
+				(SelectionList_NoTemplates) (subs) -> {
+					for (Subscription sub : subs) {
+						try {
+							sub.getHistory().deleteAllResults();
+						} catch (Throwable t) {
+							Debug.out(t);
+						}
+					}
 					menu_creator.refreshView();
-				}
-			});
+				});
 
-			menuItem = menu_creator.createMenu( "Subscription.menu.reset");
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					subs.getHistory().reset();
-					try{
-						subs.getEngine().reset();
-					}catch( Throwable e ){
+			menu_creator.newItem("Subscription.menu.reset",
+				(Selection_NoTemplates) (menu, sub) -> {
+					sub.getHistory().reset();
+					try {
+						sub.getEngine().reset();
+					} catch (Throwable e) {
 						Debug.printStackTrace(e);
 					}
-					try{
-						subs.getManager().getScheduler().downloadAsync(subs, true);
+					try {
+						sub.getManager().getScheduler().downloadAsync(sub, true);
 
-					}catch( Throwable e ){
+					} catch (Throwable e) {
 
 						Debug.out(e);
 					}
-				}
-			});
+				});
 
-			try{
-				Engine engine = subs.getEngine();
-
-				if ( engine instanceof WebEngine ){
-
-					if (((WebEngine)engine).isNeedsAuth()){
-
-						menuItem = menu_creator.createMenu( "Subscription.menu.resetauth");
-						menuItem.addListener(new SubsMenuItemListener() {
-							@Override
-							public void selected(Subscription subs) {
-								try{
-									Engine engine = subs.getEngine();
-
-									if ( engine instanceof WebEngine ){
-
-										((WebEngine)engine).setCookies( null );
-									}
-								}catch( Throwable e ){
-
-									Debug.printStackTrace(e);
-								}
-
-								try{
-									subs.getManager().getScheduler().downloadAsync(subs, true);
-
-								}catch( Throwable e ){
-
-									Debug.out(e);
-								}
-							}
-						});
-
-						menuItem = menu_creator.createMenu( "Subscription.menu.setcookies");
-						menuItem.addListener(new SubsMenuItemListener() {
-							@Override
-							public void selected(final Subscription subs) {
-								try{
-									Engine engine = subs.getEngine();
-
-									if ( engine instanceof WebEngine ){
-
-										final WebEngine we = (WebEngine)engine;
-
-										UISWTInputReceiver entry = new SimpleTextEntryWindow();
-
-										String[] req = we.getRequiredCookies();
-
-										String	req_str = "";
-
-										for ( String r:req ){
-
-											req_str += (req_str.length()==0?"":";") + r + "=?";
-										}
-										entry.setPreenteredText( req_str, true );
-										entry.maintainWhitespace(false);
-										entry.allowEmptyInput( false );
-										entry.setTitle("general.enter.cookies");
-										entry.prompt(new UIInputReceiverListener() {
-											@Override
-											public void UIInputReceiverClosed(UIInputReceiver entry) {
-												if (!entry.hasSubmittedInput()){
-
-													return;
-												}
-
-												try {
-			  									String input = entry.getSubmittedInput().trim();
-
-			  									if ( input.length() > 0 ){
-
-			  										we.setCookies( input );
-
-			  										subs.getManager().getScheduler().downloadAsync(subs, true);
-			  									}
-												}catch( Throwable e ){
-
-													Debug.printStackTrace(e);
-												}
-											}
-										});
-									}
-								}catch( Throwable e ){
-
-									Debug.printStackTrace(e);
-								}
-							}
-						});
+			try {
+				boolean anyNeedsAuth = false;
+				for (Subscription sub : createFor.subs) {
+					Engine engine = sub.getEngine();
+					if ((engine instanceof WebEngine)
+						&& ((WebEngine) engine).isNeedsAuth()) {
+						anyNeedsAuth = true;
+						break;
 					}
 				}
-			}catch( Throwable e ){
+
+				if (anyNeedsAuth) {
+
+					menu_creator.newItem("Subscription.menu.resetauth",
+						(Selection_NoTemplates) (menu, sub) -> resetAuth(sub));
+
+					menu_creator.newItem("Subscription.menu.setcookies",
+						(SelectionList_NoTemplates) SubscriptionManagerUI::setCookies);
+				}
+			} catch (Throwable e) {
 
 				Debug.printStackTrace(e);
 			}
 
-				// sep
+			// ---
+			menu_creator.newSeparator();
 
-			menu_creator.createMenu( "s1").setStyle( MenuItem.STYLE_SEPARATOR );
+			// category
+			mi = menu_creator.newItem("MyTorrentsView.menu.setCategory");
+			mi.setStyle(MenuItem.STYLE_MENU);
+			mi.addFillListener((menu, data) -> addCategorySubMenu(menu_manager, menu,
+				getSubsFromTarget(data).subs));
 
-				// category
+			// tag
 
-			menuItem = menu_creator.createMenu( "MyTorrentsView.menu.setCategory");
-			menuItem.setStyle( MenuItem.STYLE_MENU );
+			mi = menu_creator.newItem("label.tag");
+			mi.setStyle(MenuItem.STYLE_MENU);
+			mi.addFillListener((menu, data) -> addTagSubMenu(menu_manager, menu,
+				getSubsFromTarget(data).subs));
 
-			menuItem.addFillListener(
-				new MenuItemFillListener()
-				{
-					@Override
-					public void
-					menuWillBeShown(
-						MenuItem 	menu,
-						Object 		data )
-					{
-						addCategorySubMenu( menu_manager, menu, subs );
-					}
-				});
+			// Set Parent/Group
+			menu_creator.newItem("menu.set.parent",
+				(SelectionList_NoTemplates) SubscriptionManagerUI::requestSetParentGroup);
 
-				// tag
+			Subscription[] all_subs = createFor.subs.toArray(new Subscription[0]);
+			addExecOnNewResultSubMenu(menu_manager, menu_creator, all_subs);
+			addDependsOnSubMenu(menu_manager, menu_creator, all_subs);
+			addViewOptionsSubMenu(menu_manager, menu_creator, all_subs);
+		}
 
-			menuItem = menu_creator.createMenu( "label.tag");
+		if (hasSingleSub) {
+			Subscription firstSub = createFor.subs.get(0);
 
-			menuItem.setStyle( MenuItem.STYLE_MENU );
+			// chat
 
-			menuItem.addFillListener(
-				new MenuItemFillListener()
-				{
-					@Override
-					public void
-					menuWillBeShown(
-						MenuItem 	menu,
-						Object 		data )
-					{
-						addTagSubMenu( menu_manager, menu, subs );
-					}
-				});
+			final String key = SubscriptionUtils.getSubscriptionChatKey(firstSub);
 
-				// parent
+			if (key != null) {
 
-			menuItem = menu_creator.createMenu( "menu.set.parent");
-
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(final Subscription subs) {
-					UISWTInputReceiver entry = new SimpleTextEntryWindow();
-					entry.setPreenteredText(subs.getParent(), false );
-					entry.maintainWhitespace(false);
-					entry.allowEmptyInput( true );
-					entry.setLocalisedTitle(MessageText.getString("label.set.parent",
-							new String[] {
-								subs.getName()
-							}));
-					entry.prompt(new UIInputReceiverListener() {
-						@Override
-						public void UIInputReceiverClosed(UIInputReceiver entry) {
-							if (!entry.hasSubmittedInput()){
-
-								return;
-							}
-
-							String input = entry.getSubmittedInput().trim();
-
-							if ( input.length() == 0 ){
-
-								input = null;
-							}
-
-							subs.setParent( input );
-
-						}
-					});
-				}
-			});
-
-				// view options
-			
-			menuItem = menu_creator.createMenu( "menu.view.options");
-
-			menuItem.setStyle( MenuItem.STYLE_MENU );
-
-			menuItem.addFillListener(
-				new MenuItemFillListener()
-				{
-					@Override
-					public void
-					menuWillBeShown(
-						MenuItem 	menu,
-						Object 		data )
-					{
-						menu.removeAllChildItems();
-
-						int vo = subs.getViewOptions();
-						
-						MenuItem m = menu_manager.addMenuItem( menu, "label.full" );
-
-						m.setStyle( MenuItem.STYLE_RADIO );
-
-						m.setData(Boolean.valueOf( vo == Subscription.VO_FULL ));
-
-						m.addListener(new SubsMenuItemListener() {
-							@Override
-							public void selected(final Subscription subs) {
-								subs.setViewOptions( Subscription.VO_FULL);
-							}});
-						
-						m = menu_manager.addMenuItem( menu, "label.no.header" );
-
-						m.setStyle( MenuItem.STYLE_RADIO );
-
-						m.setData(Boolean.valueOf( vo == Subscription.VO_HIDE_HEADER ));
-						
-						m.addListener(new SubsMenuItemListener() {
-							@Override
-							public void selected(final Subscription subs) {
-								subs.setViewOptions( Subscription.VO_HIDE_HEADER);
-							}});
-					}
-				});
-			
-				// chat
-
-			final String key = SubscriptionUtils.getSubscriptionChatKey( subs );
-
-			if ( key != null ){
-
-				menuItem = menu_creator.createMenu( "label.chat");
+				MenuItem menuItem = menu_creator.newItem("label.chat");
 				menuItem.setHeaderCategory(MenuItem.HEADER_SOCIAL);
 
-				MenuBuildUtils.addChatMenu(
-					menu_manager,
-					menuItem,
+				MenuBuildUtils.addChatMenu(menu_manager, menuItem,
 					new MenuBuildUtils.ChatKeyResolver()
 					{
 						@Override
-						public String getResourceKey(){
-							return( "menu.discuss.subs" );
+						public String getResourceKey() {
+							return ("menu.discuss.subs");
 						}
-						
+
 						@Override
 						public String getChatKey(Object object) {
 
-							return( key );
+							return (key);
 						}
 					});
 			}
 
-			if ( subs.isUpdateable()){
+		} // hasSingleSub
 
-				menuItem = menu_creator.createMenu( "MyTorrentsView.menu.rename");
-				menuItem.addListener(new SubsMenuItemListener() {
-					@Override
-					public void selected(final Subscription subs) {
-						UISWTInputReceiver entry = new SimpleTextEntryWindow();
-						entry.setPreenteredText(subs.getName(), false );
-						entry.maintainWhitespace(false);
-						entry.allowEmptyInput( false );
-						entry.setLocalisedTitle(MessageText.getString("label.rename",
-								new String[] {
-									subs.getName()
-								}));
-						entry.prompt(new UIInputReceiverListener() {
-							@Override
-							public void UIInputReceiverClosed(UIInputReceiver entry) {
-								if (!entry.hasSubmittedInput()){
+		if (hasSubs) {
+			menu_creator.newItem("MyTorrentsView.menu.rename",
+				(SelectionList_NoTemplates) SubscriptionManagerUI::renameSubs);
 
-									return;
-								}
-
-								String input = entry.getSubmittedInput().trim();
-
-								if ( input.length() > 0 ){
-
-									try{
-										subs.setName( input );
-
-									}catch( Throwable e ){
-
-										Debug.printStackTrace(e);
-									}
-								}
-							}
-						});
+			menu_creator.newItem("Subscription.menu.upgrade",
+				(Selection_NoTemplates) (menu, sub) -> {
+					if (sub.getHighestVersion() > sub.getVersion()) {
+						sub.resetHighestVersion();
 					}
-				});
-			}
-
-			menuItem = menu_creator.createMenu( "Subscription.menu.upgrade");
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					subs.resetHighestVersion();
+				}).addFillListener((menu, data) -> {
+				boolean visible = false;
+				SubsLists subsLists = getSubsFromTarget(data);
+				for (Subscription sub : subsLists.subs) {
+					if (sub.getHighestVersion() > sub.getVersion()) {
+						visible = true;
+						break;
+					}
 				}
+				menu.setVisible(visible);
 			});
-
-			menuItem.addFillListener(
-				new MenuItemFillListener()
-				{
-					@Override
-					public void
-					menuWillBeShown(
-						MenuItem 	menu,
-						Object 		data )
-					{
-						menu.setVisible( subs.getHighestVersion() > subs.getVersion());
-					}
-				});
 		}
 
-		MenuItem menuItem = menu_creator.createMenu( "label.copy.uri.to.clip");
-		menuItem.addListener(new SubsMenuItemListener() {
-			@Override
-			public void selected(Subscription subs) {
-				ClipboardCopy.copyToClipBoard( subs.getURI());
-			}
-		});
-
-		menuItem = menu_creator.createMenu( "Subscription.menu.export");
-		menuItem.addListener(new SubsMenuItemListener() {
-			@Override
-			public void selected(Subscription subs) {
-				export( subs );
-			}
-		});
-
-			// sep
-
-		menu_creator.createMenu( "s2").setStyle( MenuItem.STYLE_SEPARATOR );
-
-		if ( !is_search_template ){
-				// change url
-
-			try{
-				Engine engine = subs.getEngine();
-
-				if ( engine instanceof WebEngine ){
-
-					menuItem = menu_creator.createMenu( "menu.change.url");
-					menuItem.addListener(new SubsMenuItemListener() {
-						@Override
-						public void selected(final Subscription subs) {
-							UISWTInputReceiver entry = new SimpleTextEntryWindow();
-
-							try{
-								WebEngine web_engine = (WebEngine)subs.getEngine();
-
-								entry.setPreenteredText(web_engine.getSearchUrl( true ), false );
-								entry.maintainWhitespace(false);
-								entry.allowEmptyInput( false );
-								entry.setLocalisedTitle(MessageText.getString("change.url.msg.title",
-										new String[] {
-											subs.getName()
-										}));
-								entry.setMessage( "change.url.msg.desc" );
-								entry.prompt(new UIInputReceiverListener() {
-									@Override
-									public void UIInputReceiverClosed(UIInputReceiver entry) {
-										if (!entry.hasSubmittedInput()){
-
-											return;
-										}
-
-										String input = entry.getSubmittedInput().trim();
-
-										if ( input.length() > 0 ){
-
-											try{
-												WebEngine web_engine = (WebEngine)subs.getEngine();
-
-												web_engine.setSearchUrl( input );
-
-												subs.cloneWithNewEngine( web_engine );
-
-											}catch( Throwable e ){
-
-												Debug.out(e);
-											}
-										}
-									}
-								});
-							}catch( Throwable e ){
-
-								Debug.out( e );
-							}
-						}
-					});
-
-				}
-			}catch( Throwable e ){
-				Debug.out( e );
-			}
-
-				// public
-
-			menuItem = menu_creator.createMenu( "subs.prop.is_public");
-			menuItem.setStyle( MenuItem.STYLE_CHECK );
-
-			menuItem.addFillListener( new MenuItemFillListener(){
-				@Override
-				public void menuWillBeShown(MenuItem menu, Object data ){
-					menu.setData( subs.isPublic());
-				}});
-
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					try{
-						subs.setPublic( !subs.isPublic());
-					}catch( Throwable e ){
-						Debug.out(e);
-					}
-				}
-			});
-
-				// enabled
-
-			menuItem = menu_creator.createMenu( "subs.prop.enabled");
-			menuItem.setStyle( MenuItem.STYLE_CHECK );
-
-			menuItem.addFillListener( new MenuItemFillListener(){
-				@Override
-				public void menuWillBeShown(MenuItem menu, Object data ){
-					menu.setData( subs.getHistory().isEnabled());
-				}});
-
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					try{
-						subs.getHistory().setEnabled( !subs.getHistory().isEnabled());
-					}catch( Throwable e ){
-						Debug.out(e);
-					}
-				}
-			});
-
-			if ( subs.isAutoDownloadSupported()){
-
-					// auto-dl
-
-				menuItem = menu_creator.createMenu( "subs.prop.is_auto");
-				menuItem.setStyle( MenuItem.STYLE_CHECK );
-
-				menuItem.addFillListener( new MenuItemFillListener(){
-					@Override
-					public void menuWillBeShown(MenuItem menu, Object data ){
-						menu.setData( subs.getHistory().isAutoDownload());
-					}});
-
-				menuItem.addListener(new SubsMenuItemListener() {
-					@Override
-					public void selected(Subscription subs) {
-						try{
-							subs.getHistory().setAutoDownload(!subs.getHistory().isAutoDownload());
-						}catch( Throwable e ){
-							Debug.out(e);
-						}
-					}
+		if (!hasMany) {
+			menu_creator.newItem("label.copy.uri.to.clip")
+				.addListener((menu, target) -> {
+					SubsLists subsLists = getSubsFromTarget(target);
+					Subscription sub =
+						subsLists.subs.isEmpty() ? subsLists.templates.get(0)
+							: subsLists.subs.get(0);
+					ClipboardCopy.copyToClipBoard(sub.getURI());
 				});
-			}
 
-				// refresh period
+			menu_creator.newItem("Subscription.menu.export")
+				.addListener((menu, target) -> {
+					SubsLists subsLists = getSubsFromTarget(target);
+					Subscription sub =
+						subsLists.subs.isEmpty() ? subsLists.templates.get(0)
+							: subsLists.subs.get(0);
+					export(sub);
+				});
 
-			menuItem = menu_creator.createMenu(  "subs.prop.update_period" );
+			menu_creator.newSeparator();
+		}
 
-			menuItem.addFillListener( new MenuItemFillListener(){
-				@Override
-				public void menuWillBeShown(MenuItem menu, Object data ){
-					int check_freq = subs.getHistory().getCheckFrequencyMins();
+		if (hasSingleSub) {
+			Subscription firstSub = createFor.subs.get(0);
 
-					String text = MessageText.getString( "subs.prop.update_period" );
+			// change url
 
-					if ( check_freq!=Integer.MAX_VALUE ){
+			try {
+				Engine engine = firstSub.getEngine();
 
-						text += " (" +  check_freq + " " + MessageText.getString( "ConfigView.text.minutes") + ")";
-					}
+				if (engine instanceof WebEngine) {
 
-					menu.setText( text + "..." );
-				}});
-
-
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(final Subscription subs) {
-					UISWTInputReceiver entry = new SimpleTextEntryWindow();
-					entry.maintainWhitespace(false);
-					entry.allowEmptyInput( false );
-
-					int check_freq = subs.getHistory().getCheckFrequencyMins();
-
-					entry.setPreenteredText( check_freq==Integer.MAX_VALUE?"":String.valueOf( check_freq ), false );
-
-					entry.setLocalisedTitle(MessageText.getString("subscriptions.enter.freq"));
-
-					entry.prompt(new UIInputReceiverListener() {
-						@Override
-						public void UIInputReceiverClosed(UIInputReceiver entry) {
-							if (!entry.hasSubmittedInput()) {
-								return;
-							}
-							String input = entry.getSubmittedInput().trim();
-
-							if ( input.length() > 0 ){
-
-								try{
-									subs.getHistory().setCheckFrequencyMins( Integer.parseInt( input ));
-
-								}catch( Throwable e ){
-
-								}
-							}
-						}
-					});
+					menu_creator.newItem("menu.change.url",
+						(Selection_NoTemplates) (menu, sub) -> requestChangeEngineURL(sub));
 				}
+			} catch (Throwable e) {
+				Debug.out(e);
+			}
+		}
+
+		if (hasSubs) {
+			// public
+
+			menu_creator.newCheckItem("subs.prop.is_public",
+				(Selection_NoTemplates) (item, sub) -> {
+					if (sub.isUpdateable()) {
+						sub.setPublic(item.isSelected());
+					}
+				}).addFillListener((menu, data) -> {
+				SubsLists subsFromTarget = getSubsFromTarget(data);
+				boolean checked = false;
+				boolean allUpdateable = true;
+				for (Subscription sub : subsFromTarget.subs) {
+					if (!sub.isUpdateable()) {
+						allUpdateable = false;
+						break;
+					}
+					if (!checked && sub.isPublic()) {
+						checked = true;
+					}
+				}
+				menu.setVisible(allUpdateable);
+				menu.setData(checked);
 			});
+
+			// enabled
+
+			menu_creator.newCheckItem("subs.prop.enabled",
+				(Selection_NoTemplates) (menu, sub) -> sub.getHistory()
+					.setEnabled(menu.isSelected())).addFillListener((menu, data) -> {
+				SubsLists subsFromTarget = getSubsFromTarget(data);
+				boolean checked = false;
+				for (Subscription sub : subsFromTarget.subs) {
+					if (sub.getHistory().isEnabled()) {
+						checked = true;
+						break;
+					}
+				}
+				menu.setData(checked);
+			});
+
+			// auto-dl
+
+			menu_creator.newCheckItem("subs.prop.is_auto",
+				(Selection_NoTemplates) (menu, sub) -> sub.getHistory()
+					.setAutoDownload(menu.isSelected())).addFillListener((menu, data) -> {
+				SubsLists subsFromTarget = getSubsFromTarget(data);
+				boolean checked = false;
+				boolean anySupported = false;
+				for (Subscription sub : subsFromTarget.subs) {
+					if (sub.isAutoDownloadSupported()) {
+						anySupported = true;
+
+						if (sub.getHistory().isAutoDownload()) {
+							checked = true;
+							break;
+						}
+					}
+				}
+				menu.setVisible(anySupported);
+				menu.setData(checked);
+			});
+
+			// refresh period
+
+			menu_creator.newItem("subs.prop.update_period",
+					(SelectionList_NoTemplates) SubscriptionManagerUI::requestSetRefreshPeriod)
+				.addFillListener((menu, data) -> {
+					String text = MessageText.getString("subs.prop.update_period");
+
+					SubsLists subsFromTarget = getSubsFromTarget(data);
+					if (subsFromTarget.subs.size() == 1) {
+
+						int check_freq = subsFromTarget.subs.get(0)
+							.getHistory()
+							.getCheckFrequencyMins();
+
+						if (check_freq != Integer.MAX_VALUE) {
+
+							text += " (" + check_freq + " " + MessageText.getString(
+								"ConfigView.text.minutes") + ")";
+						}
+
+					}
+					menu.setText(text + "...");
+				});
 
 			// dl is anon
 
-			menuItem = menu_creator.createMenu( "subs.prop.is_dl_anon");
-			menuItem.setStyle( MenuItem.STYLE_CHECK );
+			menu_creator.newCheckItem("subs.prop.is_dl_anon",
+					(Selection_NoTemplates) (menu, sub) -> sub.getHistory()
+						.setDownloadNetworks(
+							menu.isSelected() ? AENetworkClassifier.AT_NON_PUBLIC : null))
+				.addFillListener((menu, data) -> menu.setData(
+					getSubsFromTarget(data).subs.stream()
+						.anyMatch(sub -> sub.getHistory().getDownloadNetworks() != null)));
 
-			menuItem.addFillListener( new MenuItemFillListener(){
-				@Override
-				public void menuWillBeShown(MenuItem menu, Object data ){
-					menu.setData( subs.getHistory().getDownloadNetworks()!=null);
-				}});
+			// post notification
 
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					try{
-						boolean is_anon = subs.getHistory().getDownloadNetworks()!=null;
+			menu_creator.newCheckItem("subs.noti.post",
+					(Selection_NoTemplates) (menu, sub) -> sub.getHistory()
+						.setNotificationPostEnabled(menu.isSelected()))
+				.addFillListener((menu, data) -> menu.setData(
+					getSubsFromTarget(data).subs.stream()
+						.anyMatch(sub -> sub.getHistory().getNotificationPostEnabled())));
 
-						subs.getHistory().setDownloadNetworks(is_anon?null:AENetworkClassifier.AT_NON_PUBLIC);
-					}catch( Throwable e ){
-						Debug.out(e);
-					}
-				}
-			});
+			// max results
 
-				// post notification
+			menu_creator.newItem("label.set.max.results",
+					(SelectionList_NoTemplates) SubscriptionManagerUI::requestSetMaxResults)
+				.addFillListener((menu, data) -> {
+					String text = MessageText.getString("label.set.max.results");
 
-			menuItem = menu_creator.createMenu( "subs.noti.post");
-			menuItem.setStyle( MenuItem.STYLE_CHECK );
+					SubsLists subsFromTarget = getSubsFromTarget(data);
+					if (subsFromTarget.subs.size() == 1) {
+						int max_results = subsFromTarget.subs.get(0)
+							.getHistory()
+							.getMaxNonDeletedResults();
 
-			menuItem.addFillListener( new MenuItemFillListener(){
-				@Override
-				public void menuWillBeShown(MenuItem menu, Object data ){
-					menu.setData( subs.getHistory().getNotificationPostEnabled());
-				}});
+						if (max_results < 0) {
 
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(Subscription subs) {
-					try{
-						subs.getHistory().setNotificationPostEnabled(!subs.getHistory().getNotificationPostEnabled());
-					}catch( Throwable e ){
-						Debug.out(e);
-					}
-				}
-			});
-				// max results
+							SubscriptionManager subs_man = SubscriptionManagerFactory.getSingleton();
 
-			menuItem = menu_creator.createMenu( "label.set.max.results" );
-
-			menuItem.addFillListener( new MenuItemFillListener(){
-				@Override
-				public void menuWillBeShown(MenuItem menu, Object data ){
-					int max_results = subs.getHistory().getMaxNonDeletedResults();
-
-					if ( max_results < 0 ){
-
-						SubscriptionManager subs_man = SubscriptionManagerFactory.getSingleton();
-
-						max_results = subs_man.getMaxNonDeletedResults();
-					}
-
-					String max_results_str = (max_results==0?MessageText.getString( "ConfigView.unlimited" ):String.valueOf( max_results ));
-
-					String text = MessageText.getString( "label.set.max.results" );
-
-					text += " (" + max_results_str + ")";
-
-					menu.setText( text + "..." );
-				}});
-
-
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(final Subscription subs) {
-					UISWTInputReceiver entry = new SimpleTextEntryWindow();
-					entry.maintainWhitespace(false);
-					entry.allowEmptyInput( true );
-
-					int max_results = subs.getHistory().getMaxNonDeletedResults();
-
-					if ( max_results < 0 ){
-
-						SubscriptionManager subs_man = SubscriptionManagerFactory.getSingleton();
-
-						max_results = subs_man.getMaxNonDeletedResults();
-					}
-
-					if ( max_results > 0 ){
-
-						entry.setPreenteredText( String.valueOf( max_results ), false );
-					}
-
-					entry.setLocalisedTitle(MessageText.getString("subscriptions.enter.max.results"));
-
-					entry.prompt(new UIInputReceiverListener() {
-						@Override
-						public void UIInputReceiverClosed(UIInputReceiver entry) {
-							if (!entry.hasSubmittedInput()) {
-								return;
-							}
-							String input = entry.getSubmittedInput().trim();
-
-							try{
-								subs.getHistory().setMaxNonDeletedResults( input.length()==0?-1:Math.abs( Integer.parseInt( input )));
-
-							}catch( Throwable e ){
-
-								Debug.out( e );
-							}
+							max_results = subs_man.getMaxNonDeletedResults();
 						}
-					});
-				}
-			});
 
-				// rename
+						String max_results_str = (max_results == 0 ? MessageText.getString(
+							"ConfigView.unlimited") : String.valueOf(max_results));
 
-			menuItem = menu_creator.createMenu( "MyTorrentsView.menu.rename" );
-			menuItem.addListener(new SubsMenuItemListener() {
-				@Override
-				public void selected(final Subscription subs) {
-					UISWTInputReceiver entry = new SimpleTextEntryWindow();
-					entry.maintainWhitespace(false);
-					entry.allowEmptyInput( false );
+						text += " (" + max_results_str + ")";
+					}
 
-					entry.setPreenteredText(subs.getName(), false );
+					menu.setText(text + "...");
+				});
 
-					entry.maintainWhitespace(false);
+		} // hasSubs
 
-					entry.allowEmptyInput( false );
+		mi = menu_creator.newItem("Subscription.menu.remove",
+			(menu, target) -> removeWithConfirm(
+				getSubsFromTarget(target, SubsLists.createOneList()).subs));
+		Utils.setMenuItemImage(mi, "delete");
 
-					entry.setLocalisedTitle(MessageText.getString("label.rename",
-							new String[] {
-							subs.getName()
-					}));
+		////
 
-					entry.prompt(new UIInputReceiverListener() {
-						@Override
-						public void UIInputReceiverClosed(UIInputReceiver entry) {
-							if (!entry.hasSubmittedInput()) {
-								return;
-							}
-							String input = entry.getSubmittedInput().trim();
+		menu_creator.newSeparator();
 
-							if ( input.length() > 0 ){
+		// Properties
 
-								subs.setLocalName( input );
-							}
-						}
-					});
-				}
+		if (total == 1) {
+			menu_creator.newItem("Subscription.menu.properties", (menu, target) -> {
+				// Should already be in SWT THread, but just in case..
+				Utils.execSWTThread(() -> showProperties(
+					getSubsFromTarget(target, SubsLists.createOneList()).subs.get(0)));
 			});
 		}
+	}
 
+	private static void renameSubs(List<Subscription> subs) {
+		if (subs.isEmpty()) {
+			return;
+		}
+		Subscription sub = subs.remove(0);
 
-		menuItem = menu_creator.createMenu( "Subscription.menu.remove");
+		SimpleTextEntryWindow inputReceiver = new SimpleTextEntryWindow();
 
-		Utils.setMenuItemImage(menuItem, "delete");
-
-		menuItem.addListener(new SubsMenuItemListener() {
-			@Override
-			public void selected(Subscription subs) {
-				removeWithConfirm( subs );
+		inputReceiver.setPreenteredText(sub.getName(), false);
+		inputReceiver.maintainWhitespace(false);
+		inputReceiver.allowEmptyInput(false);
+		inputReceiver
+				.setLocalisedTitle(MessageText.getString("label.rename", new String[] {
+					sub.getName()
+				}));
+		inputReceiver.prompt(entry -> {
+			if (!entry.hasSubmittedInput()) {
+				return;
 			}
-		});
 
-		menu_creator.createMenu( "s3").setStyle( MenuItem.STYLE_SEPARATOR );
+			String input = entry.getSubmittedInput();
+			if (!input.isEmpty()) {
+				try {
+					if (sub.isUpdateable()) {
+						sub.setName(input);
+					} else {
+						sub.setLocalName(input);
+					}
 
-		menuItem = menu_creator.createMenu( "Subscription.menu.properties");
-		menuItem.addListener(new SubsMenuItemListener() {
-			@Override
-			public void selected(Subscription subs){
-				showProperties( subs );
+				} catch (Throwable e) {
+
+					Debug.printStackTrace(e);
+				}
+			}
+
+			if (!subs.isEmpty()) {
+				renameSubs(subs);
 			}
 		});
 	}
 
+	private static void addViewOptionsSubMenu(
+		MenuManager menu_manager, 
+		MenuCreator menu_creator, 
+		Subscription[] all_subs) 
+	{
+		if (all_subs.length == 0) {
+			return;
+		}
+
+		MenuItem menuItem = menu_creator.newItem("menu.view.options");
+
+		menuItem.setStyle( MenuItem.STYLE_MENU );
+
+		menuItem.addFillListener((menu, data) -> {
+			menu.removeAllChildItems();
+
+			boolean allFull = true;
+			boolean allHide = true;
+			for (Subscription sub : all_subs) {
+				int vo = sub.getViewOptions();
+				if (allFull && vo != Subscription.VO_FULL) {
+					allFull = false;
+					if (!allHide) {
+						break;
+					}
+				}
+				if (allHide && vo != Subscription.VO_HIDE_HEADER) {
+					allHide = false;
+					if (!allFull) {
+						break;
+					}
+				}
+			}
+
+			MenuItem m = menu_manager.addMenuItem( menu, "label.full" );
+			m.setStyle( MenuItem.STYLE_RADIO );
+			m.setData(allFull);
+			m.addListener((Selection_NoTemplates) (mi, sub) -> sub.setViewOptions( Subscription.VO_FULL));
+
+			m = menu_manager.addMenuItem( menu, "label.no.header" );
+			m.setStyle( MenuItem.STYLE_RADIO );
+			m.setData(allHide);
+			m.addListener((Selection_NoTemplates) (mi, sub) -> sub.setViewOptions( Subscription.VO_HIDE_HEADER));
+		});
+	}
+
+	private static void
+	addExecOnNewResultSubMenu(
+		MenuManager		menu_manager,
+		MenuCreator		menu_creator,
+		Subscription[]	menu_subs )	
+	{
+		if ( menu_subs.length != 1 ){
+			
+			return;
+		}
+		
+		Subscription subs = menu_subs[0];
+		
+		MenuItem menuItem = menu_creator.newItem( "menu.exec.on.new.result");
+
+		menuItem.setStyle( MenuItem.STYLE_MENU );	
+		
+		menuItem.addFillListener(
+			new MenuItemFillListener()
+			{
+				@Override
+				public void
+				menuWillBeShown(
+					MenuItem 	menu,
+					Object 		data )
+				{
+					menu.removeAllChildItems();
+		
+					MenuItem mi = menu_manager.addMenuItem( menu, "label.script" );
+
+					String script = subs.getExecuteOnNewResult();
+
+					if ( script == null ){
+						
+						script = "";
+					}
+					
+					String f_script = script;
+					
+					if ( script.length() > 30 ){
+						script = script.substring( 0, 30);
+					}
+
+					String msg = MessageText.getString( "label.script" );
+
+					if ( script.length() > 0 ){
+
+						msg += ": " + script;
+					}
+
+					msg += "...";
+
+					mi.setText( msg );
+
+					mi.addListener((m,ev)->{
+						String msg2 = MessageText.getString( "UpdateScript.message" );
+		
+						SimpleTextEntryWindow entryWindow = new SimpleTextEntryWindow( "UpdateScript.title", "!" + msg2 + "!" );
+		
+						entryWindow.setPreenteredText( f_script, false );
+						
+						entryWindow.selectPreenteredText( true );
+		
+						entryWindow.prompt(new UIInputReceiverListener() {
+							@Override
+							public void UIInputReceiverClosed(UIInputReceiver entryWindow) {
+								if ( entryWindow.hasSubmittedInput()){
+		
+									String text = entryWindow.getSubmittedInput().trim();
+		
+									subs.setExecuteOnNewResult( text );
+								}
+							}
+						});
+					});
+				}});
+
+	}
+	
+	private static void
+	addDependsOnSubMenu(
+		MenuManager		menu_manager,
+		MenuCreator		menu_creator,
+		Subscription[]	menu_subs )	
+	{
+		MenuItem menuItem = menu_creator.newItem( "menu.depends.on");
+
+		menuItem.setStyle( MenuItem.STYLE_MENU );
+
+		menuItem.addFillListener(
+			new MenuItemFillListener()
+			{
+				@Override
+				public void
+				menuWillBeShown(
+					MenuItem 	menu,
+					Object 		data )
+				{
+					menu.removeAllChildItems();
+
+					SubscriptionManager subs_man = SubscriptionManagerFactory.getSingleton();
+
+					Subscription[] all_subs = subs_man.getSubscriptions( true );
+
+					List<Subscription>	templates = new ArrayList<>();
+					
+					for ( Subscription sub: all_subs ){
+						
+						if ( sub.isSubscriptionTemplate()){
+							
+							templates.add( sub );
+						}
+					}
+					
+					if ( templates.isEmpty()){
+						
+						MenuItem mi = menu_manager.addMenuItem( menu, "menu.no.subs.templates" );
+
+						mi.setStyle( MenuItem.STYLE_RADIO );
+						
+						mi.setData( true );
+						
+						mi.setEnabled( false );
+						
+						mi = menu_manager.addMenuItem( menu, "sep" );
+
+						mi.setStyle( MenuItem.STYLE_SEPARATOR );
+						
+						mi = menu_manager.addMenuItem( 
+								menu, 
+								"!" + MessageText.getString( "Wizard.Subscription.template.title" ) + "...!" );
+
+						mi.addListener((m,ev)->{
+														
+							new SubscriptionWizard( SubscriptionWizard.MODE_CREATE_TEMPLATE );
+						});
+						
+					}else{
+						
+						Set<Subscription>	enabled = new HashSet<>();
+						
+						List<Subscription> menu_templates 	= new ArrayList<>();
+						List<Subscription> menu_search		= new ArrayList<>();
+						
+						for ( Subscription subs: menu_subs ){
+							
+							if ( subs.isSearchTemplate()){
+								
+								menu_search.add( subs );
+								
+								continue;
+								
+							}else if ( subs.isSubscriptionTemplate()){
+								
+								menu_templates.add( subs );
+							}								
+							
+							List<Subscription> depends_on = subs.getDependsOn();
+							
+							if ( depends_on.isEmpty()){
+								
+								enabled.clear();
+								
+								break;
+								
+							}else{
+								
+								if ( enabled.isEmpty()){
+									
+									enabled.addAll( depends_on );
+									
+								}else{
+									
+									enabled.retainAll( depends_on );
+									
+									if ( enabled.isEmpty()){
+										
+										break;
+									}
+								}
+							}
+						}
+						
+						if ( menu_search.size() == menu_subs.length){
+							
+							return;
+						}
+						
+						Collections.sort( templates,(t1,t2)->t1.getName().compareTo(t2.getName()));
+						
+						for ( Subscription sub: templates ){
+							
+							if ( menu_templates.contains( sub )){
+								
+								continue;
+							}
+							
+							MenuItem mi = menu_manager.addMenuItem( menu, "!" + sub.getName() + "!" );
+
+							mi.setStyle( MenuItem.STYLE_CHECK );
+							
+							boolean enable = enabled.contains( sub );
+							
+							mi.setData( enable );
+
+							mi.addMultiListener((m,target)->{							
+								for ( Subscription s: menu_subs ){
+									
+									if ( s.isSearchTemplate()){
+										
+										continue;
+									}
+									
+									List<Subscription> deps = s.getDependsOn();
+									
+									if ( enable ){
+										
+										deps.remove( sub );
+										
+									}else{
+										
+										deps.add( sub );
+									}
+									
+									s.setDependsOn( deps );
+								}
+							});
+						}
+					}
+				}
+			});
+	}
+	
 	private static void
 	addCategorySubMenu(
 		MenuManager				menu_manager,
 		MenuItem				menu,
-		final Subscription		subs )
+		final List<Subscription> subs )
 	{
 		menu.removeAllChildItems();
+		
+		if (subs.isEmpty()) {
+			return;
+		}
 
 		Category[] categories = CategoryManager.getCategories();
 
@@ -2771,7 +2739,21 @@ SubscriptionManagerUI
 
 		if ( categories.length > 0 ){
 
-			String	assigned_category = subs.getCategory();
+			String assigned_category = null;
+			for (Subscription sub : subs) {
+				String cat = sub.getCategory();
+				if (assigned_category == null) {
+					if (cat == null) {
+						break;
+					}
+					assigned_category = cat;
+					continue;
+				}
+				if (!StringCompareUtils.equals(cat, assigned_category)) {
+					assigned_category = null;
+					break;
+				}
+			}
 
 			final Category uncat = CategoryManager.getCategory( Category.TYPE_UNCATEGORIZED );
 
@@ -2781,20 +2763,9 @@ SubscriptionManagerUI
 
 				m.setStyle( MenuItem.STYLE_RADIO );
 
-				m.setData(Boolean.valueOf(assigned_category == null));
+				m.setData(assigned_category == null);
 
-				m.addListener(
-					new MenuItemListener()
-					{
-						@Override
-						public void
-						selected(
-							MenuItem			menu,
-							Object 				target )
-						{
-							assignSelectedToCategory( subs, uncat );
-						}
-					});
+				m.addListener((menu1, target) -> assignSelectedToCategory( subs, uncat ));
 
 
 				m = menu_manager.addMenuItem( menu, "sep1" );
@@ -2802,9 +2773,7 @@ SubscriptionManagerUI
 				m.setStyle( MenuItem.STYLE_SEPARATOR );
 			}
 
-			for ( int i=0; i<categories.length; i++ ){
-
-				final Category cat = categories[i];
+			for (final Category cat : categories) {
 
 				if ( cat.getType() == Category.TYPE_USER) {
 
@@ -2812,22 +2781,12 @@ SubscriptionManagerUI
 
 					m.setStyle( MenuItem.STYLE_RADIO );
 
-					m.setData(Boolean.valueOf(assigned_category != null && assigned_category.equals(cat.getName())));
+					m.setData(assigned_category != null && assigned_category.equals(
+						cat.getName()));
 
 					TagUIUtils.setMenuIcon( m, cat );
-							
-					m.addListener(
-						new MenuItemListener()
-						{
-							@Override
-							public void
-							selected(
-								MenuItem			menu,
-								Object 				target )
-							{
-								assignSelectedToCategory( subs, cat );
-							}
-						});
+
+					m.addListener((menu2, target) -> assignSelectedToCategory(subs, cat));
 				}
 			}
 
@@ -2838,47 +2797,36 @@ SubscriptionManagerUI
 
 		m = menu_manager.addMenuItem( menu, "MyTorrentsView.menu.setCategory.add" );
 
-		m.addListener(
-				new MenuItemListener()
-				{
-					@Override
-					public void
-					selected(
-						MenuItem			menu,
-						Object 				target )
-					{
-						addCategory( subs );
-					}
-				});
+		m.addMultiListener((menu3, target) -> addCategory(
+				getSubsFromTarget(target).subs));
 
 	}
 
 	private static void
 	addCategory(
-		Subscription			subs )
+		List<Subscription>			subs )
 	{
-		CategoryUIUtils.showCreateCategoryDialog(new TagReturner() {
-			@Override
-			public void returnedTags(Tag[] tags) {
-				if (tags.length == 1 && tags[0] instanceof Category) {
-					assignSelectedToCategory(subs, (Category) tags[0]);
-				}
+		CategoryUIUtils.showCreateCategoryDialog(tags -> {
+			if (tags.length == 1 && tags[0] instanceof Category) {
+				assignSelectedToCategory(subs, (Category) tags[0]);
 			}
 		});
 	}
 
 	private static void
 	assignSelectedToCategory(
-		Subscription		subs,
+		List<Subscription>		subs,
 		Category 			category )
 	{
-		if ( category.getType() == Category.TYPE_UNCATEGORIZED ){
+		for (Subscription sub : subs) {
+			if ( category.getType() == Category.TYPE_UNCATEGORIZED ){
 
-			subs.setCategory( null );
+				sub.setCategory( null );
 
-		}else{
+			}else{
 
-			subs.setCategory( category.getName());
+				sub.setCategory( category.getName());
+			}
 		}
 	}
 
@@ -2886,159 +2834,48 @@ SubscriptionManagerUI
 	addTagSubMenu(
 		MenuManager				menu_manager,
 		MenuItem				menu,
-		final Subscription		subs )
+		List<Subscription> subs )
 	{
 		menu.removeAllChildItems();
 
 		TagManager tm = TagManagerFactory.getTagManager();
 
-		List<Tag> tags = tm.getTagType( TagType.TT_DOWNLOAD_MANUAL ).getTags();
-
-		tags = TagUtils.sortTags( tags );
-
-		long	tag_id = subs.getTagID();
-
-		Tag assigned_tag = tm.lookupTagByUID( tag_id );
-
-		MenuItem m = menu_manager.addMenuItem( menu, "label.no.tag" );
-
-		m.setStyle( MenuItem.STYLE_RADIO );
-
-		m.setData(Boolean.valueOf(assigned_tag == null));
-
-		m.addListener(
-			new MenuItemListener()
-			{
-				@Override
-				public void
-				selected(
-					MenuItem			menu,
-					Object 				target )
-				{
-					subs.setTagID( -1 );
-				}
-			});
-
-
-		m = menu_manager.addMenuItem( menu, "sep1" );
-
-		m.setStyle( MenuItem.STYLE_SEPARATOR );
-
-
-		List<String>	menu_names 		= new ArrayList<>();
-		Map<String,Tag>	menu_name_map 	= new IdentityHashMap<>();
-
-		for ( Tag t: tags ){
-
-			if ( !t.isTagAuto()[0]){
-
-				String name = t.getTagName( true );
-
-				menu_names.add( name );
-				menu_name_map.put( name, t );
+		Map<Tag, Integer> mapTaggableCount = new HashMap<>();
+		
+		for (Subscription sub : subs) {
+			Tag tag = tm.lookupTagByUID(sub.getTagID());
+			if (tag != null) {
+				mapTaggableCount.compute(tag, (t, num) -> num == null ? 1 : num + 1);
 			}
 		}
 
-		List<Object>	menu_structure = MenuBuildUtils.splitLongMenuListIntoHierarchy( menu_names, TagUIUtils.MAX_TOP_LEVEL_TAGS_IN_MENU );
-
-		for ( Object obj: menu_structure ){
-
-			List<Tag>	bucket_tags = new ArrayList<>();
-
-			MenuItem parent_menu;
-
-			if ( obj instanceof String ){
-
-				parent_menu = menu;
-
-				bucket_tags.add( menu_name_map.get((String)obj));
-
-			}else{
-
-				Object[]	entry = (Object[])obj;
-
-				List<String>	tag_names = (List<String>)entry[1];
-
-				boolean	has_selected = false;
-
-				for ( String name: tag_names ){
-
-					Tag tag = menu_name_map.get( name );
-
-					bucket_tags.add( tag );
-
-					if ( assigned_tag == tag ){
-
-						has_selected = true;
-					}
-				}
-
-				parent_menu = menu_manager.addMenuItem (menu, "!" + (String)entry[0] + (has_selected?" (*)":"") + "!" );
-
-				parent_menu.setStyle( MenuItem.STYLE_MENU );
-			}
-
-			for ( final Tag tag: bucket_tags ){
-
-				m = menu_manager.addMenuItem( parent_menu, tag.getTagName( false ));
-
-				m.setStyle( MenuItem.STYLE_RADIO );
-
-				m.setData(Boolean.valueOf(assigned_tag == tag));
-
-				TagUIUtils.setMenuIcon( m, tag );
-				
-				m.addListener(
-					new MenuItemListener()
-					{
-						@Override
-						public void
-						selected(
-							MenuItem			menu,
-							Object 				target )
-						{
-							subs.setTagID( tag.getTagUID());
-						}
-					});
-			}
-		}
-
-		m = menu_manager.addMenuItem( menu, "sep2" );
-
-		m.setStyle( MenuItem.STYLE_SEPARATOR );
-
-		m = menu_manager.addMenuItem( menu, "label.add.tag" );
-
-		m.addListener(
-			new MenuItemListener()
-			{
-				@Override
-				public void
-				selected(
-					MenuItem			menu,
-					Object 				target )
-				{
-					addTag( subs );
-				}
-			});
-	}
-
-	private static void
-	addTag(
-		final Subscription			subs )
-	{
-		TagUIUtilsV3.showCreateTagDialog(new UIFunctions.TagReturner() {
-			@Override
-			public void returnedTags(Tag[] tags) {
-				if ( tags != null ){
-					for (Tag new_tag : tags) {
-						subs.setTagID( new_tag.getTagUID());
-					}
-				}
+		MenuItem menuNoTag = menu_manager.addMenuItem(menu, "label.no.tag");
+		menuNoTag.setStyle(MenuItem.STYLE_RADIO);
+		menuNoTag.setData(mapTaggableCount.isEmpty());
+		menuNoTag.addListener((menu1, target) -> {
+			SubsLists subsLists = getSubsFromTarget(target);
+			for (Subscription sub : subsLists.subs) {
+				sub.setTagID(-1);
 			}
 		});
-	}
 
+		TagMenuOptions tagMenuOptions = TagMenuOptions.Builder()
+			.setParentPluginMenuItem(menu)
+			.setMenuManager(menu_manager)
+			.setMapTaggableCount(mapTaggableCount, subs.size())
+			.setTagSelectionListener((tag, checked) -> {
+					long tagUID = tag.getTagUID();
+					for (Subscription sub : subs) {
+						if (checked) {
+							sub.setTagID(tagUID);
+						} else if (sub.getTagID() == tagUID) {
+							sub.setTagID(-1);
+						}
+					}
+				})
+			.build();
+		TagUIUtils.createTagMenu(tagMenuOptions);
+	}
 
 	protected static void
 	export(
@@ -3074,6 +2911,15 @@ SubscriptionManagerUI
 						try{
 							VuzeFile vf = subs.getVuzeFile();
 
+							List<Subscription> deps = SubscriptionUtils.getDependsOnClosure(subs);
+							
+							if ( !deps.isEmpty()){
+								
+								for ( Subscription dep: deps ){
+									
+									vf.addComponents( dep.getVuzeFile());
+								}
+							}
 							vf.write( new File( path ));
 
 						}catch( Throwable e ){
@@ -3087,27 +2933,56 @@ SubscriptionManagerUI
 
 	protected static void
 	removeWithConfirm(
-		final Subscription		subs )
+		List<Subscription>		subs )
 	{
+		/** Code modelled after {@link TagUIUtils#removeTags(List)}*/
+		int numLeft = subs.size();
+		if (numLeft == 0) {
+			return;
+		}
+		final Subscription subToRemove = subs.get(0);
+
 		MessageBoxShell mb =
 			new MessageBoxShell(
 				MessageText.getString("message.confirm.delete.title"),
 				MessageText.getString("message.confirm.delete.text",
 						new String[] {
-							subs.getName()
+							subToRemove.getName()
 						}),
 				new String[] {
 					MessageText.getString("Button.yes"),
 					MessageText.getString("Button.no")
 				},
 				1 );
+		
+		if (numLeft > 1) {
+			String sDeleteAll = MessageText.getString("v3.deleteContent.applyToAll",
+				new String[] {
+					"" + numLeft
+				});
+			mb.addCheckBox("!" + sDeleteAll + "!", Parameter.MODE_BEGINNER, false);
+		}
 
-		mb.open(new UserPrompterResultListener() {
-			@Override
-			public void prompterClosed(int result) {
-				if (result == 0) {
-					subs.remove();
+		mb.open(result -> {
+			if (result == -1) {
+				// cancel
+				return;
+			}
+			boolean remove = result == 0;
+			boolean doAll = mb.getCheckBoxEnabled();
+			if (doAll) {
+				if (remove) {
+					for (Subscription sub : subs) {
+							sub.remove();
+					}
 				}
+			} else {
+				if (remove) {
+					subToRemove.remove();
+				}
+				// Loop with remaining to be removed
+				subs.remove(0);
+				removeWithConfirm(subs);
 			}
 		});
 	}
@@ -3117,8 +2992,6 @@ SubscriptionManagerUI
 		Subscription			subs )
 	{
 		SubscriptionHistory history = subs.getHistory();
-
-		SimpleDateFormat df = new SimpleDateFormat();
 
 		String last_error = history.getLastError();
 
@@ -3197,7 +3070,14 @@ SubscriptionManagerUI
 		int	 check_freq			= history.getCheckFrequencyMins();
 		long last_new_result 	= history.getLastNewResultTime();
 		long next_scan 			= history.getNextScanTime();
-
+		
+		long next_sched = history.getNextScheduledUpdate();
+		
+		if ( next_sched> 0 ){
+			
+			next_scan = next_sched;
+		}
+		
 		int max_results = history.getMaxNonDeletedResults();
 
 		if ( max_results < 0 ){
@@ -3216,10 +3096,10 @@ SubscriptionManagerUI
 				String.valueOf( subs.isAutoDownloadSupported()),
 				String.valueOf( history.getDownloadNetworks() != null ),
 				(check_freq==Integer.MAX_VALUE?"":(String.valueOf( history.getCheckFrequencyMins() + " " + MessageText.getString( "ConfigView.text.minutes")))),
-				df.format(new Date( history.getLastScanTime())),
-				( last_new_result==0?"":df.format(new Date( last_new_result ))),
-				( next_scan == Long.MAX_VALUE?"":df.format(new Date( next_scan ))),
-				(last_error.length()==0?MessageText.getString("label.none"):last_error),
+				DisplayFormatters.formatDateYMDHM( history.getLastScanTime()),
+				( last_new_result==0?"":DisplayFormatters.formatDateYMDHM( last_new_result )),
+				( next_scan == Long.MAX_VALUE?"":DisplayFormatters.formatDateYMDHM( next_scan )),
+				(last_error.length()==0?MessageText.getString("label.none"):( DisplayFormatters.formatDateYMDHM(history.getLastErrorTime())+ ": " +last_error)),
 				String.valueOf( history.getNumRead()),
 				String.valueOf( history.getNumUnread()),
 				max_results_str,
@@ -3264,6 +3144,274 @@ SubscriptionManagerUI
 		}
 	}
 
+	private static void resetAuth(Subscription sub) {
+		try {
+			Engine engine = sub.getEngine();
+
+			if (engine instanceof WebEngine) {
+
+				((WebEngine) engine).setCookies(null);
+			}
+		} catch (Throwable e) {
+
+			Debug.printStackTrace(e);
+		}
+
+		try {
+			sub.getManager().getScheduler().downloadAsync(sub, true);
+
+		} catch (Throwable e) {
+
+			Debug.out(e);
+		}
+	}
+
+	private static void requestSetParentGroup(List<Subscription> subs) {
+		UISWTInputReceiver receiver = new SimpleTextEntryWindow();
+		receiver.maintainWhitespace(false);
+		receiver.allowEmptyInput(true);
+		receiver.setLocalisedTitle(MessageText.getString("label.set.parent"));
+
+		Map<String, Integer> mapExisting = new HashMap<>();
+		for (Subscription sub : subs) {
+			String parent = sub.getParent();
+			if (parent != null) {
+				mapExisting.merge(parent, 1, (oldVal, val) -> oldVal + 1);
+			}
+		}
+		String[] nameItems = MapUtils.sortCount(mapExisting, 10);
+		if (nameItems != null) {
+			if (nameItems.length == 1) {
+				receiver.setPreenteredText(nameItems[0], false);
+			} else {
+				receiver.setSelectableItems(nameItems, 0, true);
+			}
+		}
+
+		receiver.prompt(entry -> {
+			if (!entry.hasSubmittedInput()) {
+
+				return;
+			}
+
+			String input = entry.getSubmittedInput().trim();
+
+			if (input.isEmpty()) {
+
+				input = null;
+			}
+
+			for (Subscription sub : subs) {
+
+				sub.setParent(input);
+			}
+		});
+	}
+
+	private static void requestChangeEngineURL(Subscription sub) {
+		UIInputReceiver entry = new SimpleTextEntryWindow();
+
+		try {
+			WebEngine web_engine = (WebEngine) sub.getEngine();
+
+			entry.setPreenteredText(web_engine.getSearchUrl(true), false);
+			entry.maintainWhitespace(false);
+			entry.allowEmptyInput(false);
+			entry.setLocalisedTitle(MessageText.getString("change.url.msg.title",
+				new String[]{
+					sub.getName()
+				}));
+			entry.setMessage("change.url.msg.desc");
+			entry.prompt(entry1 -> {
+				if (!entry1.hasSubmittedInput()) {
+
+					return;
+				}
+
+				String input = entry1.getSubmittedInput().trim();
+
+				if (!input.isEmpty()) {
+
+					Utils.getOffOfSWTThread(()->{
+						try {
+							WebEngine web_engine1 = (WebEngine) sub.getEngine();
+	
+							web_engine1.setSearchUrl(input);
+	
+							sub.cloneWithNewEngine(web_engine1);
+	
+						} catch (Throwable e) {
+	
+							Debug.out(e);
+						}
+					});
+				}
+			});
+		} catch (Throwable e) {
+
+			Debug.out(e);
+		}
+	}
+
+	private static void requestSetRefreshPeriod(List<Subscription> subs) {
+		SimpleTextEntryWindow receiver = new SimpleTextEntryWindow();
+		receiver.maintainWhitespace(false);
+		receiver.allowEmptyInput(false);
+
+		Map<String, Integer> mapExisting = new HashMap<>();
+		for (Subscription sub : subs) {
+			int check_freq = sub.getHistory().getCheckFrequencyMins();
+			mapExisting.merge(String.valueOf(check_freq), 1, (oldVal, val) -> oldVal + 1);
+		}
+		String[] nameItems = MapUtils.sortCount(mapExisting, 10);
+		if (nameItems != null) {
+			if (nameItems.length == 1) {
+				receiver.setPreenteredText(nameItems[0], false);
+			} else {
+				receiver.setSelectableItems(nameItems, 0, true);
+			}
+		}
+
+		receiver.setLocalisedTitle(MessageText.getString("subscriptions.enter.freq"));
+
+		receiver.prompt(e -> {
+			if (!e.hasSubmittedInput()) {
+				return;
+			}
+			String input = e.getSubmittedInput().trim();
+
+			if (input.isEmpty()) {
+				return;
+			}
+
+			for (Subscription sub : subs) {
+				try {
+					sub.getHistory().setCheckFrequencyMins(Integer.parseInt(input));
+
+				} catch (Throwable t) {
+
+				}
+			}
+		});
+	}
+
+	private static void requestSetMaxResults(List<Subscription> subs) {
+		UISWTInputReceiver receiver = new SimpleTextEntryWindow();
+		receiver.maintainWhitespace(false);
+		receiver.allowEmptyInput(true);
+
+		Map<String, Integer> mapExisting = new HashMap<>();
+		for (Subscription sub : subs) {
+			int max_results = sub.getHistory().getMaxNonDeletedResults();
+
+			if (max_results < 0) {
+				
+				SubscriptionManager subs_man = SubscriptionManagerFactory.getSingleton();
+
+				max_results = subs_man.getMaxNonDeletedResults();
+			}
+			if (max_results >= 0) {
+				mapExisting.merge(String.valueOf(max_results), 1, (oldVal, val) -> oldVal + 1);
+			}
+		}
+		String[] nameItems = MapUtils.sortCount(mapExisting, 10);
+		if (nameItems != null) {
+			if (nameItems.length == 1) {
+				receiver.setPreenteredText(nameItems[0], false);
+			} else {
+				receiver.setSelectableItems(nameItems, 0, true);
+			}
+		}
+
+		receiver.setLocalisedTitle(MessageText.getString("subscriptions.enter.max.results"));
+
+		receiver.prompt(entry -> {
+			if (!entry.hasSubmittedInput()) {
+				return;
+			}
+			String input = entry.getSubmittedInput().trim();
+
+			for (Subscription sub : subs) {
+				try {
+					sub.getHistory().setMaxNonDeletedResults(input.isEmpty() ? -1 : Math.abs(Integer.parseInt(input)));
+
+				} catch (Throwable e) {
+
+					Debug.out(e);
+				}
+			}
+		});
+	}
+
+	private static void setCookies(List<Subscription> subs) {
+		try {
+			UISWTInputReceiver entry = new SimpleTextEntryWindow();
+
+			Map<String, Integer> mapExisting = new HashMap<>();
+			for (Subscription sub : subs) {
+				Engine engine = sub.getEngine();
+
+				if (!(engine instanceof WebEngine)) {
+					continue;
+				}
+
+				String[] req = ((WebEngine) engine).getRequiredCookies();
+
+				String req_str = "";
+
+				for (String r : req) {
+
+					req_str += (req_str.isEmpty() ? "" : ";") + r + "=?";
+				}
+
+				mapExisting.merge(req_str, 1, (oldVal, val) -> oldVal + 1);
+			}
+			String[] nameItems = MapUtils.sortCount(mapExisting, 10);
+			if (nameItems != null) {
+				if (nameItems.length == 1) {
+					entry.setPreenteredText(nameItems[0], true);
+				} else {
+					entry.setSelectableItems(nameItems, 0, true);
+				}
+			}
+
+			entry.maintainWhitespace(false);
+			entry.allowEmptyInput(false);
+			entry.setTitle("general.enter.cookies");
+			entry.prompt(entry1 -> {
+				if (!entry1.hasSubmittedInput()) {
+					return;
+				}
+
+				String input = entry1.getSubmittedInput().trim();
+
+				if (input.isEmpty()) {
+					return;
+				}
+
+				for (Subscription sub : subs) {
+					try {
+						Engine engine = sub.getEngine();
+
+						if (!(engine instanceof WebEngine)) {
+							continue;
+						}
+
+						((WebEngine) engine).setCookies(input);
+
+						sub.getManager().getScheduler().downloadAsync(sub, true);
+					} catch (Throwable e) {
+
+						Debug.printStackTrace(e);
+					}
+				}
+			});
+		} catch (Throwable e) {
+
+			Debug.printStackTrace(e);
+		}
+	}
+
 	private static String
 	toString(
 		String[]	strs )
@@ -3277,53 +3425,139 @@ SubscriptionManagerUI
 		return( res );
 	}
 
-	private abstract static class SubsMenuItemListener implements MenuItemListener {
-		@Override
-		public final void selected(MenuItem menu, Object target) {
-			if (target instanceof MdiEntry) {
-				MdiEntry info = (MdiEntry) target;
-				Subscription subs = (Subscription) info.getDataSource();
+	/**
+	 * List of {@link Subscription}s, split by {@link #subs} and {@link #templates}
+	 */
+	public static class SubsLists {
+		public SubsLists(Subscription... subs) {
+			Collections.addAll(this.subs, subs);
+		}
+
+		/**
+		 * Put subs and templates in one list, retaining order.
+		 * </p>
+		 * Both {@link #subs} and {@link #templates} will be the same List.
+		 */
+		public static SubsLists createOneList() {
+			SubsLists subsLists = new SubsLists();
+			subsLists.subs = subsLists.templates;
+			return subsLists;
+		}
+
+		List<Subscription> subs = new ArrayList<>();
+		List<Subscription> templates = new ArrayList<>();
+	}
+
+	public static SubsLists getSubsFromTarget(Object target) {
+		return getSubsFromTarget(target, new SubsLists());
+	}
+
+	private static SubsLists getSubsFromTarget(Object target, SubsLists lists) {
+		if (target instanceof MdiEntry) {
+			MdiEntry info = (MdiEntry) target;
+			Subscription sub = (Subscription) info.getDataSource();
+
+			try {
+				(sub.isSearchTemplate() ? lists.templates : lists.subs).add(sub);
+			} catch (Throwable t) {
+				Debug.out(t);
+			}
+		} else if (target instanceof TableRow) {
+
+			Object ds = ((TableRow) target).getDataSource();
+
+			if (ds instanceof Subscription) {
 
 				try {
-					selected( subs);
+					Subscription sub = (Subscription) ds;
+					(sub.isSearchTemplate() ? lists.templates : lists.subs).add(sub);
+
 				} catch (Throwable t) {
 					Debug.out(t);
 				}
-			}else if ( target instanceof TableRow ){
+			}
+		} else if (target instanceof TableRow[]) {
+			TableRow[] rows = (TableRow[]) target;
+			for (TableRow row : rows) {
+				Object ds = row.getDataSource();
 
-				Object ds = ((TableRow)target).getDataSource();
+				if (ds instanceof Subscription) {
+					Subscription sub = (Subscription) ds;
+					(sub.isSearchTemplate() ? lists.templates : lists.subs).add(sub);
+				}
+			}
+		} else if (target instanceof Subscription) {
+			Subscription sub = (Subscription) target;
+			(sub.isSearchTemplate() ? lists.templates : lists.subs).add(sub);
+		} else if (target.getClass().isArray()) {
+			Object[] entries = (Object[]) target;
+			for (Object entry : entries) {
+				if ( entry instanceof Subscription ){
+					Subscription sub = (Subscription) entry;
+					(sub.isSearchTemplate() ? lists.templates : lists.subs).add(sub);
+				}else  if (entry instanceof MdiEntry) {
+					Object ds = ((UIPluginView) entry).getDataSource();
+					if (ds instanceof Subscription) {
+						Subscription sub = (Subscription) ds;
+						(sub.isSearchTemplate() ? lists.templates : lists.subs).add(sub);
+					}
+				}
+			}
+		} else {
+			Debug.out("target " + target + " not handled");
+		}
 
-				if ( ds instanceof Subscription ){
+		return lists;
+	}
 
+	/**
+	 * Moves off SWT Thread, invokes {@link #selected(List<Subscription>)} with
+	 * a list of Subscriptions that are not templates.
+	 * <p/>
+	 * Use with {@link MenuItem#addMultiListener(MenuItemListener)}.
+	 * <p/>
+	 * Can be used with {@link MenuItem#addListener(MenuItemListener)}, but for
+	 * each item, there will be a thread and a call to 
+	 * {@link #selected(List<Subscription>)} with just one entry.
+	 */
+	private interface SelectionList_NoTemplates
+			extends MenuItemListener
+	{
+		@Override
+		default void selected(MenuItem menu, Object target) {
+			Utils.getOffOfSWTThread(() -> selected(getSubsFromTarget(target).subs));
+		}
+
+		void selected(List<Subscription> subs);
+	}
+
+	/**
+	 * Moves off SWT Thread, invokes {@link #selected(MenuItem, Subscription)}
+	 * for every subscription, ignoring templates.
+	 * <p/>
+	 * Use with {@link MenuItem#addMultiListener(MenuItemListener)}.
+	 * <p/>
+	 * Can be used with {@link MenuItem#addListener(MenuItemListener)}, but will
+	 * result in a new thread for each item.
+	 */
+	private interface Selection_NoTemplates
+			extends MenuItemListener
+	{
+		@Override
+		default void selected(MenuItem menu, Object target) {
+			Utils.getOffOfSWTThread(() -> {
+				SubsLists subsLists = getSubsFromTarget(target);
+				for (Subscription s : subsLists.subs) {
 					try {
-						selected((Subscription)ds);
-
+						selected(menu, s);
 					} catch (Throwable t) {
 						Debug.out(t);
 					}
 				}
-			}else if ( target instanceof TableRow[] ){
-				TableRow[] rows = (TableRow[] )target;
-				List<Subscription>	subs = new ArrayList<>();
-				for ( TableRow row: rows ){
-					Object ds = row.getDataSource();
-
-					if ( ds instanceof Subscription ){
-						subs.add((Subscription)ds);
-					}
-				}
-				selected(subs.toArray( new Subscription[0]));
-			}else if ( target instanceof Subscription ){
-				selected((Subscription)target);
-			}
+			});
 		}
 
-		public void selected(Subscription subs){ Debug.out( "Missing override?");}
-		public void selected(Subscription subs[]){
-			for ( Subscription s: subs ){
-				selected( s );
-			}
-		}
+		void selected(MenuItem menuItem, Subscription sub) throws Throwable;
 	}
 
 	protected static class
@@ -3343,6 +3577,13 @@ SubscriptionManagerUI
 			title = _title;
 		}
 
+		@Override
+		public boolean 
+		builderNotRequired()
+		{
+			return( true );	// suppress warning about builder possibly being lost
+		}
+		
 		public String
 		getTitle()
 		{

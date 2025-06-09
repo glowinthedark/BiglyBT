@@ -121,15 +121,15 @@ public class Wizard {
     Utils.linkShellMetricsToConfig(wizardWindow, wizardKey);
     
     Composite cTitle = new Composite(wizardWindow, SWT.NULL);
-    Color white = Colors.getSystemColor(display, SWT.COLOR_WHITE);
-    cTitle.setBackground(white);
+    Color bg = Utils.isDarkAppearanceNative()?null:Colors.getSystemColor(display, SWT.COLOR_WHITE);
+    cTitle.setBackground(bg);
     GridData gridData = new GridData(GridData.FILL_HORIZONTAL);
     cTitle.setLayoutData(gridData);
     GridLayout titleLayout = new GridLayout();
     titleLayout.numColumns = 1;
     cTitle.setLayout(titleLayout);
     title = new Label(cTitle, SWT.NULL);
-    title.setBackground(white);
+    title.setBackground(bg);
     gridData = new GridData(GridData.FILL_HORIZONTAL);
     title.setLayoutData(gridData);
     Font font = title.getFont();
@@ -142,23 +142,23 @@ public class Wizard {
     currentInfo = new Label(cTitle, SWT.WRAP);
     gridData = Utils.getWrappableLabelGridData(1, GridData.FILL_HORIZONTAL );
     currentInfo.setLayoutData(gridData);
-    currentInfo.setBackground(white);
+    currentInfo.setBackground(bg);
     errorMessage = new Label(cTitle, SWT.NULL);
     gridData = new GridData(GridData.FILL_HORIZONTAL);
     errorMessage.setLayoutData(gridData);
-    errorMessage.setBackground(white);
+    errorMessage.setBackground(bg);
     Color red = Colors.getSystemColor(display, SWT.COLOR_RED);
     errorMessage.setForeground(red);
 
     gridData = new GridData(GridData.FILL_HORIZONTAL);
-    new Label(wizardWindow, SWT.SEPARATOR | SWT.HORIZONTAL).setLayoutData(gridData);
+    Utils.createSkinnedLabelSeparator(wizardWindow, SWT.HORIZONTAL).setLayoutData(gridData);
 
     panel = new Composite(wizardWindow, SWT.NULL);
     gridData = new GridData(GridData.FILL_BOTH);
     panel.setLayoutData(gridData);
 
     gridData = new GridData(GridData.FILL_HORIZONTAL);
-    new Label(wizardWindow, SWT.SEPARATOR | SWT.HORIZONTAL).setLayoutData(gridData);
+    Utils.createSkinnedLabelSeparator(wizardWindow, SWT.HORIZONTAL).setLayoutData(gridData);
 
     Composite cButtons = new Composite(wizardWindow, SWT.NULL);
     gridData = new GridData(GridData.FILL_HORIZONTAL);
@@ -203,8 +203,9 @@ public class Wizard {
        */
       @Override
       public void handleEvent(Event arg0) {
+    	IWizardPanel<?>	prevPanel = currentPanel.getPreviousPanel();
         clearPanel();
-        currentPanel = currentPanel.getPreviousPanel();
+        currentPanel = prevPanel;
         refresh();
       }
     });

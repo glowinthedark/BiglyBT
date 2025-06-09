@@ -3,6 +3,8 @@ package com.biglybt.core.util;
 import java.util.*;
 
 import com.biglybt.core.devices.Device;
+import com.biglybt.core.peer.PEPeer;
+import com.biglybt.pif.peers.Peer;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
 
 public class 
@@ -16,6 +18,11 @@ DataSourceResolver
 	exportDataSource(
 		Object		data_source )
 	{
+		if ( data_source instanceof List ){
+			
+			data_source = ((List)data_source).toArray( new Object[0]);
+		}	
+		
 		if ( data_source instanceof ExportableDataSource ) {
 			
 			ExportedDataSource e = ((ExportableDataSource)data_source).exportDataSource();
@@ -55,6 +62,14 @@ DataSourceResolver
 			
 			return( null );
 			
+		}else if ( data_source instanceof Peer ){
+			
+			return( exportDataSource(((Peer)data_source).getDescriptor()));
+			
+		}else if ( data_source instanceof PEPeer ){
+			
+			return( exportDataSource(((PEPeer)data_source).getDescriptor()));
+			
 		}else if ( data_source == DEFAULT_DATASOURCE ){
 			
 			return( null );
@@ -68,6 +83,25 @@ DataSourceResolver
 				return( exportDataSource( core_ds ));
 			}
 			
+			Object 	literal 		= null;
+			int		literal_type	= 0;
+			
+			if ( data_source instanceof String ){
+					
+				literal 		= ((String)data_source).getBytes( Constants.UTF_8 );
+				literal_type	= 1;
+			}
+			
+			if ( literal != null ){
+				
+				Map<String,Object>	result = new HashMap<>();
+				
+				result.put( "literal_type", new Long( literal_type ));
+				result.put( "literal", literal );
+				
+				return( result );
+			}
+			
 			Debug.out( "Can't export a " + data_source );
 		}
 		
@@ -78,6 +112,28 @@ DataSourceResolver
 	importDataSource(
 		Map<String,Object>		map )
 	{
+		Object literal = map.get( "literal" );
+		
+		if ( literal != null ){
+			
+			try{
+				int literal_type = ((Number)map.get( "literal_type" )).intValue();
+			
+				if ( literal_type == 1 ){
+			
+					if ( literal instanceof String ){
+						
+						return( literal );
+					}
+					
+					return( new String((byte[])literal, Constants.UTF_8 ));
+				}
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
+		
 		Runnable	callback = (Runnable)map.get( "callback" );
 		
 		List<Map<String,Object>> list = (List<Map<String,Object>>)map.get( "exports" );
@@ -181,8 +237,18 @@ DataSourceResolver
 	public interface
 	ExportableDataSource
 	{
+		public static final int OPT_ON_TOP			= 0;
+		public static final int OPT_CAN_MINIMIZE	= 1;
+		
 		public ExportedDataSource
 		exportDataSource();
+		
+		public default Boolean
+		getBooleanOption(
+			int		opt )
+		{
+			return( null );
+		}
 	}
 	
 	public interface

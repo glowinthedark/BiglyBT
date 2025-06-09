@@ -75,6 +75,11 @@ TOTorrentImpl
 	protected static final String TK_V2_PIECE_LAYERS	= "piece layers";
 	protected static final String TK_V2_PIECES_ROOT		= "pieces root";
 	
+	//public static final String	TK_INFO_BIGLY_FLAGS		= "bigly_flags";
+	//public static final long	TK_INFO_BIGLY_FLAGS_BIGLY_PRIVATE		= 0x0001L;
+	
+	//private static final String TK_INFO_BIGLY_PRIVATE	= "bigly_private";
+
 	private static CopyOnWriteList<TOTorrentListener>		global_listeners = new CopyOnWriteList<>();
 	
 	public static void
@@ -94,7 +99,7 @@ TOTorrentImpl
 	private int								torrent_type;
 	
 	private byte[]							torrent_name;
-	private byte[]							torrent_name_utf8;
+	private String							torrent_name_utf8;
 
 	private byte[]							comment;
 	private URL								announce_url;
@@ -116,7 +121,9 @@ TOTorrentImpl
 	private byte[]		torrent_hash_v2;
 	private HashWrapper	torrent_hash_wrapper_v2;
 
-	private boolean				simple_torrent;
+	private boolean				simple_torrent_original;
+	private boolean				simple_torrent_effective;
+	
 	private TOTorrentFileImpl[]	files;
 
 	private long				creation_date;
@@ -157,10 +164,12 @@ TOTorrentImpl
 		created	= true;
 
 		torrent_name = _torrent_name.getBytes(Constants.DEFAULT_ENCODING_CHARSET);
-		torrent_name_utf8 = torrent_name;
+		
+		torrent_name_utf8 = _torrent_name;
 
 		setAnnounceURL(_announce_url);
-		simple_torrent = _simple_torrent;
+		
+		simple_torrent_original = simple_torrent_effective = _simple_torrent;
 	}
 
 	protected void
@@ -184,11 +193,17 @@ TOTorrentImpl
 									
 				// defer until needed
 				// TOTorrentCreateV2Impl.setV2FileHashes( this );
-			}
-				
+			}	
 		}finally{
 		
 			constructing = false;
+		}
+		
+		if ( created ){
+
+				// register here, may change later but it will be re-registered then
+			
+			TorrentUtils.addCreatedTorrent( this );
 		}
 	}
 	
@@ -361,8 +376,32 @@ TOTorrentImpl
 		Map	root = serialiseToMap();
 
 		try{
-			return( BEncoder.encode( root ));
-
+			int attempts = 0;
+			
+			while( true ){
+			
+				attempts++;
+				
+				try{
+					return( BEncoder.encode( root ));
+					
+				}catch( ConcurrentModificationException e ){
+					
+						// seen this a few times, hack around it a bit
+					
+					if ( attempts < 3 ){
+						
+						try{
+							Thread.sleep( 50 );
+							
+						}catch( Throwable f ){
+						}
+					}else{
+						
+						throw( e );
+					}
+				}
+			}
 		}catch( IOException e ){
 
 			throw( 	new TOTorrentException(
@@ -469,7 +508,7 @@ TOTorrentImpl
 	
 			info.put( TK_PIECES, flat_pieces );
 			
-			if ( simple_torrent ){
+			if ( simple_torrent_original ){
 
 				TOTorrentFile	file = files[0];
 
@@ -549,7 +588,7 @@ TOTorrentImpl
 
 		if ( torrent_name_utf8 != null ){
 
-			info.put( TK_NAME_UTF8, torrent_name_utf8 );
+			info.put( TK_NAME_UTF8, torrent_name_utf8.getBytes( Constants.UTF_8 ));
 		}
 
 		if ( torrent_hash_override != null ){
@@ -692,26 +731,24 @@ TOTorrentImpl
 	public String
 	getUTF8Name()
 	{
-		try {
-			return torrent_name_utf8 == null ? null : new String(torrent_name_utf8,
-					"utf8");
-		} catch (UnsupportedEncodingException e) {
-			return null;
-		}
+		return( torrent_name_utf8 );
 	}
 
 	protected void
 	setNameUTF8(
-		byte[]	_name )
+		byte[]	name )
 	{
-		torrent_name_utf8	= _name;
+		if ( name != null ){ 
+		
+			torrent_name_utf8 = new String ( name, Constants.UTF_8 );
+		}
 	}
 
 	@Override
 	public boolean
 	isSimpleTorrent()
 	{
-		return( simple_torrent );
+		return( simple_torrent_effective );
 	}
 
 	@Override
@@ -750,7 +787,7 @@ TOTorrentImpl
 	setAnnounceURL(
 		URL		url )
 	{
-		URL newURL = anonymityTransform( url );
+		URL newURL = url;
 		String s0 = (newURL == null) ? "" : newURL.toString();
 		String s1 = (announce_url == null) ? "" : announce_url.toString();
 		if (s0.equals(s1))
@@ -763,9 +800,11 @@ TOTorrentImpl
 			newURL = TorrentUtils.getDecentralisedEmptyURL();
 		}
 
+		URL old = announce_url;
+		
 		announce_url	= StringInterner.internURL(newURL);
 
-		fireChanged( TOTorrentListener.CT_ANNOUNCE_URLS );
+		fireChanged( TOTorrentListener.CT_ANNOUNCE_URLS, new Object[]{ old, announce_url });
 
 		return true;
 	}
@@ -819,13 +858,6 @@ TOTorrentImpl
 	getCreatedBy()
 	{
 		return( created_by );
-	}
-
-	@Override
-	public boolean
-	isCreated()
-	{
-		return( created );
 	}
 
 	@Override
@@ -899,7 +931,7 @@ TOTorrentImpl
 
 	protected void
 	setHashFromInfo(
-		Map		info )
+		Map<String,Object>		info )
 
 		throws TOTorrentException
 	{
@@ -911,9 +943,19 @@ TOTorrentImpl
 					Debug.out( "Torrent type unknown" );
 				}
 				
-				byte[] encoded = BEncoder.encode(info);
-							
+				/*
+				Long flags = (Long)additional_info_properties.get( TK_INFO_BIGLY_FLAGS );
 				
+				if ( flags != null && (( flags & TK_INFO_BIGLY_FLAGS_BIGLY_PRIVATE ) != 0 )){
+					
+					info = new HashMap<>( info );
+					
+					info.put( TK_INFO_BIGLY_PRIVATE, 1L );
+				}
+				*/
+				
+				byte[] encoded = BEncoder.encode(info);
+											
 				if ( torrent_type == TT_V1_V2 ){
 					
 					Map private_props = getAdditionalMapProperty( AZUREUS_PRIVATE_PROPERTIES );
@@ -999,7 +1041,7 @@ TOTorrentImpl
 			throw( new TOTorrentException( 	"Torrent isn't hybrid", TOTorrentException.RT_CREATE_FAILED ));
 		}
 		
-		TOTorrent clone = TOTorrentFactory.deserialiseFromBEncodedByteArray( serialiseToByteArray());
+		TOTorrent clone = TOTorrentFactory.deserialiseFromBEncodedByteArray( new TOTorrentFactory.TorrentDataHolder( serialiseToByteArray()));
 
 		TorrentUtils.clearTorrentFileName( clone );
 		
@@ -1026,7 +1068,7 @@ TOTorrentImpl
 		try{
 				// recreate with new properties so result represents this
 			
-			return( TOTorrentFactory.deserialiseFromBEncodedByteArray( BEncoder.encode( clone.serialiseToMap())));
+			return( TOTorrentFactory.deserialiseFromBEncodedByteArray( new TOTorrentFactory.TorrentDataHolder( BEncoder.encode( clone.serialiseToMap()))));
 			
 		}catch( Throwable e ){
 			
@@ -1066,7 +1108,84 @@ TOTorrentImpl
 	{
 		return( torrent_hash_override );
 	}
+	
+	
+	@Override
+	public TOTorrent 
+	setSimpleTorrentDisabled(
+		boolean		disabled )
+		
+		throws TOTorrentException
+	{
+		
+		TOTorrent clone = TOTorrentFactory.deserialiseFromBEncodedByteArray( new TOTorrentFactory.TorrentDataHolder( serialiseToByteArray()));
 
+		TorrentUtils.clearTorrentFileName( clone );
+		
+		Map<String,Object> private_props = (Map<String,Object>)clone.getAdditionalMapProperty( AZUREUS_PRIVATE_PROPERTIES );
+
+		if ( disabled ){
+			
+			if ( !simple_torrent_effective ){
+		
+				throw( new TOTorrentException( 	"Torrent isn't simple", TOTorrentException.RT_CREATE_FAILED ));
+			}
+		}else{
+			
+			if ( private_props == null || !private_props.containsKey( TorrentUtils.TORRENT_AZ_PROP_SIMPLE_TORRENT_DISABLED )){
+				
+				throw( new TOTorrentException( 	"Torrent wasn't simple-disabled", TOTorrentException.RT_CREATE_FAILED ));
+			}
+		}
+		
+		if ( disabled ){
+			
+			if ( private_props == null ){
+				
+				private_props = new HashMap<>();
+			}
+			
+			private_props.put( TorrentUtils.TORRENT_AZ_PROP_SIMPLE_TORRENT_DISABLED, 1L );
+			
+			clone.setAdditionalMapProperty( AZUREUS_PRIVATE_PROPERTIES, private_props );
+			
+		}else{
+			
+			if ( private_props != null ){
+				
+				private_props.remove( TorrentUtils.TORRENT_AZ_PROP_HYBRID_HASH_V2 );
+			}
+		}
+		
+		try{
+				// recreate with new properties so result represents this
+			
+			return( TOTorrentFactory.deserialiseFromBEncodedByteArray( new TOTorrentFactory.TorrentDataHolder( BEncoder.encode( clone.serialiseToMap()))));
+			
+		}catch( Throwable e ){
+			
+			throw( new TOTorrentException( "Encode failed", TOTorrentException.RT_CREATE_FAILED, e ));
+		}
+	}
+	
+	@Override
+	public boolean 
+	isSimpleTorrentDisabled() 
+	
+		throws TOTorrentException
+	{
+		Map<String,Object> private_props = (Map<String,Object>)getAdditionalMapProperty( AZUREUS_PRIVATE_PROPERTIES );
+
+		return( private_props != null && private_props.containsKey( TorrentUtils.TORRENT_AZ_PROP_SIMPLE_TORRENT_DISABLED ));
+	}
+
+	protected void
+	setSimpleTorrentDisabledInternal(
+		boolean		b )
+	{
+		simple_torrent_effective = !b;
+	}
+	
 	@Override
 	public void
 	setPrivate(
@@ -1152,7 +1271,7 @@ TOTorrentImpl
 	addTorrentAnnounceURLSet(
 		URL[]		urls )
 	{
-		announce_group.addSet( new TOTorrentAnnounceURLSetImpl( this, urls ));
+		announce_group.addSet( announce_group.createAnnounceURLSet( urls ));
 	}
 
 	@Override
@@ -1247,14 +1366,14 @@ TOTorrentImpl
 	protected boolean
 	getSimpleTorrent()
 	{
-		return( simple_torrent );
+		return( simple_torrent_original );
 	}
 
 	protected void
 	setSimpleTorrent(
 		boolean	_simple_torrent )
 	{
-		simple_torrent	= _simple_torrent;
+		simple_torrent_original = simple_torrent_effective = _simple_torrent;
 	}
 
 	protected Map
@@ -1480,42 +1599,6 @@ TOTorrentImpl
 		return value.getBytes(Constants.DEFAULT_ENCODING_CHARSET);
 	}
 
-	protected URL
-	anonymityTransform(
-		URL		url )
-	{
-		/*
-		 * 	hmm, doing this is harder than it looks as we have issues hosting
-		 *  (both starting tracker instances and also short-cut loopback for seeding
-		 *  leave as is for the moment
-		if ( HostNameToIPResolver.isNonDNSName( url.getHost())){
-
-			// remove the port as it is uninteresting and could leak information about the
-			// tracker
-
-			String	url_string = url.toString();
-
-			String	port_string = ":" + (url.getPort()==-1?url.getDefaultPort():url.getPort());
-
-			int	port_pos = url_string.indexOf( ":" + url.getPort());
-
-			if ( port_pos != -1 ){
-
-				try{
-
-					return( new URL( url_string.substring(0,port_pos) + url_string.substring(port_pos+port_string.length())));
-
-				}catch( MalformedURLException e){
-
-					Debug.printStackTrace(e);
-				}
-			}
-		}
-		*/
-
-		return( url );
-	}
-
 	@Override
 	public void
 	print()
@@ -1587,7 +1670,8 @@ TOTorrentImpl
 
 	protected void
 	fireChanged(
-		int	type )
+		int			type,
+		Object		data )
 	{
 		if ( constructing ){
 			
@@ -1613,7 +1697,7 @@ TOTorrentImpl
 			for ( TOTorrentListener l: to_fire ){
 
 				try{
-					l.torrentChanged( this, type );
+					l.torrentChanged( this, type, data );
 
 				}catch( Throwable e ){
 
@@ -1625,7 +1709,7 @@ TOTorrentImpl
 		for ( TOTorrentListener l: global_listeners ){
 			
 			try{
-				l.torrentChanged( this, type );
+				l.torrentChanged( this, type, data );
 
 			}catch( Throwable e ){
 

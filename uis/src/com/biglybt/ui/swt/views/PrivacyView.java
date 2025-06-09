@@ -534,7 +534,7 @@ public class PrivacyView
 
 			// I2P install state
 
-		i2p_stack_group = new Group( cMainComposite, SWT.NULL );
+		i2p_stack_group = Utils.createSkinnedGroup( cMainComposite, SWT.NULL );
 		i2p_stack_group.setText( "I2P" );
 
 		
@@ -547,7 +547,7 @@ public class PrivacyView
         
 		stack_layout.topControl = current_i2p_entry.getComposite();
 		
-		Group bottom_comp = new Group( cMainComposite, SWT.NULL );
+		Group bottom_comp = Utils.createSkinnedGroup( cMainComposite, SWT.NULL );
 
 		gd = new GridData( GridData.FILL_HORIZONTAL );
 		bottom_comp.setLayoutData(gd);
@@ -701,7 +701,7 @@ public class PrivacyView
 		socks_more.setText( MessageText.getString( "label.more") + "..." );
 		socks_more.setLayoutData(gd);
 		socks_more.setCursor(socks_more.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
-		socks_more.setForeground(Colors.blue);
+		Utils.setLinkForeground(socks_more);
 		socks_more.addMouseListener(new MouseAdapter() {
 			@Override
 			public void mouseDoubleClick(MouseEvent arg0) {
@@ -1585,14 +1585,13 @@ public class PrivacyView
 
 				// I2P peer lookup
 
-			i2p_lookup_comp = new Composite( i2p_group, SWT.BORDER );
-
 			gd = new GridData();
 			gd.widthHint = 300;
 			gd.heightHint = 150;
-			i2p_lookup_comp.setLayoutData(gd);
 
-			i2p_lookup_comp.setBackground( Colors.white );
+			i2p_lookup_comp = Utils.createSkinnedComposite( i2p_group, SWT.BORDER, gd );
+
+			i2p_lookup_comp.setBackground( Utils.isDarkAppearanceNative()?null:Colors.white );
 
 				// i2p results
 
@@ -1859,7 +1858,7 @@ public class PrivacyView
 			i2p_options_link.setText( MessageText.getString( "privacy.view.check.bw" ));
 
 			i2p_options_link.setCursor(i2p_options_link.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
-			i2p_options_link.setForeground(Colors.blue);
+			Utils.setLinkForeground(i2p_options_link);
 			i2p_options_link.addMouseListener(new MouseAdapter() {
 				@Override
 				public void mouseDoubleClick(MouseEvent arg0) {

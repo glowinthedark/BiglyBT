@@ -512,6 +512,9 @@ AEWin32AccessImpl
 
 		throws AEWin32AccessException
 	{
+		throw( new AEWin32AccessException( "Sorry, traceRoute is broken" ));	// causing crashes/not working
+		
+		/*
 		int	trace_id;
 
 		synchronized( this ){
@@ -527,6 +530,7 @@ AEWin32AccessImpl
 				addressToInt( target_address ),
 				ping_mode?1:0,
 				cb );
+		*/
 	}
 
 	private int
@@ -634,7 +638,7 @@ AEWin32AccessImpl
     @Override
     public Map<File, Map> getAllDrives() {
 
-    	// gah, see http://pluscs.vuze.com/tickets/23804?col=1101604&page=1 we sometimes get crashes here
+    	// gah, we sometimes get crashes here
 
     	String	state_key = "awein32.getalldrives.state.2";
 

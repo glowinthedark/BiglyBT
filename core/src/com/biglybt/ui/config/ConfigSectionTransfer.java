@@ -25,15 +25,14 @@ import com.biglybt.core.CoreFactory;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.impl.TransferSpeedValidator;
 import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.util.DisplayFormatters;
 import com.biglybt.core.util.Wiki;
 import com.biglybt.pifimpl.local.ui.config.*;
-import com.biglybt.pif.ui.UIInstance;
 import com.biglybt.pif.ui.config.ConfigSection;
 import com.biglybt.pif.ui.config.Parameter;
 import com.biglybt.pif.ui.config.ParameterListener;
 
 import static com.biglybt.core.config.ConfigKeys.*;
-import static com.biglybt.core.config.ConfigKeys.File.ICFG_TB_CONFIRM_DELETE_CONTENT;
 import static com.biglybt.core.config.ConfigKeys.Transfer.*;
 
 public class ConfigSectionTransfer
@@ -366,6 +365,20 @@ public class ConfigSectionTransfer
 		
 		add( pfp, Parameter.MODE_INTERMEDIATE);
 
+		IntParameterImpl pMB = new 
+				IntParameterImpl(ICFG_PRIORITIZE_FIRST_MB,
+				"", 0, Integer.MAX_VALUE);
+
+		String[] units = {
+				DisplayFormatters.getUnit(DisplayFormatters.UNIT_MB)
+			};
+		
+		pMB.setLabelText(MessageText.getString("ConfigView.label.prioritizefirstmb", units ));
+		
+		pMB.setIndent( 1, true );
+
+		add( pMB, Parameter.MODE_INTERMEDIATE);
+
 			// prioritise first/last pieces Force
 		
 		BooleanParameterImpl pfpf = new BooleanParameterImpl(BCFG_PRIORITIZE_FIRST_PIECE_FORCE,
@@ -376,12 +389,19 @@ public class ConfigSectionTransfer
 		add( pfpf, Parameter.MODE_INTERMEDIATE);
 
 		pfp.addEnabledOnSelection( pfpf );
+		pfp.addEnabledOnSelection( pMB );
 		
 		// Further prioritize High priority files according to % complete and size of file
 		add(new BooleanParameterImpl(BCFG_PRIORITIZE_MOST_COMPLETED_FILES,
 				"ConfigView.label.prioritizemostcompletedfiles"),
 				Parameter.MODE_INTERMEDIATE);
 
+		IntParameterImpl sfp =new IntParameterImpl( ICFG_SET_FILE_PRIORITY_REM_PIECE, "ConfigView.label.set.file.pri.pieces.rem", 0, Integer.MAX_VALUE);
+		
+		sfp.setGenerateIntermediateEvents( false );
+		
+		add( sfp, Parameter.MODE_INTERMEDIATE);
+		
 		// ignore ports
 
 		StringParameterImpl paramIgnorePeerPorts = new StringParameterImpl(

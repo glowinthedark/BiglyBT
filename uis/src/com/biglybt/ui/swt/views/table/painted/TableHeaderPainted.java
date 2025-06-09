@@ -28,30 +28,40 @@ import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.*;
 
+import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
-import com.biglybt.core.config.impl.ConfigurationManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.ui.common.table.TableColumnCore;
+import com.biglybt.ui.common.table.TableGroupRowRunner;
+import com.biglybt.ui.common.table.TableRowCore;
 import com.biglybt.ui.common.table.TableStructureEventDispatcher;
+import com.biglybt.ui.common.table.impl.TableColumnManager;
 import com.biglybt.ui.swt.ConfigKeysSWT;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.imageloader.ImageLoader;
-import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.shells.GCStringPrinter;
 import com.biglybt.ui.swt.utils.DragDropUtils;
 import com.biglybt.ui.swt.utils.FontUtils;
 import com.biglybt.ui.swt.views.table.impl.TableTooltips;
 
 import com.biglybt.pif.ui.tables.TableColumn;
+import com.biglybt.pifimpl.local.ui.tables.TableContextMenuItemImpl;
 
 public class TableHeaderPainted
 	implements ParameterListener
 {
 	private static final int DEFAULT_HEADER_HEIGHT = 27;
 
-	// Shorter name for ConfigManager, easier to read code
-	protected static final ConfigurationManager configMan = ConfigurationManager.getInstance();
-
+	private static boolean gradientHeader;
+	
+	static{
+		COConfigurationManager.addAndFireParameterListener(
+			"Table Header Gradient Fill",
+			(n)->{
+				gradientHeader = COConfigurationManager.getBooleanParameter("Table Header Gradient Fill");
+			});
+	}
+	
 	private final TableViewPainted tv;
 
 	private final Canvas cHeaderArea;
@@ -76,14 +86,12 @@ public class TableHeaderPainted
 			return;
 		}
 
-		fontHeader = FontUtils.getFontPercentOf(cHeaderArea.getFont(), 0.9f);
-		fontHeaderSmall = FontUtils.getFontPercentOf(fontHeader, 0.8f);
+		fontHeader = FontUtils.cache( FontUtils.getFontPercentOf(cHeaderArea.getFont(), 0.9f));
+		fontHeaderSmall = FontUtils.cache( FontUtils.getFontPercentOf(fontHeader, 0.8f));
 		cHeaderArea.setFont(fontHeader);
 
-		configMan.addParameterListener(ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT,
-				this);
-		headerHeight = configMan.getIntParameter(
-				ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT);
+		COConfigurationManager.addParameterListener(ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT,	this);
+		headerHeight = COConfigurationManager.getIntParameter( ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT);
 		if (headerHeight <= 0) {
 			headerHeight = DEFAULT_HEADER_HEIGHT;
 		}
@@ -100,6 +108,7 @@ public class TableHeaderPainted
 		cHeaderArea.addListener(SWT.MouseDown, l);
 		cHeaderArea.addListener(SWT.MouseUp, l);
 		cHeaderArea.addListener(SWT.MouseMove, l);
+		cHeaderArea.addListener(SWT.MouseDoubleClick, l);
 
 		Transfer[] types = new Transfer[] {
 			TextTransfer.getInstance()
@@ -114,7 +123,12 @@ public class TableHeaderPainted
 		dt.addDropListener(new HeaderDropTargetListener());
 
 		cHeaderArea.addDisposeListener(
-				e -> Utils.disposeSWTObjects(ds, dt, fontHeader, fontHeaderSmall));
+				e -> {
+					FontUtils.uncache( fontHeader, fontHeaderSmall );
+					fontHeaderSmall = null;
+					fontHeader = null;
+					Utils.disposeSWTObjects(ds, dt );
+				});
 	}
 
 	private void paintHeader(PaintEvent e) {
@@ -136,14 +150,30 @@ public class TableHeaderPainted
 			fg = TablePaintedUtils.getColour(e.display, SWT.COLOR_WIDGET_NORMAL_SHADOW);
 		}
 
-		Color line = c2;
+		Color hline;
+		Color vline;
 
-		Pattern patternUp = new Pattern(e.display, 0, 0, 0, ca.height, c1, c2);
-		Pattern patternDown = new Pattern(e.display, 0, -ca.height, 0, 0, c2, c1);
+		Pattern patternUp;
+		Pattern patternDown;
+		
+		if ( gradientHeader ){
+			hline = c2;
+			vline = c2;
+
+			patternUp 	= new Pattern(e.display, 0, 0, 0, ca.height, c1, c2);
+			patternDown = new Pattern(e.display, 0, -ca.height, 0, 0, c2, c1);
+		}else{
+			hline = c2;
+			vline = c1;
+
+			patternUp 	= new Pattern(e.display, 0, 0, 0, ca.height, c2, c2);
+			patternDown = new Pattern(e.display, 0, -ca.height, 0, 0, c1, c1);
+		}
+		
 		//e.gc.setBackgroundPattern(patternUp);
 		//e.gc.fillRectangle(ca);
 
-		e.gc.setForeground(line);
+		e.gc.setForeground(hline);
 		//e.gc.drawLine(0, 0, clientArea.width, 0);
 		e.gc.drawLine(0, headerHeight - 1, clientArea.width, headerHeight - 1);
 
@@ -172,13 +202,13 @@ public class TableHeaderPainted
 
 			e.gc.setBackgroundPattern(sortColumnPos >= 0 ? patternDown : patternUp);
 			e.gc.fillRectangle(x, 1, w, headerHeight - 2);
-			e.gc.setForeground(line);
+			e.gc.setForeground(vline);
 			boolean doingDrop = column.equals(droppingOnHeader);
 			if (doingDrop && droppingAfterHeader) {
 				e.gc.setForeground(fg);
 				e.gc.setLineWidth(2);
 			} else {
-				e.gc.setForeground(line);
+				e.gc.setForeground(vline);
 			}
 			e.gc.drawLine(x + w - 1, 1, x + w - 1, headerHeight - 1);
 			if (doingDrop && !droppingAfterHeader) {
@@ -255,32 +285,42 @@ public class TableHeaderPainted
 
 			int xOfs = x + 2;
 
-			boolean onlyShowImage = column.showOnlyImage();
+			boolean showIcon		= column.getIconReferenceEnabled();
+			boolean onlyShowImage	= column.showOnlyImage();
 			String text = "";
-			if (!onlyShowImage) {
+			if (!onlyShowImage || !showIcon ) {
 				text = MessageText.getString(column.getTitleLanguageKey());
 			}
 
 			int style = SWT.WRAP | SWT.CENTER;
 			Image image = null;
-			String imageID = column.getIconReference();
-			if (imageID != null) {
-				image = ImageLoader.getInstance().getImage(imageID);
-				if (ImageLoader.isRealImage(image)) {
-					if (onlyShowImage) {
-						text = null;
-						Rectangle imageBounds = image.getBounds();
-						e.gc.drawImage(image,
-								(int) (x + (w / 2.0) - (imageBounds.width / 2.0) + 0.5),
-								(headerHeight / 2) - (imageBounds.height / 2));
+			String imageID = null;
+			
+			int contentWidth = 0;
+			
+			if ( showIcon ){
+				imageID = column.getIconReference();
+				if (imageID != null) {
+					image = ImageLoader.getInstance().getImage(imageID);
+					if (ImageLoader.isRealImage(image)) {
+						if (onlyShowImage) {
+							text = null;
+							Rectangle imageBounds = image.getBounds();
+							e.gc.drawImage(image,
+									(int) (x + (w / 2.0) - (imageBounds.width / 2.0) + 0.5),
+									(headerHeight / 2) - (imageBounds.height / 2));
+							
+							contentWidth = imageBounds.width;
+							
+						} else {
+							text = "%0 " + text;
+						}
 					} else {
-						text = "%0 " + text;
+						image = null;
 					}
-				} else {
-					image = null;
 				}
 			}
-
+		
 			if (text != null) {
 				sp = new GCStringPrinter(e.gc, text,
 						new Rectangle(xOfs, yOfs - 1, wText - 4, headerHeight - yOfs + 2),
@@ -291,6 +331,9 @@ public class TableHeaderPainted
 					});
 				}
 				sp.calculateMetrics();
+				
+				contentWidth = sp.getCalculatedPreferredSize().x;
+				
 				if (sp.isWordCut() || sp.isCutoff()) {
 					Font font = e.gc.getFont();
 					e.gc.setFont(fontHeaderSmall);
@@ -305,6 +348,8 @@ public class TableHeaderPainted
 				ImageLoader.getInstance().releaseImage(imageID);
 			}
 
+			column.setPreferredHeaderWidth( contentWidth + 10 );
+			
 			x += w;
 		}
 
@@ -322,10 +367,16 @@ public class TableHeaderPainted
 				return;
 			}
 			cHeaderArea.setVisible(visible);
-			FormData fd = Utils.getFilledFormData();
-			fd.height = visible ? headerHeight : 1;
-			fd.bottom = null;
-			cHeaderArea.setLayoutData(fd);
+			Object ld = cHeaderArea.getLayoutData();
+			if ( ld instanceof FormData ){
+				FormData fd = Utils.getFilledFormData();
+				fd.height = visible ? headerHeight : 1;
+				fd.bottom = null;
+				cHeaderArea.setLayoutData(fd);
+			}else{
+				GridData gd = (GridData)ld;
+				gd.heightHint=visible?headerHeight : 1;
+			}
 			Composite parent = cHeaderArea.getParent();
 			if (parent != null) {
 				parent.layout(true);
@@ -334,8 +385,7 @@ public class TableHeaderPainted
 	}
 
 	public void delete() {
-		configMan.removeParameterListener(ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT,
-				this);
+		COConfigurationManager.removeParameterListener(ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT, this);
 	}
 
 	public TableColumnCore getTableColumnByOffset(int mouseX,
@@ -358,10 +408,8 @@ public class TableHeaderPainted
 
 	@Override
 	public void parameterChanged(String parameterName) {
-		if (parameterName == null
-				|| parameterName.equals(ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT)) {
-			headerHeight = configMan.getIntParameter(
-					ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT);
+		if (parameterName == null || parameterName.equals(ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT)) {
+			headerHeight = COConfigurationManager.getIntParameter(ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT);
 			if (headerHeight == 0) {
 				headerHeight = DEFAULT_HEADER_HEIGHT;
 			}
@@ -393,8 +441,8 @@ public class TableHeaderPainted
 			menu.setData(TableViewPainted.MENUKEY_IN_BLANK_AREA, false);
 			menu.setData(TableViewPainted.MENUKEY_IS_HEADER, true);
 			Point pt = cHeaderArea.toControl(event.x, event.y);
-			menu.setData(TableViewPainted.MENUKEY_COLUMN,
-					tv.getTableColumnByOffset(pt.x));
+			menu.setData(TableContextMenuItemImpl.MENUKEY_TABLE_VIEW, tv );
+			menu.setData(TableViewPainted.MENUKEY_COLUMN, tv.getTableColumnByOffset(pt.x));
 		});
 		cHeaderArea.setMenu(menu);
 	}
@@ -402,6 +450,8 @@ public class TableHeaderPainted
 	private static class MouseListeners
 		implements Listener
 	{
+		private int	upClicksPending = 0;
+				
 		private final Canvas cHeaderArea;
 
 		private final TableViewPainted tv;
@@ -424,7 +474,50 @@ public class TableHeaderPainted
 			if (cHeaderArea.isDisposed()) {
 				return;
 			}
+			
 			switch (e.type) {
+				case SWT.MouseDoubleClick:{
+					if ( upClicksPending == 1 ){
+						
+						upClicksPending = -1;
+						
+						TableColumnCore column = tv.getTableColumnByOffset(e.x);
+						
+						if ( column != null ){
+							
+							column.setPreferredWidth(-1);
+
+							int done = 
+								tv.runForAllRows(new TableGroupRowRunner() {
+									@Override
+									public void run(TableRowCore row) {
+										row.fakeRedraw( column.getName());
+									}
+								});
+
+							int pref;
+
+							if ( done == 0 ){
+								
+								pref = Math.max( column.getMinWidth(), column.getPreferredHeaderWidth());
+								
+							}else{
+								
+								pref = column.getPreferredWidth();
+							}
+							
+							if ( pref != -1 ){
+
+								column.setWidth( pref );
+							}
+							
+								// we need this to avoid scroll bars getting confused for some reason...
+							
+							TableStructureEventDispatcher.getInstance(tv.getTableID()).tableStructureChanged(false, null);
+						}
+					}
+					return;
+				}
 				case SWT.MouseDown: {
 					if (e.button != 1) {
 						return;
@@ -455,18 +548,30 @@ public class TableHeaderPainted
 					}
 					if (mouseDown) {
 						if (columnSizing == null) {
-							TableColumnCore column = tv.getTableColumnByOffset(e.x);
-							if (column != null) {
-								boolean addColumn = (e.stateMask & SWT.MOD1) > 0;
-								if (addColumn) {
-									tv.addSortColumn(column);
-								} else {
-									tv.setSortColumns(new TableColumnCore[] { column }, true);
+							upClicksPending++;
+							Utils.execSWTThreadLater(e.display.getDoubleClickTime()/2,()->{
+								if ( upClicksPending > 0 ){
+									upClicksPending--;
+									TableColumnCore column = tv.getTableColumnByOffset(e.x);
+									if (column != null) {
+										boolean addColumn = (e.stateMask & SWT.MOD1) > 0;
+										if (addColumn) {
+											tv.addSortColumn(column);
+										} else {
+											tv.setSortColumns(new TableColumnCore[] { column }, true);
+										}
+									}
 								}
-							}
+							});
 						} else {
 							int diff = (e.x - columnSizingStart);
 							columnSizing.setWidthPX(columnSizing.getWidth() + diff);
+							
+							TableColumnManager tcm = TableColumnManager.getInstance();
+							
+							String tableID = tv.getTableID();
+							
+							tcm.saveTableColumns(tv.getDataSourceType(), tableID);
 						}
 					}
 					columnSizing = null;
@@ -579,6 +684,12 @@ public class TableHeaderPainted
 				}
 				tv.setColumnsOrdered(visibleColumns);
 
+				TableColumnManager tcm = TableColumnManager.getInstance();
+				
+				String tableID = tv.getTableID();
+				
+				tcm.saveTableColumns(tv.getDataSourceType(), tableID);
+				
 				TableStructureEventDispatcher.getInstance(
 						tv.getTableID()).tableStructureChanged(columnAdded,
 								tv.getDataSourceType());

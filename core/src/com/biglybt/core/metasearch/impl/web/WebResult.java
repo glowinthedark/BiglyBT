@@ -19,9 +19,7 @@
 
 package com.biglybt.core.metasearch.impl.web;
 
-import java.math.BigDecimal;
-import java.util.Date;
-import java.util.StringTokenizer;
+import java.util.*;
 
 import org.apache.commons.lang.Entities;
 
@@ -49,20 +47,24 @@ public class WebResult extends Result {
 	String contentType = "";
 	String name;
 	String category = "";
-
+	List<String>	tags = new ArrayList<>(1);
+	
 	String drmKey = null;
 
 	Date publishedDate;
 	Date assetDate;
 	
 	long size = -1;
-	int nbPeers = -1;
-	int nbSeeds = -1;
-	int nbSuperSeeds = -1;
+	
+	int nbPeers			= -1;
+	int nbSeeds			= -1;
+	int nbSuperSeeds	= -1;
+	int nbCompleted		= -1;
+	
 	int	comments	= -1;
-	int votes = -1;
-	int votesDown = -1;
-	float rank = -1;
+	int votes		= -1;
+	int votesDown	= -1;
+	float rank		= -1;
 
 	boolean privateTorrent;
 
@@ -108,8 +110,17 @@ public class WebResult extends Result {
 			}
 		}
 	}
+	
+	@Override
+	public String 
+	getDescription()
+	{
+		return( null );
+	}
+	
 	public void setCategoryFromHTML(String category) {
 		if(category != null) {
+			addTagFromHTML(category);	// hack, we currently just pick up cats
 			category = removeHTMLTags(category);
 			this.category = Entities.HTML40.unescape(category).trim();
 			/*int separator = this.category.indexOf(">");
@@ -124,6 +135,27 @@ public class WebResult extends Result {
 		}
 	}
 
+	public void 
+	addTagFromHTML(
+		String tag )
+	{	
+		if ( tag == null ){
+			return;
+		}
+		
+		tag = removeHTMLTags( tag );
+		tag = Entities.HTML40.unescape( tag ).trim();
+		
+		if ( !tag.isEmpty()){
+			
+			if ( !tags.contains( tag )){
+			
+				tags.add( tag );
+			}
+		}
+	}
+
+	
 	public void
 	setUID(
 		String	_uid )
@@ -183,6 +215,9 @@ public class WebResult extends Result {
 		}
 	}
 
+	public void setNbCompleted( int num ){
+		nbCompleted = num;
+	}
 	public void setRankFromHTML( String rank_str, float divisor ){
 		if (rank_str == null) {
 			return;
@@ -267,7 +302,7 @@ public class WebResult extends Result {
 		assetDate = RSSUtils.parseRSSDate( str );
 	}
 
-	public void setSizeFromHTML(String size) {
+	public void setSizeFromHTML(String size, long minAcceptable) {
 		if(size != null) {
 			size = removeHTMLTags(size);
 			String sizeS = Entities.HTML40.unescape(size).replace((char)160,(char)32);
@@ -290,7 +325,10 @@ public class WebResult extends Result {
 				if ( multiplier <= 0 ){
 					multiplier= 1;	// ignore invalid 
 				}
-				this.size = (long) (base * multiplier );
+				long result = (long) (base * multiplier );
+				if ( result >= minAcceptable ){
+					this.size = result;
+				}
 			} catch(Throwable e) {
 				//e.printStackTrace();
 			}
@@ -452,6 +490,13 @@ public class WebResult extends Result {
 	}
 
 	@Override
+	public String[] 
+	getTags()
+	{
+		return( tags.toArray( new String[tags.size()]));
+	}
+	
+	@Override
 	public String getDownloadLink() {
 
 		return reConstructLink(torrentLink);
@@ -487,6 +532,8 @@ public class WebResult extends Result {
 					lc_link.startsWith("https://") ||
 					lc_link.startsWith("tor:http://") ||
 					lc_link.startsWith("tor:https://") ||
+					lc_link.startsWith("i2p:http://") ||
+					lc_link.startsWith("i2p:https://") ||
 					lc_link.startsWith("azplug:") ||
 					lc_link.startsWith("magnet:") ||
 					lc_link.startsWith("bc:") ||
@@ -527,6 +574,11 @@ public class WebResult extends Result {
 		return nbSuperSeeds;
 	}
 
+	@Override
+	public int getNbCompleted(){
+		return( nbCompleted );
+	}
+	
 	@Override
 	public Date getPublishedDate() {
 		return publishedDate;

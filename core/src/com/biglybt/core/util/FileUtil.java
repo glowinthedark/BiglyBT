@@ -19,22 +19,21 @@
 
 package com.biglybt.core.util;
 
-import static com.biglybt.core.config.ConfigKeys.File.BCFG_FILE_MOVE_ORIGIN_DELETE_FAIL_IS_WARNING;
-
 import java.io.*;
-import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.*;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
@@ -46,6 +45,7 @@ import com.biglybt.core.CoreOperationTask;
 import com.biglybt.core.config.COConfigurationListener;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ConfigKeys;
+import com.biglybt.core.config.ConfigUtils;
 import com.biglybt.core.diskmanager.file.impl.FMFileAccess.FileAccessor;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.logging.LogEvent;
@@ -69,20 +69,30 @@ public class FileUtil {
   private static final List		reserved_file_handles 	= new ArrayList();
   private static final AEMonitor	class_mon				= new AEMonitor( "FileUtil:class" );
 
-  private static final Method reflectOnUsableSpace;
-
-  	// FileStore is minSDK 26 on Android
-  
-  private static final Method 	mPath_getFileStore;
-  private static final Method 	mToPath;
-
-	
   private static char[]	char_conversion_mapping = null;
 
   private static final FileHandler fileHandling;
 
   private static AEDiagnosticsLogger file_logger;
   
+  static {
+
+	  AEDiagnostics.addEvidenceGenerator((writer)->{
+
+		  /*
+			  String[] fs =  getFileStoreNames();
+
+			  String str = "";
+
+			  for( String f: fs ){
+				  str += (str.isEmpty()?"":", ") + ("\""+ f + "\"");
+			  }
+
+			  writer.println( "File Stores: " + str );
+		   */
+	  });
+  }
+					
   private static final ThreadLocal<IdentityHashSet<CoreOperationTask>>		tls	=
 	new ThreadLocal<IdentityHashSet<CoreOperationTask>>()
 	{
@@ -95,40 +105,6 @@ public class FileUtil {
 	};
 
   static {
-
-	  Method _reflectOnUsableSpace;
-	
-	  try{
-		  _reflectOnUsableSpace = File.class.getMethod("getUsableSpace", (Class[])null);
-		  
-	  }catch (Throwable e){
-		  
-		  _reflectOnUsableSpace = null;
-	  }
-
-	  reflectOnUsableSpace = _reflectOnUsableSpace;
-	  
-	  
-	  Method 	_mPath_getFileStore;
-	  Method 	_mToPath;
-
-	  try{
-		  Class  _claPath = Class.forName("java.nio.file.Path");
-		  Class  _claFiles = Class.forName("java.nio.file.Files");
-		  _mPath_getFileStore = _claFiles.getMethod("getFileStore", _claPath);
-		  _mToPath = File.class.getMethod("toPath");
-		  
-	  }catch( Throwable e ){
-		  
-		  _mPath_getFileStore	= null;
-		  _mToPath				= null;
-	  }
-	 
-	  mPath_getFileStore	= _mPath_getFileStore;
-	  mToPath				= _mToPath;
-
-	  
-	  
 	  String fileHandlingCN = System.getProperty("az.FileHandling.impl",
 			"");
 	  // To test:
@@ -143,6 +119,13 @@ public class FileUtil {
 			}
 		}
 		fileHandling = fileHandlingImpl == null ? new FileHandler() : fileHandlingImpl;
+		
+		AEThread2.createAndStartDaemon( "FileUtil:init", ()->{
+			
+				// grab initial file roots
+			
+			listRootsWithTimeout();
+		});
 	}
 
   public static boolean
@@ -229,11 +212,231 @@ public class FileUtil {
   	return fileHandling.isAncestorOf(_parent, _child);
   }
 
-  public static File canonise(File file) {
-	  try {return file.getCanonicalFile();}
-	  catch (IOException ioe) {return file;}
+  public static File 
+  getCanonicalFile(
+		File file) 
+  {
+	  try{
+		  return file.getCanonicalFile();
+		  
+	  }catch (IOException ioe){
+		  
+		  return file;
+	  }
   }
 
+  
+	final static Map<String,String>	clax_cache =
+			new LinkedHashMap<String,String>(16,0.75f,true)
+			{
+				@Override
+				protected boolean
+				removeEldestEntry(
+			   		Map.Entry<String,String> eldest)
+				{
+					return size() > 16;
+				}
+			};
+			
+  /**
+   * If lax then the parent folder's canonical form is cached and checked, the file name itself
+   * isn't canonicalised via the file system
+   * @param file
+   * @param lax
+   * @return
+   * @throws IOException
+   */
+  
+  public static String 
+  getCanonicalPath(
+	File	file,
+	boolean	lax )
+  
+  	throws IOException
+  {
+	  if ( lax ){
+		  
+		 File parent = file.getParentFile();
+		 
+		 if ( parent == null || parent.getParentFile() == null ){
+			 
+			 return file.getCanonicalPath();
+		 }
+		 
+		 String key = parent.getAbsolutePath();
+		 
+		 String cano;
+		 
+		 synchronized( clax_cache ){
+			  
+			  cano = clax_cache.get( key );
+			  
+			  if ( cano != null ){
+				  
+				  return( cano + File.separator + file.getName());
+			  }
+		 }
+		 
+		 cano = parent.getCanonicalPath();
+		 
+		 synchronized( clax_cache ){
+			 
+			 clax_cache.put( key, cano );
+		 }
+		 
+		 return( cano + File.separator + file.getName());
+		 
+	  }else{
+	  
+		  return file.getCanonicalPath();
+	  }
+  }
+  
+  
+	public static final boolean
+	exists(
+		File		file )
+	{
+		return( file.exists());
+	}
+	
+	final static Map<String,Map<Object,Object>>	exists_dir_cache =
+			new LinkedHashMap<String,Map<Object,Object>>(16,0.75f,true)
+			{
+				@Override
+				protected boolean
+				removeEldestEntry(
+			   		Map.Entry<String,Map<Object,Object>> eldest)
+				{
+					return size() > 16;
+				}
+			};
+		
+	final static Object CACHE_TIME_KEY = new Object();
+	
+		/**
+		 * caches directory contents for a short time, therefore may answer incorrectly... 
+		 * NOTE this does not cater for file system case insensitivity issues so don't use
+		 * it unless you are sure these will NOT ARISE!!!!
+		 * @param parent
+		 * @param name
+		 * @return
+		 */
+			
+	public static final boolean
+	existsWithCache(
+		File		parent,
+		String		name )
+	{
+		long now = SystemTime.getMonotonousTime();
+
+		String key = parent.getAbsolutePath();
+
+		synchronized( exists_dir_cache ){
+
+			Map<Object,Object> map = exists_dir_cache.get( key );
+
+			if ( map != null ){
+
+				long t = (Long)map.get( CACHE_TIME_KEY );
+
+				if ( now - t < 5000 ){
+
+					return( map.containsKey( name ));
+				}
+			}
+		}
+
+		String[] files = parent.list();
+	
+		synchronized( exists_dir_cache ){
+
+			Map<Object,Object> map = new HashMap<>();
+
+			map.put( CACHE_TIME_KEY, now );
+
+			if ( files == null ){
+				
+				exists_dir_cache.put( key, map );
+				
+				return( false );
+				
+			}else{
+				
+				for ( String f: files ){
+	
+					map.put( f,  "" );
+				}
+				
+				exists_dir_cache.put( key, map );
+				
+				return( map.containsKey( name ));
+			}
+		}
+	}
+	
+	public static final void
+	existsWithCacheClear(
+		File		parent )
+	{
+		String key = parent.getAbsolutePath();
+
+		synchronized( exists_dir_cache ){
+
+			exists_dir_cache.remove( key );
+		}
+	}
+	
+	final static Map<String,Long>	exists_cache =
+			new LinkedHashMap<String,Long>(16,0.75f,true)
+			{
+				@Override
+				protected boolean
+				removeEldestEntry(
+			   		Map.Entry<String,Long> eldest)
+				{
+					return size() > 16;
+				}
+			};
+			
+  
+  	/**
+  	 * caches positive existence checks for a short time, therefore may answer incorrectly... 
+  	 * @param file
+  	 * @return
+  	 */
+  
+  public static boolean
+  existsWithCache(
+	 File		file )
+  {
+	  long now = SystemTime.getMonotonousTime();
+	  
+	  String key = file.getAbsolutePath();
+	  
+	  synchronized( exists_cache ){
+		  
+		  Long t = exists_cache.get( key );
+		  
+		  if ( t != null && now - t < 5000 ){
+			  
+			  return( true );
+		  }
+	  }
+	  
+	  boolean res = file.exists();
+	  
+	  if ( res ){
+		 
+		  synchronized( exists_cache ){
+			  
+			  exists_cache.put( key,  now );
+		  }
+	  }
+	  
+	  return( res );
+  }
+  
   public static String getCanonicalFileName(String filename) {
     // Sometimes Windows use filename in 8.3 form and cannot
     // match .torrent extension. To solve this, canonical path
@@ -275,7 +478,7 @@ public class FileUtil {
    */
   public static boolean recursiveDelete(File f) {
     String defSaveDir = COConfigurationManager.getStringParameter("Default save path");
-    String moveToDir = COConfigurationManager.getStringParameter("Completed Files Directory", "");
+    String moveToDir = ConfigUtils.getDefaultMoveOnCompleteFolder( true );
 
     try{
   	  moveToDir = newFile(moveToDir).getCanonicalPath();
@@ -375,95 +578,165 @@ public class FileUtil {
 
   protected static void
   recursiveEmptyDirDelete(
-  	File	f,
-	Set		ignore_set,
-	boolean	log_warnings )
+	File			f,
+	Set<String>		ignore_set,
+	boolean			log_warnings )
   {
-     try {
-      String defSaveDir 	= COConfigurationManager.getStringParameter("Default save path");
-      String moveToDir 		= COConfigurationManager.getStringParameter("Completed Files Directory", "");
+	  recursiveEmptyDirDelete( f, ignore_set, 1, log_warnings );
+  }
+  
+  private static void
+  recursiveEmptyDirDelete(
+	File			f,
+	Set<String>		ignore_set,
+	int				level,
+	boolean			log_warnings )
+  {
+	  if ( f == null ){
 
-      if ( defSaveDir.trim().length() > 0 ){
+		  return;
+	  }
 
-      	defSaveDir = newFile(defSaveDir).getCanonicalPath();
-      }
+	  try{
+		  
+		  String defSaveDir 	= COConfigurationManager.getStringParameter("Default save path");
+		  
+		  String moveToDir 		= ConfigUtils.getDefaultMoveOnCompleteFolder( true );
 
-      if ( moveToDir.trim().length() > 0 ){
+		  File defSaveDirFile;
+		  File moveToDirFile;
+		  
+		  if ( defSaveDir.trim().length() > 0 ){
 
-      	moveToDir = newFile(moveToDir).getCanonicalPath();
-      }
+			  defSaveDirFile = newFile(defSaveDir);
+			  
+			  defSaveDir = defSaveDirFile.getCanonicalPath();
+			  
+		  }else{
+			  
+			  defSaveDirFile = null;
+		  }
 
-      if ( f.isDirectory()){
+		  if ( moveToDir.trim().length() > 0 ){
 
-        File[] files = f.listFiles();
+			  moveToDirFile = newFile(moveToDir);
+			  
+			  moveToDir = moveToDirFile.getCanonicalPath();
+			  
+		  }else{
+			  
+			  moveToDirFile = null;
+		  }
 
-        if ( files == null ){
+		  if ( f.isDirectory()){
 
-        	if (log_warnings ){
-        		Debug.out("Empty folder delete:  failed to list contents of directory " + f );
-        	}
+			  File[] files = f.listFiles();
 
-          	return;
-        }
+			  if ( files == null ){
 
-        boolean hasIgnoreSet = ignore_set.size() > 0;
-        for (int i = 0; i < files.length; i++) {
+				  if (log_warnings ){
+					  Debug.out("Empty folder delete:  failed to list contents of directory '" + f + "'");
+				  }
 
-        	File	x = files[i];
+				  return;
+			  }
 
-        	if ( x.isDirectory()){
+			  boolean hasIgnoreSet = ignore_set.size() > 0;
 
-        		recursiveEmptyDirDelete(files[i],ignore_set,log_warnings);
+			  List<File>	sub_dirs		= new ArrayList<>();
+			  List<File>	files_inside	= new ArrayList<>();
+			  
+			  for (int i = 0; i < files.length; i++) {
 
-        	}else{
+				  File	x = files[i];
 
-        		if ( hasIgnoreSet && ignore_set.contains( x.getName().toLowerCase())){
+				  if ( x.isDirectory()){
 
-        			if ( !x.delete()){
+					  sub_dirs.add( x );
 
-        				if ( log_warnings ){
-        					Debug.out("Empty folder delete: failed to delete file " + x );
-        				}
-        			}
-        		}
-        	}
-        }
+				  }else{
 
-        if (f.getCanonicalPath().equals(moveToDir)) {
+					  if ( hasIgnoreSet && ignore_set.contains( x.getName().toLowerCase())){
 
-        	if ( log_warnings ){
-        		Debug.out("Empty folder delete:  not allowed to delete the MoveTo dir !");
-        	}
+						  if ( !x.delete()){
 
-          return;
-        }
+							  files_inside.add( x );
+							  
+							  if ( log_warnings ){
+								  
+								  Debug.out("Empty folder delete: failed to delete file '" + x + "'");
+							  }
+						  }
+					  }else{
+						  
+						  files_inside.add( x );
+					  }
+				  }
+			  }
+			  
+			  if ( level == 1 && !files_inside.isEmpty()){
+				  
+				  if ( log_warnings ){
+					  Debug.out( "Empty folder delete: abandoning as top level folder '" + f + "' isn't empty" );
+				  }
+				  
+				  return;
+			  }
+			  
+			  for ( File dir: sub_dirs ){
+				  
+				  recursiveEmptyDirDelete(dir,ignore_set,level+1,log_warnings);
+			  }
 
-        if (f.getCanonicalPath().equals(defSaveDir)) {
+			  if ( 	moveToDirFile != null && ( areFilePathsIdentical( f.getAbsoluteFile(), moveToDirFile) || f.getCanonicalPath().equals(moveToDir))){
 
-        	if ( log_warnings ){
-        		Debug.out("Empty folder delete:  not allowed to delete the default data dir !");
-        	}
+				  if ( log_warnings ){
+					  Debug.out("Empty folder delete: not allowed to delete the Move-To dir!");
+				  }
 
-          return;
-        }
+				  return;
+			  }
 
-        File[] files_inside = f.listFiles();
-        if (files_inside.length == 0) {
+			  if (	defSaveDirFile != null && ( areFilePathsIdentical( f.getAbsoluteFile(), defSaveDirFile) ||f.getCanonicalPath().equals(defSaveDir))){
 
-          if ( !f.delete()){
+				  if ( log_warnings ){
+					  Debug.out("Empty folder delete: not allowed to delete the Default Data dir!");
+				  }
 
-        	  if ( log_warnings ){
-        		  Debug.out("Empty folder delete:  failed to delete directory " + f );
-        	  }
-          }
-        }else{
-        	if ( log_warnings ){
-        		Debug.out("Empty folder delete:  " + files_inside.length + " file(s)/folder(s) still in \"" + f + "\" - first listed item is \"" + files_inside[0].getName() + "\". Not removing.");
-        	}
-        }
-      }
+				  return;
+			  }
 
-    } catch (Exception e) { Debug.out(e.toString()); }
+			  files = f.listFiles();
+
+			  if ( files == null ){
+
+				  if (log_warnings ){
+					  Debug.out("Empty folder delete: failed to list contents of directory '" + f + "'" );
+				  }
+
+				  return;
+			  }
+			  
+			  if ( files.length == 0 ){
+
+				  if ( !f.delete()){
+
+					  if ( log_warnings ){
+						  Debug.out("Empty folder delete: failed to delete directory '" + f + "'");
+					  }
+				  }
+			  }else{
+				  
+				  if ( log_warnings ){
+					  Debug.out("Empty folder delete:  " + files.length + " file(s)/folder(s) still in '" + f + "' - first listed item is '" + files[0].getName() + "'. Not removing.");
+				  }
+			  }
+		  }
+
+	  } catch (Throwable e){
+
+		  Debug.out(e.toString()); 
+	  }
   }
 
   public static String
@@ -596,7 +869,7 @@ public class FileUtil {
 			// mac file names can end in space - fix this up by getting
 			// the canonical form which removes this on Windows
 
-			// however, for soem reason getCanonicalFile can generate high CPU usage on some user's systems
+			// however, for some reason getCanonicalFile can generate high CPU usage on some user's systems
 			// in  java.io.Win32FileSystem.canonicalize
 			// so changing this to only be used on non-windows
 
@@ -646,6 +919,15 @@ public class FileUtil {
 	  writeResilientFile( file.getParentFile(), file.getName(), data, false );
   }
 
+  public static void
+  writeResilientFileIncrementally(
+	File		file,
+	Map			data )
+  {
+	  writeResilientFileIncrementally( file.getParentFile(), file.getName(), data );
+  }
+  
+  
   public static boolean
   writeResilientFileWithResult(
     File		parent_dir,
@@ -696,119 +978,125 @@ public class FileUtil {
   {
 	  try{
 		  class_mon.enter();
-
-		  byte[] encoded_data;
 		  
-		  try{
-			  encoded_data  = BEncoder.encode(data);
-			  
-		  }catch( Throwable e ){
-
-			  Debug.out( "Save of '" + file_name + "' fails", e );
-
-			  return( false );
-		  }
+		  byte[] encoded_data = BEncoder.encodeIfLessThan( data, 2*1024*1024 );
 		  
-		  File existing = newFile(  parent_dir, file_name );
-		  
-		  if ( existing.length() == encoded_data.length ) {
+		  if ( encoded_data != null ){
 			  
-			  //System.out.println( "same length for " + file_name );
+			  File existing = newFile(  parent_dir, file_name );
 			  
-			  try{
-				  BufferedInputStream	bin = new BufferedInputStream( newFileInputStream(existing), encoded_data.length );
-
+			  if ( existing.length() == encoded_data.length ) {
+				  
+				  //System.out.println( "same length for " + file_name );
+				  
 				  try{
-					  BDecoder	decoder = new BDecoder();
+					  byte[] existing_data = readFileAsByteArray( existing );
 
-					  Map	old = decoder.decodeStream( bin );
-
-					  if ( BEncoder.mapsAreIdentical( data, old )) {
-
-						  //System.out.println( "same data for " + file_name );
+					  if ( Arrays.equals( encoded_data, existing_data )){
+						  
+						  // System.out.println( "same data for " + file_name );
 
 						  return( true );
 					  }
-				  }finally{
-
-					  bin.close();
+					
+				  }catch( Throwable e ) {
 				  }
-			  }catch( Throwable e ) {
 			  }
 		  }
-
+		  
 		  try{
 			  getReservedFileHandles();
+			  
 			  File temp = newFile(  parent_dir, file_name + ".saving");
-			  BufferedOutputStream	baos = null;
 
+			  FileOutputStream tempOS = null;
+				 
 			  try{
-				  FileOutputStream tempOS = newFileOutputStream( temp, false );
-				  baos = new BufferedOutputStream( tempOS, 8192 );
-				  baos.write( encoded_data );
-				  baos.flush();
-
-				  tempOS.getFD().sync();
-
-				  baos.close();
-				  baos = null;
-
-				  	//only use newly saved file if it got this far, i.e. it saved successfully
-
-				  if ( temp.length() > 1L ){
-
-					  File file = newFile( parent_dir, file_name );
-
-					  if ( file.exists()){
-
-						  if ( !file.delete()){
-
-							  Debug.out( "Save of '" + file_name + "' fails - couldn't delete " + file.getAbsolutePath());
+				  try{
+					  tempOS = newFileOutputStream( temp, false );
+					  
+					  if ( encoded_data != null ){
+						  
+						  BufferedOutputStream	baos = null;
+	
+						  try{
+							  baos = new BufferedOutputStream( tempOS, 8192 );
+							  
+							  baos.write( encoded_data );
+							  
+							  baos.flush();
+		
+							  tempOS.getFD().sync();
+							  
+						  }finally{
+							  
+							  baos.close();
+							  
+							  baos = null;
 						  }
+					  }else{
+						  
+						  BEncoder.encodeToStream( data, tempOS );
+						  
+						  tempOS.getFD().sync();
 					  }
-
-					  if (file.exists()) {
-					  	Debug.out(file + " still exists after delete attempt");
-					  }
-
-					  if ( temp.renameTo( file )){
-
-						  return( true );
-
-					  }
-
-					  // rename failed, sleep a little and try again
-					  Thread.sleep(50);
-					  if ( temp.renameTo( file )){
-					  	//System.err.println("2nd attempt of rename succeeded for " + temp.getAbsolutePath() + " to " + file.getAbsolutePath());
-					  	return true;
-					  }
-
-				  	Debug.out( "Save of '" + file_name + "' fails - couldn't rename " + temp.getAbsolutePath() + " to " + file.getAbsolutePath());
+				  }finally{
+					  
+					  tempOS.close();
+						  
+					  tempOS = null;
 				  }
-
-				  return( false );
-
 			  }catch( Throwable e ){
 
 				  Debug.out( "Save of '" + file_name + "' fails", e );
 
 				  return( false );
-
-			  }finally{
-
-				  try{
-					  if (baos != null){
-
-						  baos.close();
-					  }
-				  }catch( Exception e){
-
-					  Debug.out( "Save of '" + file_name + "' fails", e );
-
-					  return( false );
-				  }
 			  }
+
+			  	//only use newly saved file if it got this far, i.e. it saved successfully
+
+			  if ( temp.length() > 1L ){
+
+				  File file = newFile( parent_dir, file_name );
+
+				  if ( file.exists()){
+
+					  if ( !file.delete()){
+
+						  Debug.out( "Save of '" + file_name + "' fails - couldn't delete " + file.getAbsolutePath());
+					  }
+				  }
+
+				  if (file.exists()) {
+					  Debug.out(file + " still exists after delete attempt");
+				  }
+
+				  if ( temp.renameTo( file )){
+
+					  return( true );
+
+				  }
+
+				  	// rename failed, sleep a little and try again
+				  
+				  try{
+					  Thread.sleep(50);
+					  
+				  }catch( Throwable e ){
+				  }
+				  
+				  if ( temp.renameTo( file )){
+					
+					  	//System.err.println("2nd attempt of rename succeeded for " + temp.getAbsolutePath() + " to " + file.getAbsolutePath());
+					  
+					  return true;
+				  }
+
+				  Debug.out( "Save of '" + file_name + "' fails - couldn't rename " + temp.getAbsolutePath() + " to " + file.getAbsolutePath());
+			  }
+
+			  return( false );
+
 		  }finally{
 
 			  releaseReservedFileHandles();
@@ -818,6 +1106,102 @@ public class FileUtil {
 		  class_mon.exit();
 	  }
   }
+
+	  // synchronise it to prevent concurrent attempts to write the same file
+	
+	  private static boolean
+	  writeResilientFileIncrementally(
+		  File			parent_dir,
+		  String		file_name,
+		  Map			data )
+	  {
+		  try{
+			  class_mon.enter();
+	
+			  try{
+				  getReservedFileHandles();
+				  
+				  File temp = newFile(  parent_dir, file_name + ".saving");
+				  	
+				  FileOutputStream fos = null;
+				  
+				  try{
+					  fos = newFileOutputStream( temp, false );
+					  					  
+					  BEncoder.encodeToStream( data, fos );
+					  
+					  fos.flush();
+	
+					  fos.getFD().sync();
+	
+					  fos.close();
+					  fos = null;
+	
+					  //only use newly saved file if it got this far, i.e. it saved successfully
+	
+					  if ( temp.length() > 1L ){
+	
+						  File file = newFile( parent_dir, file_name );
+	
+						  if ( file.exists()){
+	
+							  if ( !file.delete()){
+	
+								  Debug.out( "Save of '" + file_name + "' fails - couldn't delete " + file.getAbsolutePath());
+							  }
+						  }
+	
+						  if (file.exists()) {
+							  Debug.out(file + " still exists after delete attempt");
+						  }
+	
+						  if ( temp.renameTo( file )){
+	
+							  return( true );
+	
+						  }
+	
+						  // rename failed, sleep a little and try again
+						  Thread.sleep(50);
+						  if ( temp.renameTo( file )){
+							  //System.err.println("2nd attempt of rename succeeded for " + temp.getAbsolutePath() + " to " + file.getAbsolutePath());
+							  return true;
+						  }
+	
+						  Debug.out( "Save of '" + file_name + "' fails - couldn't rename " + temp.getAbsolutePath() + " to " + file.getAbsolutePath());
+					  }
+	
+					  return( false );
+	
+				  }catch( Throwable e ){
+	
+					  Debug.out( "Save of '" + file_name + "' fails", e );
+	
+					  return( false );
+	
+				  }finally{
+	
+					  try{
+						  if (fos != null){
+	
+							  fos.close();
+						  }
+					  }catch( Exception e){
+	
+						  Debug.out( "Save of '" + file_name + "' fails", e );
+	
+						  return( false );
+					  }
+				  }
+			  }finally{
+	
+				  releaseReservedFileHandles();
+			  }
+		  }finally{
+	
+			  class_mon.exit();
+		  }
+	  }
 
   	public static boolean
   	resilientConfigFileExists(
@@ -1339,33 +1723,102 @@ public class FileUtil {
     }
     */
 
-    public static boolean copyFile( final File _source, final File _dest ) {
-      try {
-    	File parent = _dest.getParentFile();
-    	if ( !parent.exists()){
-    		parent.mkdirs();
+    public static boolean 
+    copyFileWithDates( 
+    	File 	from_file, 
+    	File 	to_file ) 
+    {
+		FileTime from_last_modified = null;
+		FileTime from_last_access	= null;
+		FileTime from_created		= null;
+		
+   		try{
+			BasicFileAttributeView from_attributes_view 	= Files.getFileAttributeView( from_file.toPath(), BasicFileAttributeView.class);
+
+			BasicFileAttributes from_attributes = from_attributes_view.readAttributes();
+
+			from_last_modified 	= from_attributes.lastModifiedTime();
+			from_last_access	= from_attributes.lastAccessTime();
+			from_created		= from_attributes.creationTime();
+			
+		}catch( Throwable e ){
+		}
+   		
+    	try{
+    		File parent = to_file.getParentFile();
+    		
+    		if ( !parent.exists()){
+    			
+    			parent.mkdirs();
+    		}
+    		
+    		copyFile( newFileInputStream( from_file ), newFileOutputStream( to_file ) );
+    		
+    		try{
+    			BasicFileAttributeView to_attributes_view 		= Files.getFileAttributeView( to_file.toPath(), BasicFileAttributeView.class);
+
+   				to_attributes_view.setTimes( from_last_modified, from_last_access, from_created );
+    		
+    		}catch( Throwable e ){
+    		}
+    		
+    		return( true );
+    		
+    	}catch( Throwable e ) {
+    		
+    		Debug.out( "Copy failed for " + from_file, e );
+    		
+    		return( false );
     	}
-        copyFile( newFileInputStream( _source ), newFileOutputStream( _dest ) );
-        return true;
-      }
-      catch( Throwable e ) {
-      	Debug.out( "Copy failed for " + _source, e );
-        return false;
-      }
+    }
+    
+    public static boolean 
+    copyFile( 
+    	File 	_source, 
+    	File 	_dest ) 
+    {
+    	try {
+    		File parent = _dest.getParentFile();
+    		if ( !parent.exists()){
+    			parent.mkdirs();
+    		}
+    		copyFile( newFileInputStream( _source ), newFileOutputStream( _dest ) );
+    		return true;
+    	}
+    	catch( Throwable e ) {
+    		Debug.out( "Copy failed for " + _source, e );
+    		return false;
+    	}
     }
 
-    public static void copyFileWithException( final File _source, final File _dest ) throws IOException{
-         copyFile( newFileInputStream( _source ), newFileOutputStream( _dest ) );
+    public static void 
+    copyFileWithException( 
+    	File 				_source, 
+    	File 				_dest,
+    	ProgressListener	pl ) 
+    		
+    	throws IOException
+    {
+         copyFile( newFileInputStream( _source ), newFileOutputStream( _dest ), pl );
     }
 
-    public static boolean copyFile( final File _source, final OutputStream _dest, boolean closeInputStream ) {
-        try {
+    public static boolean 
+    copyFile( 
+    	File 			_source, 
+    	OutputStream 	_dest, 
+    	boolean 		closeInputStream ) 
+    {
+        try{
+        	
           copyFile( newFileInputStream( _source ), _dest, closeInputStream );
+          
           return true;
-        }
-        catch( Throwable e ) {
+          
+        }catch( Throwable e ){
+        	
         	Debug.printStackTrace( e );
-          return false;
+          
+        	return false;
         }
       }
 
@@ -1473,6 +1926,17 @@ public class FileUtil {
     }
 
     public static void
+    copyFile(
+      InputStream   	is,
+      OutputStream  	os,
+      ProgressListener	pl )
+
+    	throws IOException
+    {
+    	copyFile(is,os,true,pl);
+    }
+    
+    public static void
 	copyFile(
 		InputStream		is,
 		OutputStream	os,
@@ -1513,6 +1977,77 @@ public class FileUtil {
     	}
 	}
 
+    public static void
+	copyFile(
+		InputStream			is,
+		OutputStream		os,
+		boolean 			closeInputStream,
+		ProgressListener	pl )
+
+		throws IOException
+	{
+    	try{
+
+    		if ( !(is instanceof BufferedInputStream )){
+
+    			is = new BufferedInputStream(is,128*1024);
+    		}
+
+    		byte[]	buffer = new byte[128*1024];
+
+      		while(true){
+
+    			if ( pl != null ){
+    				
+    				while( true ){
+    					
+    					int state =  pl.getState();
+    					
+    					if ( state == ProgressListener.ST_PAUSED ){
+    			
+    						try{
+    							Thread.sleep(250);
+    						}catch( Throwable e ){
+    						}
+    						
+    					}else if ( state == ProgressListener.ST_CANCELLED ){
+    						    						
+    						throw( new IOException( "Cancelled" ));
+    						
+    					}else{
+    						
+    						break;
+    					}
+    				}
+    			}	
+    			
+    			int	len = is.read(buffer);
+
+    			if ( len == -1 ){
+
+    				break;
+    			}
+
+    			os.write( buffer, 0, len );
+    			
+    			if ( pl != null ){
+    				
+    				pl.bytesDone( len );
+    			}
+    		}
+    	}finally{
+    		try{
+    			if(closeInputStream){
+    			  is.close();
+    			}
+    		}catch( IOException e ){
+
+    		}
+
+    		os.close();
+    	}
+	}
+    
     public static void
     copyFileOrDirectory(
     	File	from_file_or_dir,
@@ -1685,7 +2220,7 @@ public class FileUtil {
 		File		from_file,
 		File		to_file )
     {
-        return renameFile(from_file, to_file, true);
+        return( renameFile(from_file, to_file, true) == null );
    	}
 
     public static boolean
@@ -1694,10 +2229,10 @@ public class FileUtil {
  		File				to_file,
  		ProgressListener	pl )
     {
-         return renameFile(from_file, to_file, true, null, pl );
+         return( renameFile(from_file, to_file, true, null, pl ) == null );
     }
     
-    public static boolean
+    private static String
     renameFile(
         File        from_file,
         File        to_file,
@@ -1706,7 +2241,7 @@ public class FileUtil {
     	return renameFile(from_file, to_file, fail_on_existing_directory, null, null);
     }
     
-    public static boolean
+    public static String
     renameFile(
    		File        		from_file,
    		File        		to_file,
@@ -1730,9 +2265,9 @@ public class FileUtil {
 		}catch( Throwable e ){
 		}
    		
-    	boolean result = renameFileSupport( from_file, to_file, fail_on_existing_directory, file_filter, pl );
+    	String result = renameFileSupport( from_file, to_file, fail_on_existing_directory, file_filter, pl );
 
-    	if ( result ){
+    	if ( result == null ){
 
     			// try to maintain the file times if they now differ 
     		
@@ -1755,12 +2290,15 @@ public class FileUtil {
     			}
     		}catch( Throwable e ){
     		}
+    	}else{
+    		
+    		Debug.out( result );
     	}
 
     	return( result );
     }
         
-    private static boolean
+    private static String
     renameFileSupport(
     	File        		from_file,
     	File        		to_file,
@@ -1770,9 +2308,7 @@ public class FileUtil {
     {
     	if ( !from_file.exists()){
 
-    		Debug.out( "renameFile: source file '" + from_file + "' doesn't exist, failing" );
-
-    		return( false );
+    		return( "renameFile: source file '" + from_file + "' doesn't exist, failing" );
     	}
     	
     	boolean to_file_exists = to_file.exists();
@@ -1783,13 +2319,13 @@ public class FileUtil {
     			
     			if ( areFilePathsIdentical( from_file, to_file )){
     				
-    				return( true );	// nothing to do
+    				return( null );	// nothing to do
     				
     			}else{
     				
     				if ( from_file.renameTo( to_file )){
     					
-    					return( true );
+    					return( null );
     				}
     			}
     		}
@@ -1812,9 +2348,7 @@ public class FileUtil {
     	
         if ( to_file_exists && ( fail_on_existing_directory || from_file.isFile() || to_file.isFile())) {
 
-        	Debug.out( "renameFile: target file '" + to_file + "' already exists, failing" );
-
-            return( false );
+        	return( "renameFile: target file '" + to_file + "' already exists, failing" );
         }
         
 		if ( pl != null ){
@@ -1832,10 +2366,8 @@ public class FileUtil {
 					
 				}else if ( state == ProgressListener.ST_CANCELLED ){
 					
-					Debug.out( "renameFile: Cancelled" );
-					
-					return( false );
-					
+					return( "renameFile: Cancelled" );
+										
 				}else{
 					
 					break;
@@ -1867,11 +2399,13 @@ public class FileUtil {
 
     				// empty dir
 
-    			return( true );
+    			return( null );
     		}
 
     		int	last_ok = 0;
 
+    		String last_error = null;
+    		
     		if ( !to_file.exists()){
     			
     			to_file.mkdir();
@@ -1883,12 +2417,16 @@ public class FileUtil {
 				File	tf = newFile( to_file, ff.getName());
 
     			try{
-     				if ( renameFile( ff, tf, fail_on_existing_directory, file_filter, pl )){
+     				String res = renameFile( ff, tf, fail_on_existing_directory, file_filter, pl );
 
+     				if ( res == null ){
+     					
     					last_ok++;
 
     				}else{
 
+    					last_error = res;
+    					
     					break;
     				}
     			}catch( Throwable e ){
@@ -1913,7 +2451,7 @@ public class FileUtil {
     				}
     				else {
     					/* Should we log this? How should we log this? */
-    					return true;
+    					return( null );
     				}
 
     			}else{
@@ -1924,7 +2462,7 @@ public class FileUtil {
     				}
     			}
 
-    			return( true );
+    			return( null );
     		}
 
     			// recover by moving files back
@@ -1941,7 +2479,7 @@ public class FileUtil {
 	    			try{
 	    				// null - We don't want to use the file filter, it only refers to source paths.
 	    				
-	                    if ( !renameFile( 
+	                    if ( renameFile( 
 	                    		tf, 
 	                    		ff, 
 	                    		false, 
@@ -1990,7 +2528,7 @@ public class FileUtil {
 	                    			{
 	                    				
 	                    			}
-	                    		})){
+	                    		}) != null ){
 	                    
 	    					Debug.out( "renameFile: recovery - failed to move file '" + tf.toString()
 											+ "' to '" + ff.toString() + "'" );
@@ -2003,32 +2541,31 @@ public class FileUtil {
 	      		}
       		}
 
-      		return( false );
+    		if ( last_error != null ){
+      		
+    			return( last_error );
+    		}
 
+    		return( "failed to move one or more files" );
     	}else{
 
     		boolean	same_drive = false;
     		
-	    	if ( mToPath != null && mPath_getFileStore != null ){
-				try{
-					/* FileStore is minSDK 26 on Android
-					FileStore fs1 = Files.getFileStore( from_file.toPath());
-					FileStore fs2 = Files.getFileStore( to_file_parent.toPath());
-					*/
-	
-					/* Path */ Object from_file_toPath = mToPath.invoke(from_file);
-					/* Path */ Object to_file_parent_toPath = mToPath.invoke(to_file_parent);
-	
-					/* FileStore */ Object fs1 = mPath_getFileStore.invoke(null, from_file_toPath);
-					/* FileStore */ Object fs2 = mPath_getFileStore.invoke(null, to_file_parent_toPath);
-	
-	   				if ( fs1.equals( fs2 )){
-	
-	   					same_drive = true;
-	   				}
-				}catch( Throwable e ){
-				}
-	    	}
+    		FileStore fs1 = null;
+    		FileStore fs2 = null;
+
+    		try{
+    			fs1 = Files.getFileStore( from_file.toPath());
+    			fs2 = Files.getFileStore( to_file_parent.toPath());
+
+    			if ( fs1.equals( fs2 )){
+
+    				same_drive = true;
+    			}
+    		}catch( Throwable e ){
+
+    			log("Failed to determine if files on same drive: " + from_file + " (" + fs1 + "), " + to_file_parent + " (" + fs2 + ")", e );
+    		}
 			
 	    	boolean	use_copy = COConfigurationManager.getBooleanParameter("Copy And Delete Data Rather Than Move");
 
@@ -2047,6 +2584,8 @@ public class FileUtil {
     			if ( pl != null && !same_drive ){
     				
     				use_copy = true;	// so we get incremental progress reports
+    				
+    				log( "Copying file to get progress reports (" + fs1 + "/" + fs2 + ")" );
     			}
     		}
     		
@@ -2082,9 +2621,11 @@ public class FileUtil {
     					}
     				}
     				
-    				return( true );
+    				return( null );
     				
     			}else{
+    				
+    				log( "Failed to rename " + from_file + " to " + to_file + ", resorting to copy+delete");
     				
     					// attempt to copy
     				
@@ -2093,37 +2634,131 @@ public class FileUtil {
     		}
     	}
     }
-
-    public static Object
-    getFileStore(
-    	File		file )
+    
+    private static String[]			fs_names			= null;
+    private static long				fs_names_last		= -1;
+    private static Object			fs_names_lock		= new Object();
+    private static AsyncDispatcher	fs_names_dispatcher = null; // can't initialise this here due to dependencies (e.g. in "portable BiglyBT setup")... new AsyncDispatcher();
+    
+    private static boolean			fs_updating;
+    
+    private static List<Consumer<String[]>>	fs_pending_callbacks = new ArrayList<>();
+    
+    static{
+    		// preload
+    	
+    	getFileStoreNames();
+    }
+    
+    public static void
+    getFileStoreNames(
+    	Consumer<String[]>	callback )
     {
-    	if ( mToPath != null && mPath_getFileStore != null ){
+    	final String[]	existing_result;
+    	
+    	boolean	do_update			= false;
+    	
+    	synchronized( fs_names_lock ){
     		
-    			// file has to exist to have a filestore so walk up the tree if necessary
-    		
-    		File temp = file;
-    		
-    		while( temp != null ){
+    		if ( fs_names_dispatcher == null ){
     			
-				try{
-					/* FileStore is minSDK 26 on Android
-					*/
-	
-					/* Path */ Object path = mToPath.invoke( temp );
-	
-					/* FileStore */ Object fs = mPath_getFileStore.invoke(null, path);
-					
-					return( fs );
-					
-				}catch( Throwable e ){
-				}
-				
-				temp = temp.getParentFile();
+    			fs_names_dispatcher = new AsyncDispatcher();
+    		}
+    		
+    		existing_result = fs_names;
+    		
+    		if ( existing_result == null || SystemTime.getMonotonousTime() - fs_names_last >= 30*1000 ){
+    			
+    			fs_pending_callbacks.add( callback );
+    			
+    			if ( !fs_updating ){
+     				
+    				fs_updating = true;
+    			
+    				do_update = true;
+    			}
     		}
     	}
     	
-    	return( null );
+    	if ( existing_result != null ){
+    		
+    		try{
+    			callback.accept( existing_result );
+    			
+    		}catch( Throwable e ){
+    			
+    			Debug.out( e );
+    		}
+    	}
+    	
+    	if ( do_update ){
+    		
+	    	fs_names_dispatcher.dispatch(()->{
+	    		
+	    		String[] new_result = {};
+	    		
+	    		try{
+			    	List<Object> fs = fileHandling.getFileStores();
+			    	
+			    	new_result = new String[fs.size()];
+			    	
+			    	int pos = 0;
+			    	
+			    	for ( Object f: fs ){
+			    	
+			    		new_result[pos++] = String.valueOf( f );
+			    	}
+	    		}catch( Throwable e ){
+	    			
+	    			Debug.out( e );
+	    		
+	    		}finally{
+	    			
+	    			List<Consumer<String[]>>	callbacks;
+	    			
+	    			synchronized( fs_names_lock ){
+			    	
+	    				fs_names = new_result;
+	    				
+	    				fs_names_last = SystemTime.getMonotonousTime();
+	    				
+	    				callbacks = fs_pending_callbacks;
+	    				
+	    				fs_pending_callbacks = new ArrayList<>();
+	    				
+	    				fs_updating = false;
+			    	}
+	    			
+	    			if ( existing_result == null || !Arrays.deepEquals( existing_result, new_result )){
+	    				
+	    				for ( Consumer<String[]> cb: callbacks ){
+	    					
+		    				try{    					
+		    					cb.accept( new_result );
+		    					
+		    				}catch( Throwable e ){
+		    					
+		    					Debug.out( e );
+		    				}
+	    				}
+	    			}
+	    		}
+	    	});
+	    }
+    }
+    
+    public static String
+    getFileStoreName(
+    	File		file )
+    {
+    	Object obj = fileHandling.getFileStore(file);
+    	
+    	if ( obj == null ){
+    		
+    		return( null );
+    	}
+    	
+    	return( String.valueOf( obj ));
     }
     
     public static String[]
@@ -2144,18 +2779,18 @@ public class FileUtil {
     			continue;
     		}
     		
-    		Object fs = getFileStore( f );
+    		String fs = getFileStoreName( f );
     		
     		if ( fs != null ){
     			
-    			result.add( String.valueOf( fs ));
+    			result.add( fs );
     		}
     	}
     	   
     	return( result.toArray( new String[ result.size()] ));
     }
     		
-    private static boolean
+    private static String
     reallyCopyFile(
     	File				from_file,
     	File				to_file,
@@ -2317,14 +2952,13 @@ public class FileUtil {
 
     		success	= true;
 
-    		return( true );
+    		return( null );
 
     	}catch( Throwable e ){
 
-    		Debug.out( "renameFile: failed to rename '" + from_file.toString()
-    		+ "' to '" + to_file.toString() + "'", e );
-
-    		return( false );
+    		return( 
+    			"renameFile: failed to rename '" + from_file.toString()	+ 
+    				"' to '" + to_file.toString() + "': " + Debug.getNestedExceptionMessage(e));
 
     	}finally{
 
@@ -3105,15 +3739,10 @@ public class FileUtil {
    		}
    	}
 
-	public static boolean getUsableSpaceSupported()
-	{
-		return reflectOnUsableSpace != null;
-	}
-
 	public static long getUsableSpace(File f)
 	{
 		try{
-			return ((Long)reflectOnUsableSpace.invoke(f)).longValue();
+			return f.getUsableSpace();
 
 		}catch ( Throwable e){
 
@@ -3249,6 +3878,19 @@ public class FileUtil {
 	
 	public static void
 	log(
+		String		str,
+		boolean		addLocation )
+	{
+		if ( addLocation ){
+			
+			str += ": " + Debug.getStackTrace( true, false );
+		}
+		
+		log( str, null );
+	}
+	
+	public static void
+	log(
 		String		str, 
 		Throwable	error )
 	{
@@ -3272,11 +3914,34 @@ public class FileUtil {
 		}
 	}
 	
+	public static String
+	removeTrailingSeparators(
+		String 	str )
+	{
+			// on Windows we don't want C:\ to be turned into C:
+			// not sure if there are implications for UNC \\server style paths
+			// or ones including ~ on linux...
+		
+		int min_length = 1;
+		
+		if ( Constants.isWindows && str.length() > 2 && str.charAt(1)== ':' ){
+			
+			min_length = 3;
+		}
+		
+		while( str.endsWith( File.separator ) && str.length() > min_length ){
+			
+			str = str.substring(0, str.length()-1 );
+		}
+		
+		return( str );
+	}
+	
 		/**
 		 * Gets the encoding that should be used when writing script files (currently only
 		 * tested for windows as this is where an issue can arise...)
 		 * We also only test based on the user-data directory name to see if an explicit
-		 * encoding switch is requried...
+		 * encoding switch is required...
 		 * @return null - use default
 		 */
 
@@ -3322,6 +3987,468 @@ public class FileUtil {
 			return( script_encoding );
 		}
 	}
+
+		// when a file is on an unavailable network share (for example) then this can trash the UI by hanging the SWT thread.
+	
+	private static Map<Path,int[]>		bad_roots = new HashMap<>();
+	
+	interface
+	FileOpWithTimeout<T>
+	{
+		public T
+		run()
+			throws IOException;
+	}
+	
+	private static <T> T
+	runFileOpWithTimeout(
+		File					file,
+		FileOpWithTimeout<T>	fo,
+		T						def,
+		long					strict_timeout )
+	{
+		try{
+			return( runFileOpWithTimeoutEx( file, fo, def, null, strict_timeout ));
+						
+		}catch( Throwable e ){
+			
+			return( def );
+		}
+	}
+	
+	private static <T> T
+	runFileOpWithTimeoutEx(
+		File					file,
+		FileOpWithTimeout<T>	fo,
+		IOException				def_error,
+		long					strict_timeout )
+	
+		throws IOException
+	{
+		try{
+			return( runFileOpWithTimeoutEx( file, fo, null, def_error, strict_timeout ));
+						
+		}catch( IOException e ){
+			
+			throw( e );
+			
+		}catch( Throwable e ){
+			
+			throw( def_error );
+		}
+	}
+	
+	private static AsyncDispatcher fot_dispatcher = new AsyncDispatcher( "FOT" );
+	
+	private static <T> T
+	runFileOpWithTimeoutEx(
+		File					file,
+		FileOpWithTimeout<T>	fo,
+		T						def_result,
+		IOException				def_error,
+		long					strict_timeout )
+	
+		throws IOException
+	{		
+		synchronized( bad_roots ){
+	
+			if ( !bad_roots.isEmpty()){
+				
+				Path root_path = file.toPath().getRoot();
+
+				if ( bad_roots.containsKey( root_path )){
+				
+					if ( def_error == null ){
+						
+						return( def_result );
+						
+					}else{
+					
+						throw( def_error );
+					}
+				}
+			}
+		}
+		
+		FileOpWithTimeout<T> delegate = ()->{	
+		
+			long	start = SystemTime.getMonotonousTime();
+	
+			try{			
+				return( fo.run());
+				
+			}finally{
+				
+				long	elapsed = SystemTime.getMonotonousTime() - start;
+				
+				if ( elapsed > 2500 ){
+					
+					Path root_path = file.toPath().getRoot();
+					
+					synchronized( bad_roots ){
+						
+						if ( !bad_roots.containsKey(root_path)){
+					
+							if ( bad_roots.size() > 1024 ){
+								
+								Debug.out( "Bad roots size limit exceeded for " + root_path );
+								
+							}else{
+								
+								bad_roots.put(root_path, new int[]{0});
+								
+								if ( bad_roots.size() == 1 ){
+									
+									AEThread2.createAndStartDaemon( "BadRootChecker", ()->{
+										
+										while( true ){								
+											try{
+												Thread.sleep( 30*1000 );
+												
+											}catch( Throwable e ){
+												
+											}
+											
+											Map<Path, int[]> to_check;
+											
+											synchronized( bad_roots ){
+												
+												to_check = new HashMap<>( bad_roots );										
+											}
+											
+											for ( Map.Entry<Path,int[]> entry: to_check.entrySet()){
+												
+												try{
+													long check_start = SystemTime.getMonotonousTime();
+													
+													int limit = 250;
+													
+													Path	path	= entry.getKey();
+													int[]	oks		= entry.getValue();
+															
+													File 	check_file	= path.toFile();
+	outer:
+													for ( int i=0;; i++){
+														
+														switch(i){
+															case 0:{
+																check_file.getCanonicalPath();
+																break;
+															}
+															case 1:{
+																check_file.exists();
+																break;
+															}
+															case 2:{
+																check_file.length();
+																break;
+															}
+															case 3:{
+																check_file.isDirectory();
+																break;
+															}
+															case 4:{
+																File random_file = new File( check_file, "Test" + RandomUtils.nextAbsoluteLong() + ".dat" );
+	
+																if ( random_file.isFile()){
+																
+																	Thread.sleep(limit);
+																}
+																
+																break;
+															}
+															case 5:{
+																check_file.listFiles();
+																break;
+															}
+															default:{
+																break outer;
+															}
+														}
+														
+														if ( SystemTime.getMonotonousTime() - check_start >= limit ){
+															
+															break;
+														}
+													}												
+													
+													if ( SystemTime.getMonotonousTime() - check_start < limit ){
+														
+														oks[0]++;
+														
+														if ( oks[0] > 2 ){
+															
+															Debug.out( "Root path " + path + " appears to be responding in a timely manner, enabling" );
+															
+															synchronized( bad_roots ){
+																
+																bad_roots.remove( path );
+																
+																if ( bad_roots.isEmpty()){
+																	
+																	return;
+																}
+															}
+														}
+													}else{
+														
+														oks[0] = 0;
+													}
+												}catch( Throwable e ){
+													
+												}
+											}
+										}
+									});
+								}
+							
+								Debug.out( "Root path " + root_path + " isn't responding in a timely manner, disabling" );
+							}
+						}
+					}
+				}
+			}
+		};
+		
+		if ( strict_timeout == -1 ){
+		
+			return( delegate.run());
+			
+		}else{
+			
+			AESemaphore sem = new AESemaphore( "FOT" );
+			
+			Object[] result = { null };
+			
+			fot_dispatcher.dispatch(()->{
+				
+				try{
+					
+					T r = delegate.run();
+					
+					synchronized( result ){
+						
+						result[0] = r;
+					}
+				}catch( IOException e ){
+					
+					synchronized( result ){
+					
+						result[0] = e;
+					}
+					
+				}finally{
+				
+					sem.release();
+				}
+			});
+			
+			if ( sem.reserve( strict_timeout )){
+				
+				synchronized( result ){
+					
+					Object r = result[0];
+					
+					if ( r instanceof IOException ){
+						
+						throw((IOException)r);
+					}else{
+						
+						return((T)r);
+					}
+				}
+			}else{
+				
+				return( def_result );
+			}
+		}
+	}
+	
+	public static long
+	lengthWithTimeout(
+		File		file )
+	{
+		return( lengthWithTimeout(file, -1 ));
+	}
+	
+	public static long
+	lengthWithTimeout(
+		File		file,
+		long		strict_timeout )
+	{
+		return(runFileOpWithTimeout(file,()->{
+			return( file.length());
+		},0L, strict_timeout ));
+	}
+	
+	public static boolean
+	canReadWithTimeout(
+		File		file )
+	{
+		return( canReadWithTimeout(file, -1 ));
+	}
+	
+	public static boolean
+	canReadWithTimeout(
+		File		file,
+		long		strict_timeout )
+	{
+		return(runFileOpWithTimeout(file,()->{
+			return( file.canRead());
+		},false, strict_timeout ));
+	}
+
+	public static boolean
+	isDirectoryWithTimeout(
+		File		file )
+	{
+		return( isDirectoryWithTimeout( file, -1 ));
+	}
+	
+	public static boolean
+	isDirectoryWithTimeout(
+		File		file,
+		long		strict_timeout )
+	{
+		return(runFileOpWithTimeout(file,()->{
+			return( file.isDirectory());
+		},false, strict_timeout ));	
+	}
+	
+	public static boolean
+	existsWithTimeout(
+		File		file )
+	{
+		return( existsWithTimeout( file, -1 ));
+	}
+	
+	public static boolean
+	existsWithTimeout(
+		File		file,
+		long		strict_timeout )
+	{
+		return(runFileOpWithTimeout(file,()->{
+			return( file.exists());
+		},false, strict_timeout ));	
+	}
+	
+	
+	private static boolean
+	existsWithTimeoutAndException(
+		File		file,
+		long		strict_timeout )
+	
+		throws IOException
+	{
+		return(runFileOpWithTimeoutEx(file,()->{
+			return( file.exists());
+		}, new IOException( "File system not responding/slow" ), strict_timeout ));	
+	}
+	
+	public static boolean
+	isResponding(
+		File		file,
+		long		strict_timeout )
+	{
+		try{
+			long st = strict_timeout<=1?strict_timeout:(strict_timeout/2);
+			
+			getCanonicalPathWithTimeout( file, st );
+			
+			existsWithTimeoutAndException( file, st );
+			
+			return( true );
+			
+		}catch( Throwable e ){
+			
+			return( false );
+		}
+	}
+	public static String
+	getCanonicalPathWithTimeout(
+		File		file )
+	
+		throws IOException
+	{
+		return( getCanonicalPathWithTimeout( file, -1 ));
+	}
+	
+	public static String
+	getCanonicalPathWithTimeout(
+		File		file,
+		long		strict_timeout )
+	
+		throws IOException
+	{
+		return(runFileOpWithTimeoutEx(file,()->{
+			return( file.getCanonicalPath());
+		}, new IOException( "File system not responding/slow" ), strict_timeout ));	
+	}
+	
+	private static volatile File[]	last_roots = {};
+	private static long				last_roots_time = -1;
+	
+    private static AsyncDispatcher	root_updater = new AsyncDispatcher( "RootUpdater" );
+    private static AESemaphore		root_update_sem;
+    
+	public static File[]
+	listRootsWithTimeout()
+	{
+		return( listRootsWithTimeout( 250 ));
+	}
+	
+	public static File[]
+	listRootsWithTimeout(
+		long		timeout )
+	{	
+		long now = SystemTime.getMonotonousTime();
+		
+		AESemaphore sem;
+		
+		synchronized( root_updater ){
+		
+			if ( last_roots_time != -1 && now - last_roots_time < 10*1000 ){
+								
+				return( last_roots );
+			}
+			
+			sem = root_update_sem;
+			
+			if ( sem == null ){
+				
+				last_roots_time = now;
+				
+				sem = root_update_sem = new AESemaphore( "RootUpdate" );
+				
+				root_updater.dispatch(()->{
+					
+					try{
+							// this can take a while if network shares are disconnected (for example)
+						
+						File[] roots = File.listRoots();
+						
+						if ( roots != null ){
+							
+							last_roots = roots;
+						}
+					}finally{
+					
+						synchronized( root_updater ){
+						
+						
+							root_update_sem.releaseForever();
+							
+							root_update_sem = null;
+						}
+					}
+				});
+			}
+		}
+		
+		sem.reserve( timeout );
+		
+		return( last_roots );
+	}
 	
 	public interface
 	ProgressListener
@@ -3354,6 +4481,8 @@ public class FileUtil {
 		String		parent,
 		String...		subDirs )
 	{
+		//Debug.out( parent + "." + subDirs );
+		
 		return fileHandling.newFile(parent, subDirs);
 	}
 
@@ -3362,6 +4491,8 @@ public class FileUtil {
 		File		parent_file,
 		String...		subDirs )
 	{
+		//Debug.out( parent_file + "." + subDirs );
+		
 		return fileHandling.newFile(parent_file, subDirs);
 	}
 	
@@ -3826,10 +4957,12 @@ public class FileUtil {
 			Debug.out( "!" );
 			return super.toURI();
 		}
-		@Override
+		
+			/* deprecated */
+		
 		public URL toURL() throws MalformedURLException{
 			Debug.out( "!" );
-			return super.toURL();
+			return super.toURI().toURL();
 		}
 	}
 }

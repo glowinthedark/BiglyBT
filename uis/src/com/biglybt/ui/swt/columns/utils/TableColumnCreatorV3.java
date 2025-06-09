@@ -18,9 +18,6 @@
 
 package com.biglybt.ui.swt.columns.utils;
 
-import java.lang.reflect.Constructor;
-import java.util.*;
-
 import com.biglybt.activities.ActivitiesEntry;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.LightHashMap;
@@ -29,15 +26,21 @@ import com.biglybt.pif.download.DownloadTypeComplete;
 import com.biglybt.pif.download.DownloadTypeIncomplete;
 import com.biglybt.pif.peers.Peer;
 import com.biglybt.pif.ui.tables.TableColumn;
-import com.biglybt.plugin.net.buddy.swt.columns.ColumnChatMessageCount;
 import com.biglybt.ui.common.table.TableColumnCore;
 import com.biglybt.ui.common.table.TableColumnCoreCreationListener;
 import com.biglybt.ui.common.table.impl.TableColumnManager;
 import com.biglybt.ui.swt.columns.peer.ColumnPeerBoost;
 import com.biglybt.ui.swt.columns.torrent.*;
 import com.biglybt.ui.swt.columns.vuzeactivity.*;
+import com.biglybt.ui.swt.plugin.net.buddy.swt.columns.ColumnChatMessageCount;
 import com.biglybt.ui.swt.views.table.utils.TableColumnCreator;
 import com.biglybt.ui.swt.views.tableitems.mytorrents.*;
+
+import java.lang.reflect.Constructor;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 
 /**
  * A utility class for creating some common column sets; this is a virtual clone of <code>TableColumnCreator</code>
@@ -539,8 +542,7 @@ public class TableColumnCreatorV3
 			}
 		};
 
-		tcManager.unregisterColumn(NameItem.DATASOURCE_TYPE, NameItem.COLUMN_ID,
-				null);
+		tcManager.unregisterColumn(NameItem.DATASOURCE_TYPE, NameItem.COLUMN_ID );
 
 		for (String id : c.keySet()) {
 			cInfo info = c.get(id);

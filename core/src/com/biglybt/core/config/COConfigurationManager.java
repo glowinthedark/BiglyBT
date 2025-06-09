@@ -22,7 +22,6 @@ package com.biglybt.core.config;
 
 import java.io.*;
 import java.net.URL;
-import java.security.AccessControlException;
 import java.security.Security;
 import java.util.List;
 import java.util.Map;
@@ -32,8 +31,6 @@ import com.biglybt.core.config.impl.ConfigurationDefaults;
 import com.biglybt.core.config.impl.ConfigurationManager;
 import com.biglybt.core.util.*;
 import com.biglybt.core.util.protocol.AzURLStreamHandlerFactory;
-import com.biglybt.core.util.spi.AENameServiceJava9;
-import com.biglybt.core.util.spi.AENameServiceJava12;
 
 public class
 COConfigurationManager
@@ -60,6 +57,7 @@ COConfigurationManager
 	public static final int	MAX_DATA_SOCKS_PROXIES = 3;
 	
 	private static boolean	pre_initialised;
+	private static boolean	pre_initialising;
 
 	public static synchronized void
 	preInitialise()
@@ -69,6 +67,8 @@ COConfigurationManager
 			pre_initialised	= true;
 
 			try{
+				pre_initialising = true;
+				
 				if ( System.getProperty(SystemProperties.SYSPROP_PORTABLE_ENABLE, "false" ).equalsIgnoreCase( "true" )){
 
 					try{
@@ -235,13 +235,22 @@ COConfigurationManager
 
 				if ( Constants.isJava9OrHigher ){
 					
-					if ( Constants.isJava12OrHigher ){
+					try{
+						if ( Constants.isJava18OrHigher ){
+													
+							Class.forName( "com.biglybt.core.util.spi.AENameServiceJava18").getMethod( "init" ).invoke( null );
+
+						}else if ( Constants.isJava12OrHigher ){
+														
+							Class.forName( "com.biglybt.core.util.spi.AENameServiceJava12").getMethod( "init" ).invoke( null );
+							
+						}else{
+								
+							Class.forName( "com.biglybt.core.util.spi.AENameServiceJava9").getMethod( "init" ).invoke( null );
+						}
+					}catch( Throwable e ){
 						
-						AENameServiceJava12.init();
-						
-					}else{
-						
-						AENameServiceJava9.init();
+						// issues will be reported later
 					}
 				}else{
 					
@@ -254,15 +263,15 @@ COConfigurationManager
 
 			}catch( Throwable e ){
 
-					// can happen in applet
-
-				if ( e instanceof AccessControlException ){
-
-				}else{
-
-					e.printStackTrace();
-				}
+				e.printStackTrace();
+				
+			}finally{
+				
+				pre_initialising = false;
 			}
+		}else if ( pre_initialising ){
+			
+			new Exception( "Recursion during pre-init" ).printStackTrace();
 		}
 	}
 
@@ -649,6 +658,49 @@ COConfigurationManager
 	{
 		for ( String parameter: parameters ){
 			ConfigurationManager.getInstance().removeParameterListener(parameter, listener);
+		}
+	}
+	
+	public static void
+	addAndFireWeakParameterListener(String parameter, ParameterListener listener)
+	{
+	  ConfigurationManager.getInstance().addWeakParameterListener(parameter, listener);
+
+	  try {
+		  listener.parameterChanged( parameter );
+
+	  }catch (Throwable e) {
+
+		  Debug.printStackTrace(e);
+	  }
+	}
+
+	public static void
+	addAndFireWeakParameterListeners(String[] parameters, ParameterListener listener)
+	{
+		for (int i=0;i<parameters.length;i++){
+			ConfigurationManager.getInstance().addWeakParameterListener(parameters[i], listener);
+		}
+
+		try{
+			listener.parameterChanged( null );	// code out there relies on the param being null, no changey!
+
+		}catch (Throwable e) {
+
+			Debug.printStackTrace(e);
+		}
+	}
+	public static void
+	removeWeakParameterListener(String parameter, ParameterListener listener)
+	{
+		ConfigurationManager.getInstance().removeWeakParameterListener(parameter, listener);
+	}
+
+	public static void
+	removeWeakParameterListeners(String[] parameters, ParameterListener listener)
+	{
+		for ( String parameter: parameters ){
+			ConfigurationManager.getInstance().removeWeakParameterListener(parameter, listener);
 		}
 	}
 	

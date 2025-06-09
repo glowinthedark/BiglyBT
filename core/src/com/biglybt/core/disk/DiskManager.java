@@ -39,6 +39,7 @@ import com.biglybt.core.util.IndentWriter;
 public interface
 DiskManager
 {
+	public static final int SNAPSHOT = 0;
 	public static final int INITIALIZING = 1;
 	public static final int ALLOCATING = 2;
 	public static final int CHECKING = 3;
@@ -269,9 +270,9 @@ DiskManager
 	public int
 	getErrorType();
 
-	public void
+	public DownloadEndedProgress
 	downloadEnded(
-		OperationStatus		op_status );
+		boolean	start_of_day );
 
     public void
     downloadRemoved();
@@ -279,8 +280,7 @@ DiskManager
 	public void
 	moveDataFiles(
 		File 				new_parent_dir,
-		String 				dl_name,
-		OperationStatus 	op_status );
+		String 				dl_name );
 
 		/**
 		 * returns -1 if no recheck in progress, percentage complete in 1000 notation otherwise
@@ -290,6 +290,9 @@ DiskManager
 	public int
 	getCompleteRecheckStatus();
 
+	public boolean
+	getRecheckCancelled();
+	
 		/**
 		 * When a download's data is moving (for completion or removal events) this gives the [progress in 1000 notation,total_size]
 		 * null if nothing's going on
@@ -383,24 +386,12 @@ DiskManager
 	public long[]
 	getReadStats();
 
+	public long[]
+	getWriteStats();
+
 	public void
 	generateEvidence(
 		IndentWriter		writer );
-
-	public interface
-	OperationStatus
-	{
-		public void
-		gonnaTakeAWhile(
-			GettingThere	gt );
-	}
-
-	public interface
-	GettingThere
-	{
-		public boolean
-		hasGotThere();
-	}
 
 	public long getSizeExcludingDND();
 
@@ -408,4 +399,14 @@ DiskManager
 
 	public long
 	getPriorityChangeMarker();
+	
+	public void
+	rateLimitChanged();
+	
+	public interface
+	DownloadEndedProgress
+	{
+		public boolean
+		isComplete();
+	}
 }

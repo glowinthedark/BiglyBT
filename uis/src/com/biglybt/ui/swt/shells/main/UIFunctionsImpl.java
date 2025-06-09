@@ -18,7 +18,6 @@ package com.biglybt.ui.swt.shells.main;
 
 import java.io.File;
 import java.net.URL;
-import java.text.SimpleDateFormat;
 import java.util.List;
 import java.util.*;
 
@@ -32,6 +31,7 @@ import org.eclipse.swt.widgets.*;
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.config.impl.ConfigurationDefaults;
 import com.biglybt.core.download.DownloadManager;
@@ -47,6 +47,7 @@ import com.biglybt.core.proxy.AEProxyFactory;
 import com.biglybt.core.proxy.AEProxyFactory.PluginHTTPProxy;
 import com.biglybt.core.torrent.PlatformTorrentUtils;
 import com.biglybt.core.torrent.TOTorrent;
+import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.torrent.impl.TorrentOpenOptions;
 import com.biglybt.core.util.*;
 import com.biglybt.core.vuzefile.VuzeFileHandler;
@@ -73,6 +74,8 @@ import com.biglybt.ui.swt.pifimpl.UISWTInstanceImpl;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.pifimpl.UIToolBarManagerImpl;
 import com.biglybt.ui.swt.plugininstall.SimplePluginInstaller;
+import com.biglybt.ui.swt.progress.IProgressReporter;
+import com.biglybt.ui.swt.progress.ProgressReportingManager;
 import com.biglybt.ui.swt.search.SearchHandler;
 import com.biglybt.ui.swt.shells.*;
 import com.biglybt.ui.swt.shells.opentorrent.OpenTorrentOptionsWindow;
@@ -89,7 +92,7 @@ import com.biglybt.ui.swt.views.skin.SkinnedDialog.SkinnedDialogClosedListener;
 import com.biglybt.ui.swt.views.skin.sidebar.SideBarEntrySWT;
 import com.biglybt.ui.swt.views.table.TableCellSWTPaintListener;
 import com.biglybt.ui.swt.views.utils.ManagerUtils;
-
+import com.biglybt.util.PlayUtils;
 import com.biglybt.pif.download.DownloadStub;
 import com.biglybt.pif.ui.UIInputReceiver;
 import com.biglybt.pif.ui.UIInputReceiverListener;
@@ -214,7 +217,7 @@ public class UIFunctionsImpl
 
 			if (success) {
 
-				sem.reserve( 30*1000 );	// shouldn't block as if this is SWT thread code will run immediately, otherwise SWT thread shoudl be quick
+				sem.reserve( 30*1000 );	// shouldn't block as if this is SWT thread code will run immediately, otherwise SWT thread should be quick
 			}
 
 			return( result[0] );
@@ -353,6 +356,63 @@ public class UIFunctionsImpl
 		});
 	}
 
+	@Override
+	public Object 
+	pushStatusText(
+		String key )
+	{
+		IProgressReporter pReporter = ProgressReportingManager.getInstance().addReporter();
+		
+		pReporter.setName( key );
+		
+		pReporter.setTitle(MessageText.getString("fileDownloadWindow.title"));
+		
+		return( pReporter );
+	}
+
+	@Override
+	public void 
+	popStatusText(
+		Object	o,
+		int		reason,
+		String	message )
+	{
+		IProgressReporter pReporter = (IProgressReporter)o;
+			
+		if ( reason == 0 ){
+		
+			if ( message != null ){
+				
+				pReporter.appendDetailMessage(message);
+			}
+			
+			pReporter.setDone();
+			
+		}else if ( reason == 1 ){
+			
+			if ( message != null ){
+				
+				pReporter.appendDetailMessage(message);
+			}
+
+			pReporter.cancel();
+			
+		}else{
+			
+			pReporter.setErrorMessage( message!=null?message:MessageText.getString("fileDownloadWindow.state_error"));
+		}
+		
+		pReporter.dispose();
+		
+		if ( reason == 1 ){
+		
+				// remove if cancelled as not of interest, leave for success/fail so result
+				// remains visible if "auto remove" not enabled
+			
+			ProgressReportingManager.getInstance().remove(pReporter);
+		}
+	}
+	
 	// @see UIFunctionsSWT#getMainStatusBar()
 	@Override
 	public IMainStatusBar getMainStatusBar() {
@@ -677,35 +737,39 @@ public class UIFunctionsImpl
 
 		}else if ( action_id == ACTION_UPDATE_RESTART_REQUEST ){
 
-			String title = MessageText.getString("UpdateMonitor.messagebox.restart.title" );
-
-			String text = MessageText.getString("UpdateMonitor.messagebox.restart.text" );
-
-			bringToFront();
-
-			boolean no_timeout = args instanceof Boolean && ((Boolean)args).booleanValue();
-
-			int timeout = 180000;
-
-			if ( no_timeout || !PluginInitializer.getDefaultInterface().getPluginManager().isSilentRestartEnabled()){
-
-				timeout = -1;
-			}
-
-			MessageBoxShell messageBoxShell = new MessageBoxShell(title, text,
-					new String[] {
-				MessageText.getString("UpdateWindow.restart"),
-				MessageText.getString("UpdateWindow.restartLater")
-			}, 0);
-			messageBoxShell.setAutoCloseInMS(timeout);
-			messageBoxShell.setParent(getMainShell());
-			messageBoxShell.setOneInstanceOf("UpdateMonitor.messagebox.");
-			messageBoxShell.open( new UserPrompterResultListener() {
-				@Override
-				public void prompterClosed(int result) {
-					listener.actionComplete(result == 0);
-				}
-			});
+			Utils.runWhenCoreOperationsIdle(
+				CoreFactory.getSingleton(),
+				()->{
+					String title = MessageText.getString("UpdateMonitor.messagebox.restart.title" );
+		
+					String text = MessageText.getString("UpdateMonitor.messagebox.restart.text" );
+		
+					bringToFront();
+		
+					boolean no_timeout = args instanceof Boolean && ((Boolean)args).booleanValue();
+		
+					int timeout = 180000;
+		
+					if ( no_timeout || !PluginInitializer.getDefaultInterface().getPluginManager().isSilentRestartEnabled()){
+		
+						timeout = -1;
+					}
+		
+					MessageBoxShell messageBoxShell = new MessageBoxShell(title, text,
+							new String[] {
+						MessageText.getString("UpdateWindow.restart"),
+						MessageText.getString("UpdateWindow.restartLater")
+					}, 0);
+					messageBoxShell.setAutoCloseInMS(timeout);
+					messageBoxShell.setParent(getMainShell());
+					messageBoxShell.setOneInstanceOf("UpdateMonitor.messagebox.");
+					messageBoxShell.open( new UserPrompterResultListener() {
+						@Override
+						public void prompterClosed(int result) {
+							listener.actionComplete(result == 0);
+						}
+					});
+				});
 		}else{
 
 			Debug.out( "Unknown action " + action_id );
@@ -874,7 +938,9 @@ public class UIFunctionsImpl
 
 			URL url;
 
-			if ( hit_url.getProtocol().equals( "tor" )){
+			String protocol = hit_url.getProtocol().toLowerCase( Locale.US );
+			
+			if ( protocol.equals( "tor" ) || protocol.equals( "i2p")){
 
 				url = new URL( hit.substring( 4 ));
 
@@ -1162,6 +1228,9 @@ public class UIFunctionsImpl
 								MessageText.getString("Button.no")
 							}, 1);
 
+						promptSepDL.setRemember("remember:openTorrentWindow.mb.alreadyExists.add.dup", false,
+								MessageText.getString("MessageBoxWindow.nomoreprompting"));
+						
 						promptSepDL.open(result -> {
 							if ( result == 0 ){ // Yes
 
@@ -1364,37 +1433,45 @@ public class UIFunctionsImpl
 					Debug.out( e );
 				}
 
-				if ( !is_silent ){
+				try{
+					DownloadHistoryManager dlm = (DownloadHistoryManager)core.getGlobalManager().getDownloadHistoryManager();
 
-					try{
-						DownloadHistoryManager dlm = (DownloadHistoryManager)core.getGlobalManager().getDownloadHistoryManager();
+					final long[] existing = dlm.getDates( torrentOptions.getTorrent().getHash(), true);
 
-						final long[] existing = dlm.getDates( torrentOptions.getTorrent().getHash());
-
+					if ( !is_silent ){	
+	
 						if ( existing != null ){
-
+	
 							long	redownloaded = existing[3];
-
+	
 							if ( SystemTime.getCurrentTime() - redownloaded > 60*10*1000 ){
-
+	
 								if ( getVisibilityState() != VS_TRAY_ONLY){
-
+	
 									forceNotify(STATUSICON_NONE,
 										MessageText.getString(
 											"OpenTorrentWindow.mb.inHistory.title"),
 										MessageText.getString(
 											"OpenTorrentWindow.mb.inHistory.text", new String[] {
 												torrentOptions.getTorrentName(),
-												new SimpleDateFormat().format( new Date( existing[0] ))
+												DisplayFormatters.formatDateYMDHM( existing[0] )
 											}), null, new Object[0], -1);
-
+	
 								}
 							}
 						}
-					}catch( Throwable e ){
-
-						Debug.out( e );
 					}
+					
+					if ( dlm.isEnabled() && COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_DOWNLOAD_HISTORY_DONT_ADD_DUP )){
+												
+						if ( existing != null && existing[1] > 0 ){
+							
+							return( true );
+						}
+					}
+				}catch( Throwable e ){
+					
+					Debug.out( e );
 				}
 			}
 		}
@@ -1407,8 +1484,62 @@ public class UIFunctionsImpl
 		TorrentOpenOptions 		torrentOptions,
 		Map<String, Object> 	addOptions,
 		boolean					is_silent )
-
 	{
+		TOTorrent torrent = torrentOptions.getTorrent();
+
+		if ( torrent != null ){
+			
+			String name = TorrentUtils.getLocalisedName(torrent);
+			
+			TOTorrentFile[] files = torrent.getFiles();
+			
+			if ( files.length == 1 ){
+				
+				String file_name = files[0].getRelativePath();
+				
+				if ( !file_name.equals(name)){
+					
+					int n_pos = name.lastIndexOf( "." );
+					int f_pos = file_name.lastIndexOf( "." );
+					
+					if ( n_pos != -1 && f_pos != -1 ){
+						
+						String n_ext = name.substring( n_pos+1 ).trim().toLowerCase( Locale.US );
+						String f_ext = file_name.substring( f_pos+1 ).trim().toLowerCase( Locale.US );
+						
+						if ( 	!f_ext.isEmpty() && 
+								!n_ext.equals( f_ext ) &&
+								!PlayUtils.getPlayableFileExtensions().contains(f_ext)){
+							
+							UIFunctionsUserPrompter prompter = 
+								getUserPrompter(
+									MessageText.getString( "msg.suspicious.file.name" ),
+									MessageText.getString( "msg.suspicious.file.name.info", new String[]{ name, n_ext, f_ext }),
+									new String[] {
+										MessageText.getString("Button.ok"),
+									}, 
+									0 );
+			
+							prompter.setStyle( SWT.ON_TOP );
+							
+							prompter.setRemember(
+								"oto:suspicious.torrent",
+								false,
+								MessageText.getString("MessageBoxWindow.nomoreprompting"));
+							
+			
+							prompter.setIconResource("warning");
+							
+							prompter.setAutoCloseInMS(0);
+			
+							prompter.open(null);
+						}
+					}
+				}
+			}
+		}
+		
+		
 		Boolean force = (Boolean)addOptions.get( UIFunctions.OTO_FORCE_OPEN );
 
 		if ( force == null ){
@@ -1417,8 +1548,6 @@ public class UIFunctionsImpl
 		}
 
 		if ( !force ){
-
-			TOTorrent torrent = torrentOptions.getTorrent();
 
 			boolean is_featured = torrent != null && PlatformTorrentUtils.isFeaturedContent( torrent );
 
@@ -1569,6 +1698,14 @@ public class UIFunctionsImpl
 		}
 	}
 
+	@Override
+	public 
+	List<TorrentOpenOptions> 
+	getTorrentOptions()
+	{
+		return( OpenTorrentOptionsWindow.getActiveTorrentOptions());
+	}
+	
 	/* (non-Javadoc)
 	 * @see UIFunctionsSWT#openTorrentWindow()
 	 */

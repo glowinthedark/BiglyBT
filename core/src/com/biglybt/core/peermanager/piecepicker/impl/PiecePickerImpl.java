@@ -131,9 +131,10 @@ implements PiecePicker
 	protected final Map					peerListeners;
 	private final PEPeerManagerListener	peerManagerListener;
 
-	protected final int			nbPieces;
-	protected final DiskManagerPiece[]	dmPieces;
-	protected final PEPiece[]			pePieces;
+	private final int					nbPieces;
+	private final DiskManagerPiece[]	dmPieces;
+	private final PEPiece[]				pePieces;
+	private final int					pieceSize;
 
 	private final List<PEPiece>	rarestStartedPieces; //List of pieces started as rarest first
 
@@ -143,7 +144,7 @@ implements PiecePicker
 
 	protected volatile int	nbPiecesDone;
 
-	/** asyncronously updated availability */
+	/** asynchronously updated availability */
 	protected volatile int[]	availabilityAsynch;
 	/** indicates availability needs to be recomputed due to detected drift */
 	protected volatile long		availabilityDrift;
@@ -226,6 +227,7 @@ implements PiecePicker
 	private volatile CopyOnWriteSet<Integer>	forced_pieces;
 
 	protected static volatile boolean	firstPiecePriority;
+	protected static volatile long		firstPriorityBytes;
 	protected static volatile boolean	firstPiecePriorityForce;
 	protected static volatile boolean	completionPriority;
 	
@@ -239,11 +241,15 @@ implements PiecePicker
 			new String[]{
 				"Prioritize Most Completed Files",
 				ConfigKeys.Transfer.BCFG_PRIORITIZE_FIRST_PIECE,	
+				ConfigKeys.Transfer.ICFG_PRIORITIZE_FIRST_MB,	
 				ConfigKeys.Transfer.BCFG_PRIORITIZE_FIRST_PIECE_FORCE	
 			},
 			(n)->{
+				long MB = DisplayFormatters.getMinB();
+				
 				completionPriority 		= COConfigurationManager.getBooleanParameter( "Prioritize Most Completed Files" );			
 				firstPiecePriority 		= COConfigurationManager.getBooleanParameter( ConfigKeys.Transfer.BCFG_PRIORITIZE_FIRST_PIECE );
+				firstPriorityBytes 		= COConfigurationManager.getIntParameter( ConfigKeys.Transfer.ICFG_PRIORITIZE_FIRST_MB )*MB;
 				firstPiecePriorityForce = COConfigurationManager.getBooleanParameter( ConfigKeys.Transfer.BCFG_PRIORITIZE_FIRST_PIECE_FORCE );
 				
 				paramPriorityChange++;	// this is a user's priority change event
@@ -271,6 +277,7 @@ implements PiecePicker
 		diskManager = peerControl.getDiskManager();
 		dmPieces =diskManager.getPieces();
 		nbPieces =diskManager.getNbPieces();
+		pieceSize = diskManager.getPieceLength();
 		nbPiecesDone =0;
 
 		pePieces = pc.getPieces();
@@ -363,7 +370,7 @@ implements PiecePicker
 	}
 
 	/**
-	 * This methd will compute the pieces' overall availability (including ourself)
+	 * This method will compute the pieces' overall availability (including ourself)
 	 * and the _globalMinOthers & _globalAvail
 	 */
 	@Override
@@ -504,7 +511,7 @@ implements PiecePicker
 			final PEPeer peer =(PEPeerTransport)peers.get(i);
 			if (peer !=null &&peer.getPeerState() ==PEPeer.TRANSFERING)
 			{
-				//cycle trhough the pieces they actually have
+				//cycle through the pieces they actually have
 				final BitFlags peerHavePieces =peer.getAvailable();
 				if (peerHavePieces !=null &&peerHavePieces.nbSet >0)
 				{
@@ -1209,7 +1216,7 @@ implements PiecePicker
 	}
 	/** This computes the base priority for all pieces that need requesting if there's
 	 * been any availability change or user priority setting changes since the last
-	 * call, which will be most of the time since availability changes so dynamicaly
+	 * call, which will be most of the time since availability changes so dynamically
 	 * It will change startPriorities[] (unless there was nothing to do)
 	 */
 	private void
@@ -1252,6 +1259,17 @@ implements PiecePicker
 
 		final DMPieceMap	pieceMap = diskManager.getPieceMap();
 
+		final int priorityPieces;
+		
+		if ( firstPriorityBytes > 0 ){
+			
+			priorityPieces = (int)(( firstPriorityBytes + pieceSize -1 ) / pieceSize);
+			
+		}else{
+			
+			priorityPieces = 1;
+		}
+		
 		CopyOnWriteSet<Integer>	forced = forced_pieces;
 
 		try
@@ -1309,9 +1327,12 @@ implements PiecePicker
 						// TODO: should prioritize ~10% from edges of file
 
 						boolean hasFirstLastPriority = false;
-
-						if ( firstPiecePriorityL &&fileInfo.getNbPieces() > FIRST_PIECE_MIN_NB ){
-
+						int		flpOffset = 0;
+						
+						int nbPieces = fileInfo.getNbPieces();
+								
+						if ( firstPiecePriorityL && nbPieces > FIRST_PIECE_MIN_NB ){
+							
 							/* backed out for the moment - reverting to old first/last piece only
                         	int lastFirstPiece = fileInfo.getFirstPieceNumber() + FIRST_PIECE_RANGE_PERCENT * (fileInfo.getLastPieceNumber() - fileInfo.getFirstPieceNumber()) / 100;
 
@@ -1324,9 +1345,32 @@ implements PiecePicker
                             }
 							 */
 
-							if  ( i == fileInfo.getFirstPieceNumber() || i == fileInfo.getLastPieceNumber()){
+							
+							if ( priorityPieces > 1 ){
 								
-								pieceHasFirstLastPriority = hasFirstLastPriority = true;
+								int fp = fileInfo.getFirstPieceNumber();
+								int lp = fileInfo.getLastPieceNumber();
+								
+								int pp = Math.min( nbPieces, priorityPieces);
+								
+								if ( i >= fp && i < fp + pp ){
+									
+									pieceHasFirstLastPriority = hasFirstLastPriority = true;
+									
+									flpOffset = fp - i;	// 0 -> negative pp
+									
+								}else if ( i <= lp && i > lp - pp ){
+											
+									pieceHasFirstLastPriority = hasFirstLastPriority = true;
+									
+									flpOffset = i - lp;	// 0 -> negative pp
+								}
+							}else{
+
+								if  ( i == fileInfo.getFirstPieceNumber() || i == fileInfo.getLastPieceNumber()){
+									
+									pieceHasFirstLastPriority = hasFirstLastPriority = true;
+								}
 							}
 						}
 
@@ -1354,6 +1398,8 @@ implements PiecePicker
 
 								adjustment = (( PRIORITY_W_FILE_RANGE * ( relative_file_priority+1 )) / range ) - 1;
 
+								adjustment += flpOffset;
+								
 							}else{
 
 								adjustment = ( PRIORITY_W_FILE_RANGE*relative_file_priority ) / range;
@@ -1365,7 +1411,7 @@ implements PiecePicker
 
 							if ( hasFirstLastPriority ){
 
-								priority += PRIORITY_W_FIRSTLAST;
+								priority += PRIORITY_W_FIRSTLAST + flpOffset;
 							}
 						}
 
@@ -1567,7 +1613,7 @@ implements PiecePicker
 		final int pieceNumber = getRequestCandidate(pt);
 		if (pieceNumber <0)
 		{
-			// probaly should have found something since chose to try; probably not interested anymore
+			// probably should have found something since chose to try; probably not interested anymore
 			// (or maybe Needed but not Done pieces are otherwise not requestable)
 			// pt.checkInterested();
 			return 0;
@@ -1655,7 +1701,10 @@ implements PiecePicker
 
 				final int thisBlock = blockNumber + i;
 
-				if (pt.request(pieceNumber, thisBlock *DiskManager.BLOCK_SIZE, pePiece.getBlockSize(thisBlock),true) != null ){
+				DiskManagerReadRequest request = pt.request(pieceNumber, thisBlock *DiskManager.BLOCK_SIZE, pePiece.getBlockSize(thisBlock),true);
+				
+				if ( request != null ){
+					peerControl.requestAdded(pePiece,pt,request);
 					requested++;
 					pt.setLastPiece(pieceNumber);
 
@@ -1670,7 +1719,10 @@ implements PiecePicker
 
 				final int thisBlock =blockNumber +i;
 
-				if (pt.request(pieceNumber, thisBlock *DiskManager.BLOCK_SIZE, pePiece.getBlockSize(thisBlock),true) != null ){
+				DiskManagerReadRequest request = pt.request(pieceNumber, thisBlock *DiskManager.BLOCK_SIZE, pePiece.getBlockSize(thisBlock),true);
+				
+				if ( request != null ){
+					peerControl.requestAdded(pePiece,pt,request);
 					requested++;
 					pt.setLastPiece(pieceNumber);
 
@@ -1947,6 +1999,8 @@ implements PiecePicker
 
 					if ( request != null ){
 
+						peerControl.requestAdded(pePiece,pt,request);
+						
 						List	real_time_requests = rtd.getRequests()[piece_min_rta_block];
 
 						real_time_requests.add( new RealTimePeerRequest( pt, request ));
@@ -2234,7 +2288,7 @@ implements PiecePicker
 
         					// find a fallback piece in case the peer could theoretically contribute
         					// to an existing piece but is prevented by the snubbing rules etc.
-        					// this will prevent unecessary piece starting
+        					// this will prevent unnecessary piece starting
         					if(secondChoiceResume == -1 || avail > availability[secondChoiceResume])
         						secondChoiceResume = i;
 
@@ -2341,7 +2395,7 @@ implements PiecePicker
 
 
 //			this would allow more non-rarest pieces to be resumed so they get completed so they can be re-shared,
-//			which can make us intersting to more peers, and generally improve the speed of the swarm,
+//			which can make us interesting to more peers, and generally improve the speed of the swarm,
 //			however, it can sometimes be hard to get the rarest pieces, such as when a holder unchokes very infrequently
 //			20060312[MjrTom] this can lead to TOO many active pieces, so do the extra check with arbitrary # of active pieces
 			final boolean resumeIsBetter;
@@ -2514,7 +2568,6 @@ implements PiecePicker
 							continue;
 						}
 	
-							// https://jira.vuze.com/browse/SUP-154
 							// If we have a piece reserved to a slow peer then this can prevent end-game
 							// mode from being entered and result poopy end-of-dl speeds
 	
@@ -2608,7 +2661,6 @@ implements PiecePicker
 							continue;
 						}
 	
-							// https://jira.vuze.com/browse/SUP-154
 							// If we have a piece reserved to a slow peer then this can prevent end-game
 							// mode from being entered and result poopy end-of-dl speeds
 	
@@ -2616,7 +2668,7 @@ implements PiecePicker
 	
 							reserved_pieces++;
 	
-							if ( reserved_pieces * diskManager.getPieceLength() > END_GAME_MODE_RESERVED_TRIGGER ){
+							if ( reserved_pieces * pieceSize > END_GAME_MODE_RESERVED_TRIGGER ){
 	
 								return;
 							}
@@ -2636,7 +2688,7 @@ implements PiecePicker
 	
 			boolean	use_rta_egm = rta_providers.size() > 0;
 	
-			long	remaining = active_pieces * (long)diskManager.getPieceLength();
+			long	remaining = active_pieces * (long)pieceSize;
 	
 			long	trigger	= use_rta_egm?RTA_END_GAME_MODE_SIZE_TRIGGER:END_GAME_MODE_SIZE_TRIGGER;
 	
@@ -2806,22 +2858,28 @@ implements PiecePicker
 
 					if ( pt.isPieceAvailable(pieceNumber) && pePiece != null ){
 
-						if ( ( !pt.isSnubbed() || availability[pieceNumber] <=peerControl.getNbPeersSnubbed()) &&
-								pt.request(pieceNumber, chunk.getOffset(), chunk.getLength(),false) != null ){
-	
-							pePiece.setRequested(pt, chunk.getBlockNumber());
-	
-							pt.setLastPiece(pieceNumber);
-	
-							chunk.requested();
+						if ( !pt.isSnubbed() || availability[pieceNumber] <=peerControl.getNbPeersSnubbed()){
 							
-								// stick it at the end
+							DiskManagerReadRequest request = pt.request(pieceNumber, chunk.getOffset(), chunk.getLength(),false);
 							
-							it.remove();
-							
-							endGameModeChunks.add( chunk );
-														
-							return( 1 );
+							if ( request != null ){
+	
+								peerControl.requestAdded( pePiece, pt, request );
+								
+								pePiece.setRequested(pt, chunk.getBlockNumber());
+		
+								pt.setLastPiece(pieceNumber);
+		
+								chunk.requested();
+								
+									// stick it at the end
+								
+								it.remove();
+								
+								endGameModeChunks.add( chunk );
+															
+								return( 1 );
+							}
 						}
 					}
 				}
@@ -3285,54 +3343,72 @@ implements PiecePicker
 	 * An instance of this listener is registered with peerControl
 	 * @author MjrTom
 	 */
-	private class DiskManagerListenerImpl
-	implements DiskManagerListener
+	private class 
+	DiskManagerListenerImpl
+		implements DiskManagerListener
 	{
 		@Override
-		public final void stateChanged(int oldState, int newState)
+		public final void stateChanged(DiskManager dm, int oldState, int newState)
 		{
 			//starting torrent
 		}
 
 		@Override
-		public final void filePriorityChanged(DiskManagerFileInfo file)
+		public final void 
+		filePriorityChanged(
+			DiskManager dm, List<DiskManagerFileInfo> files)
 		{
 			syncFilePriorities();
 			// record that user-based priorities changed
 			filePriorityChange++;	// this is a user's priority change event
 
-			// only need to re-calc Needed on file's pieces; priority is calculated seperatly
+			// only need to re-calc Needed on file's pieces; priority is calculated separately
 			boolean foundPieceToDownload =false;
 			// if didn't have anything to do before, now only need to check if we need
 			// to DL from this file, but if had something to do before,
 			// must rescan all pieces to see if now nothing to do
-			final int startI;
-			final int endI;
-			if (hasNeededUndonePiece)
-			{
-				startI =0;
-				endI =nbPieces;
-			} else
-			{
-				startI =file.getFirstPieceNumber();
-				endI =file.getLastPieceNumber() +1;
+			
+			int startI;
+			int endI;
+			
+			if ( hasNeededUndonePiece ){
+				
+				startI	= 0;
+				endI	= nbPieces;
+				
+			}else{
+				startI 	= nbPieces;
+				endI	= 0;
+				
+				for ( DiskManagerFileInfo file: files ){
+					
+					startI	= Math.min( startI, file.getFirstPieceNumber());
+					
+					endI	= Math.max( endI, file.getLastPieceNumber() +1 );
+				}
 			}
-			for (int i =startI; i <endI; i++)
-			{
+			
+			for (int i =startI; i <endI; i++){
+			
 				final DiskManagerPiece dmPiece =dmPieces[i];
-				if (!dmPiece.isDone())
+				
+				if (!dmPiece.isDone()){
+					
 					foundPieceToDownload |=dmPiece.calcNeeded();
+				}
 			}
-			if (foundPieceToDownload ^hasNeededUndonePiece)
-			{
+			
+			if (foundPieceToDownload ^hasNeededUndonePiece){
+				
 				hasNeededUndonePiece =foundPieceToDownload;
+				
 				neededUndonePieceChange++;
 			}
 		}
 
 
 		@Override
-		public final void pieceDoneChanged(DiskManagerPiece dmPiece)
+		public final void pieceDoneChanged(DiskManager dm, DiskManagerPiece dmPiece)
 		{
 			final int pieceNumber =dmPiece.getPieceNumber();
 			if (dmPiece.isDone())

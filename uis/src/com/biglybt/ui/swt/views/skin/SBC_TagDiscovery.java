@@ -23,6 +23,7 @@ package com.biglybt.ui.swt.views.skin;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
@@ -37,6 +38,7 @@ import com.biglybt.ui.swt.columns.tagdiscovery.ColumnTagDiscoveryAddedOn;
 import com.biglybt.ui.swt.columns.tagdiscovery.ColumnTagDiscoveryName;
 import com.biglybt.ui.swt.columns.tagdiscovery.ColumnTagDiscoveryNetwork;
 import com.biglybt.ui.swt.columns.tagdiscovery.ColumnTagDiscoveryTorrent;
+import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.skin.*;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridLayout;
@@ -423,6 +425,11 @@ public class SBC_TagDiscovery
 												if ( tv == null ){
 													return;
 												}
+												
+												if ( TagUtils.isInternalTagName(tag)){
+													return;
+												}
+												
 												String key = Base32.encode(hash) + tag;
 
 												TagManager tm = TagManagerFactory.getTagManager();
@@ -526,14 +533,19 @@ public class SBC_TagDiscovery
 			SWTSkinObjectTextbox soFilter = (SWTSkinObjectTextbox) getSkinObject(
 				"filterbox");
 			if (soFilter != null) {
-				tv.enableFilterCheck(soFilter.getBubbleTextBox(), this);
+				BubbleTextBox filter = soFilter.getBubbleTextBox();
+				
+				tv.enableFilterCheck(filter, this);
+				
+				filter.setMessage( MessageText.getString( "Button.search2" ) );
 			}
 
 			tv.setRowDefaultHeightEM(1);
 
-			table_parent = new Composite(control, SWT.BORDER);
-			table_parent.setLayoutData(Utils.getFilledFormData());
+			table_parent = Utils.createSkinnedComposite(control, SWT.BORDER, Utils.getFilledFormData());
+			
 			GridLayout layout = new GridLayout();
+			
 			layout.marginHeight = layout.marginWidth = layout.verticalSpacing = layout.horizontalSpacing = 0;
 			table_parent.setLayout(layout);
 
@@ -627,8 +639,45 @@ public class SBC_TagDiscovery
 
 	// @see TableViewFilterCheck#filterCheck(java.lang.Object, java.lang.String, boolean)
 	@Override
-	public boolean filterCheck(TagDiscovery ds, String filter, boolean regex) {
-		return true;
-	}
+	public boolean 
+	filterCheck(
+		TagDiscovery	ds, 
+		String			filter, 
+		boolean			regex, 
+		boolean			confusable) 
+	{
+		if ( confusable ){
+			
+			return( false );
+		}
+				
+		String[] names = new String[]{ ds.getName(), ds.getTorrentName() };
+		
+		String s = regex ? filter : RegExUtil.splitAndQuote( filter, "\\s*[|;]\\s*" );
 
+		boolean	match_result = true;
+
+		if ( regex && s.startsWith( "!" )){
+
+			s = s.substring(1);
+
+			match_result = false;
+		}
+
+		Pattern pattern = RegExUtil.getCachedPattern( "tagsoverview:search", s, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
+
+		boolean bOurs = !match_result;
+
+		for ( String name: names ){
+			
+			if ( pattern.matcher( name ).find()){
+
+				bOurs = match_result;
+
+				break;
+			}
+		}
+		
+		return( bOurs );
+	}
 }

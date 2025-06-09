@@ -50,22 +50,24 @@ import com.biglybt.ui.swt.components.BubbleTextBox.BubbleTextBoxChangeListener;
 import com.biglybt.ui.swt.debug.ObfuscateImage;
 import com.biglybt.ui.swt.debug.UIDebugGenerator;
 import com.biglybt.ui.swt.mainwindow.Colors;
-import com.biglybt.ui.swt.mainwindow.HSLColor;
 import com.biglybt.ui.swt.mdi.MdiEntrySWT;
 import com.biglybt.ui.swt.pif.UISWTView;
 import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.utils.*;
+import com.biglybt.ui.swt.views.columnsetup.TableColumnSetupWindow;
 import com.biglybt.ui.swt.views.table.*;
 import com.biglybt.ui.swt.views.table.impl.TableTooltips;
 import com.biglybt.ui.swt.views.table.impl.TableViewSWT_Common;
 import com.biglybt.ui.swt.views.table.impl.TableViewSWT_TabsCommon;
+import com.biglybt.util.MapUtils;
+
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.DownloadTypeComplete;
 import com.biglybt.pif.download.DownloadTypeIncomplete;
-import com.biglybt.pif.ui.UIInputReceiver;
-import com.biglybt.pif.ui.UIInputReceiverListener;
+import com.biglybt.pif.ui.tables.TableCell;
 import com.biglybt.pif.ui.tables.TableRowMouseEvent;
 import com.biglybt.pif.ui.tables.TableRowMouseListener;
+import com.biglybt.pifimpl.local.ui.tables.TableContextMenuItemImpl;
 
 /**
  * A TableView implemented by painting on a canvas
@@ -86,9 +88,12 @@ public class TableViewPainted
 
 	private static final boolean DEBUG_WITH_SHELL = false;
 
-	public static final boolean DIRECT_DRAW = (Constants.isOSX
-			|| Constants.isUnix) && Utils.getDeviceZoom() != 100;
+	public static final boolean DIRECT_DRAW = (Constants.isOSX || Constants.isUnix) && Utils.getDeviceZoom() != 100;
 
+		// on later OSX (14+?) reducing GC creation causes the Library to fail to paint almost entirely...
+	
+	private static final boolean REDUCE_GC_CREATION = !Constants.isOSX;
+	
 	private static final boolean DEBUG_REDRAW_CLIP = false;
 
 	private static final boolean expand_enabled_default = COConfigurationManager.getBooleanParameter("Table.useTree");
@@ -113,6 +118,10 @@ public class TableViewPainted
 
 	private int defaultRowHeight = 17;
 
+	private int lineHeight;
+
+	protected float iHeightEM = -1;
+
 	/**
 	 * Rows visible to user.  We assume this list is always up to date
 	 */
@@ -134,8 +143,9 @@ public class TableViewPainted
 
 	private Color colorLine;
 
-	private Image canvasImage;
-
+	private Image	canvasImage;
+	private GC		canvasImageGC;
+	
 	private final String sDefaultSortOn;
 
 	private TableViewSWT_Common tvSWTCommon;
@@ -183,6 +193,7 @@ public class TableViewPainted
 	private DragSource dragSource;
 	private DropTarget dropTarget;
 	private boolean destroying;
+	private int rowMinHeight;
 
 	private class
 	RefreshTableRunnable
@@ -236,9 +247,13 @@ public class TableViewPainted
 							cTable.redraw();
 						}
 					} else {
-						if (canvasImage != null && !canvasImage.isDisposed()) {
+						if (canvasImage != null ) {
 							canvasImage.dispose();
 							canvasImage = null;
+						} 
+						if ( canvasImageGC != null ){
+							canvasImageGC.dispose();
+							canvasImageGC = null;
 						}
 						swt_calculateClientArea();
 					}
@@ -262,15 +277,13 @@ public class TableViewPainted
 
 	protected boolean isFocused;
 
-	protected float iHeightEM = -1;
-
 	/**
 	 * Main Initializer
 	 * @param _sTableID Which table to handle (see
 	 *                   {@link com.biglybt.pif.ui.tables.TableManager}).
 	 *                   Config settings are stored with the prefix of
 	 *                   "Table.<i>TableID</i>"
-	 * @param _sPropertiesPrefix Prefix for retrieving text from the properties
+	 * @param _sTextPrefixID Prefix for retrieving text from the properties
 	 *                            file (MessageText).  Typically
 	 *                            <i>TableID</i> + "View"
 	 * @param _basicItems Column Definitions
@@ -278,9 +291,9 @@ public class TableViewPainted
 	 * @param _iTableStyle SWT style constants used when creating the table
 	 */
 	public TableViewPainted(Class<?> pluginDataSourceType, String _sTableID,
-			String _sPropertiesPrefix, TableColumnCore[] _basicItems,
+			String _sTextPrefixID, TableColumnCore[] _basicItems,
 			String _sDefaultSortOn, int _iTableStyle) {
-		super(pluginDataSourceType, _sTableID, _sPropertiesPrefix, new Object(),
+		super(pluginDataSourceType, _sTableID, _sTextPrefixID, new Object(),
 				_basicItems);
 		visibleRows_sync = getRowsSync();
 		//		boolean wantTree = (_iTableStyle & SWT.CASCADE) != 0;
@@ -355,7 +368,7 @@ public class TableViewPainted
 			public void keyPressed(KeyEvent event) {
 				if ( event.keyCode == SWT.ESC ){
 					TableViewSWTFilter<?> filter = getSWTFilter();
-					if ( filter != null ){
+					if ( filter != null && filter.filterBox != null ){
 						filter.filterBox.setText( "" );
 					}
 				}
@@ -503,15 +516,19 @@ public class TableViewPainted
 					}
 					updateTable = true;
 				} else if (event.keyCode == SWT.END) {
-					TableRowCore lastRow = getRow(getRowCount() - 1);
-					if ((event.stateMask & SWT.SHIFT) != 0) {
-						selectRowsTo(lastRow);
-					} else if (event.stateMask == 0) {
-  					setSelectedRows(new TableRowCore[] {
-  						lastRow
-  					});
+					//TableRowCore lastRow = getRow(getRowCount() - 1);
+					TableRowCore[] rows = getRowsAndSubRows( false );
+					if ( rows.length > 0 ){
+						TableRowCore lastRow = rows[rows.length-1];
+						if ((event.stateMask & SWT.SHIFT) != 0) {
+							selectRowsTo(lastRow);
+						} else if (event.stateMask == 0) {
+	  					setSelectedRows(new TableRowCore[] {
+	  						lastRow
+	  					});
+						}
+						updateTable = true;
 					}
-					updateTable = true;
 				} else if (event.keyCode == SWT.ARROW_RIGHT && event.stateMask == 0) {
 					if (event.stateMask == 0 && focusedRow != null && !focusedRow.isExpanded() && canHaveSubItems()) {
 						focusedRow.setExpanded(true);
@@ -787,32 +804,50 @@ public class TableViewPainted
 	@Override
 	public void clipboardSelected() {
 		String sToClipboard = "";
-		TableColumnCore[] visibleColumns = getVisibleColumns();
-		for (int j = 0; j < visibleColumns.length; j++) {
-			if (j != 0) {
-				sToClipboard += "\t";
+		
+			// hack to just copy the "value" cell...
+		
+		if ( tableID.equals( TableColumnSetupWindow.TABLEID_ROW_DETAILS )){
+			
+			com.biglybt.pif.ui.tables.TableColumn val = getTableColumn( "TableColumnSample" );
+			
+			TableRowCore[] rows = getSelectedRows();
+			for (TableRowCore row : rows) {
+				TableCell cell = row.getTableCell(val);
+				
+				if (cell != null) {
+					sToClipboard += ( sToClipboard.isEmpty()?"":"\n") + cell.getClipboardText();
+				}
 			}
-			String title = MessageText.getString(visibleColumns[j].getTitleLanguageKey());
-			sToClipboard += title;
-		}
-
-		TableRowCore[] rows = getSelectedRows();
-		for (TableRowCore row : rows) {
-			sToClipboard += "\n";
-			TableRowPainted p_row = (TableRowPainted)row;
-			p_row.setShown( true, true );
-			p_row.refresh( true, true );
+		}else{
+			TableColumnCore[] visibleColumns = getVisibleColumns();
 			for (int j = 0; j < visibleColumns.length; j++) {
-				TableColumnCore column = visibleColumns[j];
 				if (j != 0) {
 					sToClipboard += "\t";
 				}
-				TableCellCore cell = row.getTableCellCore(column.getName());
-				if (cell != null) {
-					sToClipboard += cell.getClipboardText();
+				String title = MessageText.getString(visibleColumns[j].getTitleLanguageKey());
+				sToClipboard += title;
+			}
+	
+			TableRowCore[] rows = getSelectedRows();
+			for (TableRowCore row : rows) {
+				sToClipboard += "\n";
+				TableRowPainted p_row = (TableRowPainted)row;
+				p_row.setShown( true, true );
+				p_row.refresh( true, true );
+				for (int j = 0; j < visibleColumns.length; j++) {
+					TableColumnCore column = visibleColumns[j];
+					if (j != 0) {
+						sToClipboard += "\t";
+					}
+					TableCellCore cell = row.getTableCellCore(column.getName());
+					if (cell != null) {
+						sToClipboard += cell.getClipboardText();
+					}
 				}
 			}
 		}
+		
 		new Clipboard(getComposite().getDisplay()).setContents(new Object[] {
 			sToClipboard
 		}, new Transfer[] {
@@ -846,7 +881,7 @@ public class TableViewPainted
 			return( true );
 		}
 		
-		sortRows( true );
+		sortRows( true, false );
 		
 		if ( lastMC != mutationCount.get()){
 			
@@ -1001,7 +1036,7 @@ public class TableViewPainted
 
 	@Override
 	public void setRowDefaultHeightPX(int iHeight) {
-		if (iHeight > defaultRowHeight) {
+		if (iHeight != defaultRowHeight) {
 			defaultRowHeight = iHeight;
 
 			Utils.execSWTThread(new AERunnable() {
@@ -1013,6 +1048,16 @@ public class TableViewPainted
 				}
 			});
 		}
+	}
+
+	@Override
+	public int getLineHeight() {
+		return lineHeight;
+	}
+	
+	@Override
+	public int getRowMinHeight() {
+		return rowMinHeight;
 	}
 
 	/* (non-Javadoc)
@@ -1398,17 +1443,18 @@ public class TableViewPainted
 		cTable = new Canvas(cTableComposite, SWT.NO_BACKGROUND | SWT.H_SCROLL | SWT.V_SCROLL);
 		cTable.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
-		int minRowHeight = FontUtils.getFontHeightInPX(cTable.getFont());
+		lineHeight = FontUtils.getFontHeightInPX(cTable.getFont());
+		rowMinHeight = lineHeight;
 		if (iHeightEM > 0) {
-			defaultRowHeight = (int) ((minRowHeight * iHeightEM) + iHeightEM);
+			defaultRowHeight = (int) ((rowMinHeight * iHeightEM) + iHeightEM);
 			iHeightEM = -1;
 		}
 
 		// good test
 		//cTable.setFont(FontUtils.getFontPercentOf(cTable.getFont(), 1.50f));
-		minRowHeight += Math.ceil(minRowHeight * 2.0 / 16.0);
-		if (defaultRowHeight < minRowHeight) {
-			defaultRowHeight = minRowHeight;
+		rowMinHeight += Math.ceil(rowMinHeight * 2.0 / 16.0);
+		if (defaultRowHeight < rowMinHeight) {
+			defaultRowHeight = rowMinHeight;
 		}
 
 		cTable.setBackground(TablePaintedUtils.getColour(parent.getDisplay(), SWT.COLOR_LIST_BACKGROUND));
@@ -1509,6 +1555,7 @@ public class TableViewPainted
 		if (DEBUG_WITH_SHELL) {
 	  		Shell shell = new Shell();
 	  		sCanvasImage = new Canvas(shell, SWT.DOUBLE_BUFFERED);
+	  		shell.setText(tableID);
 	  		shell.setLayout(new FillLayout());
 	  		sCanvasImage.addPaintListener(new PaintListener() {
 	  			@Override
@@ -1529,13 +1576,30 @@ public class TableViewPainted
 	  			}
 	  		});
 	  		shell.setVisible(true);
+	  		forceDebugShellRefresh(null);
 		}
 
 
 		cTable.addMouseListener(tvSWTCommon);
 		cTable.addMouseMoveListener(tvSWTCommon);
 		cTable.addKeyListener(tvSWTCommon);
+		cTable.addMenuDetectListener(tvSWTCommon);
 		//composite.addSelectionListener(tvSWTCommon);
+		
+		cTable.addListener(SWT.MouseVerticalWheel, e -> {
+			if  (e.stateMask == 0) {
+				return;
+			}
+			if (e.widget != e.display.getCursorControl()) {
+				return;
+			}
+			if ((e.stateMask & SWT.MOD1) > 0) {
+				int newHeight = Math.min(
+						Math.max(getRowMinHeight(), getRowDefaultHeight() - e.count), 300);
+				setRowHeight(newHeight);
+				e.doit = false;
+			}
+		});
 
 		cTable.addTraverseListener(new TraverseListener() {
 			@Override
@@ -1544,6 +1608,33 @@ public class TableViewPainted
 			}
 		});
 
+		SelectedContentListener selectedContentListener = 
+			new SelectedContentListener() {
+				@Override
+				public void currentlySelectedContentChanged(
+						ISelectedContent[] currentContent, String viewID) {
+					if ( cTable == null || cTable.isDisposed()){
+						SelectedContentManager.removeCurrentlySelectedContentListener( this );
+					}else{
+						//redrawTable();
+						TableRowCore[] rows = getSelectedRows();
+						if ( rows.length > 100 ){
+							for (TableRowCore row : rows) {
+								row.invalidate();
+							}							
+							redrawTable();
+						}else{
+							for (TableRowCore row : rows) {
+								row.invalidate();
+								redrawRow((TableRowPainted) row, false);
+							}
+						}
+					}
+				}
+			};
+
+		SelectedContentManager.addCurrentlySelectedContentListener(selectedContentListener);
+	
 		cTable.addDisposeListener(new DisposeListener() {
 			@Override
 			public void widgetDisposed(DisposeEvent e) {
@@ -1551,27 +1642,14 @@ public class TableViewPainted
 					canvasImage.dispose();
 					canvasImage = null;
 				}
-			}
-		});
-
-
-		SelectedContentManager.addCurrentlySelectedContentListener(new SelectedContentListener() {
-			@Override
-			public void currentlySelectedContentChanged(
-					ISelectedContent[] currentContent, String viewID) {
-				if ( cTable == null || cTable.isDisposed()){
-					SelectedContentManager.removeCurrentlySelectedContentListener( this );
-				}else{
-					//redrawTable();
-					TableRowCore[] rows = getSelectedRows();
-					for (TableRowCore row : rows) {
-						row.invalidate();
-						redrawRow((TableRowPainted) row, false);
-					}
+				if ( canvasImageGC != null ){
+					canvasImageGC.dispose();
+					canvasImageGC = null;
 				}
+				SelectedContentManager.removeCurrentlySelectedContentListener( selectedContentListener );
 			}
 		});
-
+		
 		cTable.addFocusListener(new FocusListener() {
 			@Override
 			public void focusLost(FocusEvent e) {
@@ -1606,6 +1684,9 @@ public class TableViewPainted
 			sortColumns[i] = tc;
 		}
 		setSortColumns(sortColumns, false);
+
+		Map tableConfigMap = tcManager.getTableConfigMap(tableID);
+		defaultRowHeight = MapUtils.getMapInt(tableConfigMap, "RowHeight", defaultRowHeight);
 
 		triggerLifeCycleListener(TableLifeCycleListener.EVENT_TABLELIFECYCLE_INITIALIZED);
 
@@ -1686,7 +1767,10 @@ public class TableViewPainted
 		//e.gc.drawLine(0, 0, cTable.getSize().x, canvasImage.getBounds().height);
 	}
 
-	protected void swt_paintCanvasImage(GC gc, Rectangle drawBounds) {
+	private void 
+	swt_paintCanvasImage(
+		GC gc, Rectangle drawBounds) 
+	{
 		if (cTable == null || cTable.isDisposed()) {
 			return;
 		}
@@ -1696,10 +1780,24 @@ public class TableViewPainted
 		if ( mut != lastMC ){	
 			
 			boolean changed = numberAllVisibleRows();
+			/* rather than just not needing this it actually screws up cell refresh
+			 * Not sure why but if you enable it and then, for example, go to All Peers view and
+			 * enable the connected_time column and sort on it you will see stuttering
+			 * cell updates as the table mutates due to automatic re-sorting...
+			 * 
 			if ( changed ){
 					// not actually sure we need this any more
 				if ( canvasImage != null ){
 					drawBounds = canvasImage.getBounds();
+				}
+			}
+			*/
+			
+			synchronized( visibleRows_sync ){
+				
+				for ( TableColumnPainted tcp: paintedColumns.values()){
+					
+					tcp.sync();
 				}
 			}
 		}
@@ -1799,10 +1897,13 @@ public class TableViewPainted
 			gc.setAlpha(255);
 		}finally{
 			
+			Utils.setClipping(gc, null);
+			
 			lastMC = mut;
 		}
 	}
 
+	/*
 	private Color getColorLine() {
 		if (colorLine == null) {
 			colorLine = TablePaintedUtils.getColour(cTable.getDisplay(), SWT.COLOR_LIST_BACKGROUND);
@@ -1823,7 +1924,8 @@ public class TableViewPainted
 
 		return colorLine;
 	}
-
+	*/
+	
 	/* (non-Javadoc)
 	 * @see com.biglybt.ui.swt.views.table.TableViewSWT#obfuscatedImage(org.eclipse.swt.graphics.Image)
 	 */
@@ -2016,7 +2118,7 @@ public class TableViewPainted
 
 		filter.checker = filterCheck;
 
-		filter.checker.filterSet(filter.text);
+		filter.checker.filterSet(filter.text, filter.regex);
 		refilter();
 	}
 
@@ -2032,9 +2134,31 @@ public class TableViewPainted
 	{
 		TableViewSWTFilter<?> filter = getSWTFilter();
 
-		return( filter != null && !filter.filterBox.isDisposed() );
+		return( filter != null && filter.filterBox != null && !filter.filterBox.isDisposed() );
 	}
 
+	private Map<TableColumnCore,TableColumnPainted>	paintedColumns = new HashMap<>();
+	
+	protected TableColumnPainted
+	getColumnPainted(
+		TableColumnCore		c )
+	{
+		TableColumnPainted tcp = paintedColumns.get( c );
+		
+		if ( tcp == null ){
+				
+				// force a sync next draw to pick up initial state
+			
+			mutationCount.incrementAndGet();
+			
+			tcp = new TableColumnPainted( c );
+			
+			paintedColumns.put( c, tcp );
+		}
+		
+		return( tcp );
+	}
+	
 	@Override
 	public void disableFilterCheck() {
 		TableViewSWTFilter<?> filter = getSWTFilter();
@@ -2059,21 +2183,41 @@ public class TableViewPainted
 		}
 	}
 
-	/* (non-Javadoc)
-	 * @see com.biglybt.ui.swt.views.table.TableViewSWT#enableSizeSlider(org.eclipse.swt.widgets.Composite, int, int)
-	 */
 	@Override
 	public boolean enableSizeSlider(Composite composite, int min, int max) {
-		// TODO
 		return false;
 	}
 
-	/* (non-Javadoc)
-	 * @see com.biglybt.ui.swt.views.table.TableViewSWT#disableSizeSlider()
-	 */
 	@Override
-	public void disableSizeSlider() {
-		// TODO
+	public void setRowHeight(int newHeight) {
+		if (newHeight == defaultRowHeight) {
+			return;
+		}
+
+		// Note: Various library views use the same tableID (tags torrent list)
+		// Changing one will affect the rest on table re-initialization (restart or closing&re-opening view)
+		// We'll need a sub-id at some point to store settings for specific tables
+		TableColumnManager tcManager = TableColumnManager.getInstance();
+		Map tableConfigMap = tcManager.getTableConfigMap(tableID);
+		tableConfigMap.put("RowHeight", newHeight);
+		tcManager.setTableConfigMap(tableID, tableConfigMap);
+
+		setRowDefaultHeightPX(newHeight);
+		TableRowCore[] rows = getRowsAndSubRows(true);
+		if (rows.length == 0) {
+				// still want table to redraw (especially when using alternate line colours...)
+			Utils.execSWTThreadLater(0,()->{
+				swt_updateCanvasImage(false);
+			});
+			
+			return;
+		}
+		for (TableRowCore row : rows) {
+			((TableRowPainted) row).setHeight(newHeight, true);
+		}
+
+		// Bug: First row isn't being painted or something
+		Utils.execSWTThreadLater(0, () -> rows[0].redraw());
 	}
 
 	/* (non-Javadoc)
@@ -2175,6 +2319,11 @@ public class TableViewPainted
 		return new TableRowPainted(null, this, object, true);
 	}
 
+	@Override
+	public TableRowSWT createFakeRow(Object object){
+		return new TableRowPainted(null, this, object );
+	}
+	
 	/* (non-Javadoc)
 	 * @see TableViewImpl#visibleRowsChanged()
 	 */
@@ -2183,12 +2332,14 @@ public class TableViewPainted
 		if (Utils.isDisplayDisposed()) {
 			return;
 		}
-		swt_visibleRowsChanged();
+		if ( !visibleRowChangeDisabled()){
+		
+			Utils.execSWTThread( this::swt_visibleRowsChanged );
+		}
 	}
 
 	private void swt_visibleRowsChanged() {
-		final List<TableRowSWT> newlyVisibleRows = new ArrayList<>();
-		final List<TableRowSWT> nowInVisibleRows;
+		
 		final ArrayList<TableRowSWT> rowsStayedVisibleButMoved = new ArrayList<>();
 		List<TableRowSWT> newVisibleRows;
 		if (isVisible()) {
@@ -2201,14 +2352,19 @@ public class TableViewPainted
 		} else {
 			newVisibleRows = Collections.emptyList();
 		}
-		nowInVisibleRows = new ArrayList<>(0);
+		final LinkedHashSet<TableRowSWT>	nowInVisibleRows;
+		
 		synchronized (visibleRows_sync) {
 			if (visibleRows != null) {
-				nowInVisibleRows.addAll(visibleRows);
+				nowInVisibleRows = new LinkedHashSet<>( visibleRows );
+			}else{
+				nowInVisibleRows = new LinkedHashSet<>();
 			}
 		}
 
-		LinkedHashSet<TableRowPainted> rows = new LinkedHashSet<>(newVisibleRows.size());
+		LinkedHashSet<TableRowPainted>	rows = new LinkedHashSet<>(newVisibleRows.size());
+		final List<TableRowSWT>			newlyVisibleRows = new ArrayList<>(newVisibleRows.size());
+
 		for (TableRowSWT row : newVisibleRows) {
 			rows.add((TableRowPainted) row);
 			boolean removed = nowInVisibleRows.remove(row);
@@ -2221,6 +2377,11 @@ public class TableViewPainted
 			visibleRows = rows;
 		}
 
+			// seems we need this otherwise when the last row of a table is removed we end
+			// up with a blank row
+		
+		swt_fixupSize();
+		
 		if (DEBUG_ROWCHANGE) {
 			int topIndex = visibleRows.size() > 0
 					? indexOf(visibleRows.iterator().next()) : -1;
@@ -2433,13 +2594,21 @@ public class TableViewPainted
 				if (visibleRows.size() > 0) {
 					if (canvasImage != null && !canvasImage.isDisposed() && !changedH) {
 
+							// if the vbar isn't visible then we can't say anything about how things might have moved
+						
+						boolean vBarVisible = vBar.isEnabled();
+						
 						int yDiff = oldClientArea.y - newClientArea.y;
-						if (Math.abs(yDiff) < clientArea.height) {
+						if (Math.abs(yDiff) < clientArea.height || !vBarVisible ){
 							boolean wasIn = in_swt_updateCanvasImage;
 							in_swt_updateCanvasImage = true;
+							GC gc = null;
 							try{
-								GC gc = new GC(canvasImage);
-								try{
+								gc = canvasImageGC;								
+								if ( gc == null ){								
+									gc = new GC( canvasImage );
+								}
+								if ( vBarVisible ){
 									Rectangle bounds = canvasImage.getBounds();
 									//System.out.println("moving y " + yDiff + ";cah=" + clientArea.height);
 									if (yDiff > 0) {
@@ -2451,7 +2620,6 @@ public class TableViewPainted
 											gc.copyArea(0, 0, bounds.width, bounds.height, 0, yDiff, false);
 										}
 										swt_paintCanvasImage(gc, new Rectangle(0, 0, 9999, yDiff));
-										Utils.setClipping(gc, (Rectangle) null);
 									} else {
 										// User scrolled down, move image up
 										if (Utils.isGTK3) {
@@ -2467,11 +2635,11 @@ public class TableViewPainted
 											h += row.getHeight();
 										}
 										swt_paintCanvasImage(gc, new Rectangle(0, bounds.height - h, 9999, h));
-										Utils.setClipping(gc, (Rectangle) null);
 									}
-								}finally{
-									gc.dispose();
+								}else{
+									swt_paintCanvasImage(gc, new Rectangle(0, 0, 9999, 9999));
 								}
+
 					  		if ( DEBUG_WITH_SHELL ){
 					  			forceDebugShellRefresh(null);
 					  		}
@@ -2484,7 +2652,11 @@ public class TableViewPainted
 								refreshTable = true;
 
 							}finally{
-
+								if ( canvasImageGC == null ){									
+									if ( gc != null ){
+										gc.dispose();
+									}
+								}
 								in_swt_updateCanvasImage = wasIn;
 							}
 
@@ -2507,75 +2679,117 @@ public class TableViewPainted
 		}
 
 		if (!DIRECT_DRAW) {
-  		Image newImage = canvasImage;
+	
+	  		//List<TableRowSWT> visibleRows = getVisibleRows();
+	  		int h = 0;
+	  		synchronized (visibleRows_sync) {
+	  			TableRowPainted lastRow = getLastVisibleRow();
+	  			if (lastRow != null) {
+	  				h = lastRow.getDrawOffset().y - clientArea.y + lastRow.getHeight();
+	  				if (h < clientArea.height && lastRow.isExpanded()) {
+	  					TableRowCore[] subRows = lastRow.getSubRowsWithNull();
+	  					for (TableRowCore subRow : subRows) {
+	  						if (subRow == null) {
+	  							continue;
+	  						}
+	  						TableRowPainted subRowP = (TableRowPainted) subRow;
+	
+	  						h += subRowP.getFullHeight();
+	  						if (h >= clientArea.height) {
+	  							break;
+	  						}
+	  					}
+	  				}
+	  			}
+	  		}
+	  		
+	  		if (h < clientArea.height) {
+	  			h = clientArea.height;
+	  		}
+	  		
+	  		int oldH;
+	  		int oldW;
+	  				
+	  		if ( canvasImage == null || canvasImage.isDisposed()){
+	  			
+	  			canvasImage = null;
+	  			
+	  			oldH = 0;
+	  			oldW = 0;
+	  			
+	  		}else{
+	  			
+	  	  		Rectangle bounds = canvasImage.getBounds();
+	  	  		
+	  			oldH = bounds.height;
+	  			oldW = bounds.width;
+	  		}
+	
+	  		Image newImage;
 
-  		//List<TableRowSWT> visibleRows = getVisibleRows();
-  		int h = 0;
-  		synchronized (visibleRows_sync) {
-  			TableRowPainted lastRow = getLastVisibleRow();
-  			if (lastRow != null) {
-  				h = lastRow.getDrawOffset().y - clientArea.y + lastRow.getHeight();
-  				if (h < clientArea.height && lastRow.isExpanded()) {
-  					TableRowCore[] subRows = lastRow.getSubRowsWithNull();
-  					for (TableRowCore subRow : subRows) {
-  						if (subRow == null) {
-  							continue;
-  						}
-  						TableRowPainted subRowP = (TableRowPainted) subRow;
-
-  						h += subRowP.getFullHeight();
-  						if (h >= clientArea.height) {
-  							break;
-  						}
-  					}
-  				}
-  			}
-  		}
-  		if (h < clientArea.height) {
-  			h = clientArea.height;
-  		}
-
-  		int oldH = canvasImage == null || canvasImage.isDisposed() ? 0
-  				: canvasImage.getBounds().height;
-  		int oldW = canvasImage == null || canvasImage.isDisposed() ? 0
-  				: canvasImage.getBounds().width;
-
-  		if (canvasImage == null || oldW != w || h > oldH) {
-  			//System.out.println("oldW=" + oldW + ";" + w+ ";h=" + h + ";" + oldH);
-  			if (h <= 0 || clientArea.width <= 0) {
-  				if (newImage != null) {
-  					newImage.dispose();
-				  }
-  				newImage = null;
-  			} else {
-  				newImage = new Image(shell.getDisplay(), w, h);
-  			}
-  		}
-  		boolean canvasChanged = (canvasImage != newImage);
-  		if (canvasChanged) {
-  			Image oldImage = canvasImage;
-  			canvasImage = newImage;
-
-  			if (oldImage != null && !oldImage.isDisposed()) {
-  				oldImage.dispose();
-  			}
-  		}
-
-
-
-  		// paint event will handle any changedX or changedW
-  		if (changedH || canvasChanged || refreshTable) {
-  			//System.out.println(changedX + ";" + changedY + ";" + changedH + ";" + canvasChanged);
-  			//System.out.println("Redraw " + Debug.getCompressedStackTrace());
-
-  			// run refreshTable on SWT (this) thread to ensure rows have been
-  			// refreshed for the updateCanvasImage call immediately after it
-  			__refreshTable(false);
-  			// refreshtable will call swt_updateCanvasImage for each visible row
-  			if (canvasChanged) {
-  				swt_updateCanvasImage(false);
-  			}
-  		}
+	  		if ( canvasImage == null || oldW != w || h > oldH) {
+	  			
+	  				//System.out.println("oldW=" + oldW + ";" + w+ ";h=" + h + ";" + oldH);
+	  			
+	  			if ( h <= 0 || clientArea.width <= 0 ){
+	  				
+	  				newImage = null;
+	  				
+	  			}else{
+	  				
+	  				newImage = new Image(shell.getDisplay(), w, h);
+	  			}
+	  		}else{
+	  			
+	  			newImage = canvasImage;
+	  		}
+	  		
+	  		boolean canvasChanged = canvasImage != newImage;
+	  		
+	  		if ( canvasChanged ){
+	  			
+	  			Image	oldImage	= canvasImage;
+	  			GC		oldGC		= canvasImageGC;
+	  			
+	  			canvasImage		= newImage;
+	  			
+	  			if ( canvasImage!= null ){
+	  			
+	  				if ( REDUCE_GC_CREATION ){
+	  				
+	  					canvasImageGC	= new GC( canvasImage );
+	  				}
+	  			}else{
+	  				
+	  				canvasImageGC = null;
+	  			}
+	
+	  			if ( oldImage != null ){
+	  				
+	  				oldImage.dispose();
+	  			}
+	  			
+	  			if ( oldGC != null ){
+	  				
+	  				oldGC.dispose();
+	  			}
+	  		}
+	
+	
+	
+	  		// paint event will handle any changedX or changedW
+	  		if (changedH || canvasChanged || refreshTable) {
+	  			//System.out.println(changedX + ";cY=" + changedY + ";cH=" + changedH + ";cC=" + canvasChanged + ";rT=" + refreshTable);
+	  			//System.out.println("Redraw " + Debug.getCompressedStackTrace());
+	
+	  			// run refreshTable on SWT (this) thread to ensure rows have been
+	  			// refreshed for the updateCanvasImage call immediately after it
+	  			__refreshTable(false);
+	  			// refreshtable will call swt_updateCanvasImage for each visible row
+	  			if (canvasChanged) {
+	  				swt_updateCanvasImage(false);
+	  			}
+	  		}
 		}
 
 		//		System.out.println("imgBounds = " + canvasImage.getBounds() + ";ca="
@@ -2588,11 +2802,18 @@ public class TableViewPainted
 	}
 
 	private void forceDebugShellRefresh(Rectangle bounds) {
-		if (sCanvasImage == null) {
+		if (sCanvasImage == null || sCanvasImage.isDisposed()) {
 			return;
 		}
-		Point size = sCanvasImage.getShell().computeSize(
-			canvasImage.getBounds().width, canvasImage.getBounds().height);
+
+		if (canvasImage == null || canvasImage.isDisposed()) {
+			sCanvasImage.getShell().setSize(0, 0);
+			return;
+		}
+		
+		Rectangle canvasBounds = canvasImage.getBounds();
+		
+		Point size = sCanvasImage.getShell().computeSize( canvasBounds.width, canvasBounds.height);
 		sCanvasImage.getShell().setSize(size);
 		if (bounds == null) {
 			sCanvasImage.redraw();
@@ -2601,8 +2822,8 @@ public class TableViewPainted
 				true);
 		}
 		sCanvasImage.update();
-		while (sCanvasImage.getDisplay().readAndDispatch()) {
-		}
+		//while (sCanvasImage.getDisplay().readAndDispatch()) {
+		//}
 	}
 
 	public void swt_updateCanvasImage(boolean immediateRedraw) {
@@ -2635,10 +2856,30 @@ public class TableViewPainted
 					return;
 				}
 				//System.out.println("UpdateCanvasImage " + bounds + "; via " + Debug.getCompressedStackTrace());
-				GC gc = new GC(canvasImage);
-				swt_paintCanvasImage(gc, bounds);
-				gc.dispose();
-
+				
+				GC gc = null;
+				
+				try{
+					gc = canvasImageGC;
+					
+					if ( gc == null ){
+						
+						gc = new GC( canvasImage );
+					}
+					
+					swt_paintCanvasImage(gc, bounds);
+					
+				}finally{
+					
+					if ( canvasImageGC == null ){
+						
+						if ( gc != null ){
+							
+							gc.dispose();
+						}
+					}
+				}
+				
 				if (DEBUG_WITH_SHELL) {
 					forceDebugShellRefresh(bounds);
 				}
@@ -2727,7 +2968,10 @@ public class TableViewPainted
 	protected void swt_fixupSize() {
 		//debug("Set minSize to " + columnsWidth + "x" + totalHeight + ";ca=" + clientArea + ";" + Debug.getCompressedStackTrace());
 		boolean vBarValid = vBar != null && !vBar.isDisposed();
+		boolean vChanged = false;
+		int oldMax = -1;
 		if (vBarValid) {
+			oldMax = vBar.getMaximum();
 			int tableSize = clientArea.height;
 			int max = totalHeight;
 			if (max < tableSize) {
@@ -2735,13 +2979,13 @@ public class TableViewPainted
 				vBar.setEnabled(false);
 				vBar.setVisible(false);
 			} else {
-				if (!vBar.isVisible()) {
+				if (!vBar.isEnabled()) {
 					vBar.setVisible(true);
 					vBar.setEnabled(true);
 				}
 				if (vBar.getMaximum() != max) {
 					vBar.setMaximum(max);
-					swt_vBarChanged();
+					vChanged = true;
 				}
 				vBar.setThumb(tableSize);
 				vBar.setPageIncrement(tableSize);
@@ -2750,7 +2994,7 @@ public class TableViewPainted
 		if (hBar != null && !hBar.isDisposed()) {
 			int tableSize = cTable.getSize().x;
 			int max = columnsWidth;
-			if (vBarValid && vBar.isVisible() && getScrollbarsMode() == SWT.NONE) {
+			if (vBarValid && vBar.isEnabled() && getScrollbarsMode() == SWT.NONE) {
 				int vBarW = vBar.getSize().x;
 
 				max += vBarW;
@@ -2760,20 +3004,24 @@ public class TableViewPainted
 				hBar.setEnabled(false);
 				hBar.setVisible(false);
 			} else {
-				if (!hBar.isVisible()) {
+				if (!hBar.isEnabled()) {
 					hBar.setVisible(true);
 					hBar.setEnabled(true);
 				}
 				hBar.setValues(hBar.getSelection(), 0, max, tableSize, 50, tableSize);
 			}
-			if (vBarValid && hBar.isVisible()) {
+			if (vBarValid && hBar.isEnabled()) {
 				int hBarW = getScrollbarsMode() == SWT.NONE ? hBar.getSize().y : 0;
 
 				vBar.setThumb(clientArea.height - hBarW);
 				vBar.setMaximum(totalHeight - hBarW);
+				vChanged = true;
 				vBar.setPageIncrement(vBar.getPageIncrement() - hBarW);
 			}
-
+		}
+		
+		if ( vChanged && vBar.getMaximum() != oldMax ){
+			swt_vBarChanged();
 		}
 	}
 
@@ -2875,25 +3123,26 @@ public class TableViewPainted
 			return;
 		}
 		SimpleTextEntryWindow entryWindow = new SimpleTextEntryWindow();
+		String tableTitle = MessageText.getString(getTextPrefixID() + ".header", (String) null);
+		// fallback to legacy
+		if (tableTitle == null) {
+			tableTitle = MessageText.getString(getTableID() + "View.header");
+			if (Constants.isCVSVersion()) {
+				tableTitle += " (Fallback Text)";
+			}
+		}
 		entryWindow.initTexts("MyTorrentsView.dialog.setFilter.title", null,
 				"MyTorrentsView.dialog.setFilter.text", new String[] {
-					MessageText.getString(getTableID() + "View" + ".header")
+					tableTitle
 				});
 		entryWindow.setPreenteredText(filter.text, false);
-		entryWindow.prompt(new UIInputReceiverListener() {
-			@Override
-			public void UIInputReceiverClosed(UIInputReceiver entryWindow) {
-				if (!entryWindow.hasSubmittedInput()) {
-					return;
-				}
-				String message = entryWindow.getSubmittedInput();
-
-				if (message == null) {
-					message = "";
-				}
-
-				setFilterText(message, false);
+		entryWindow.prompt(results -> {
+			if (!results.hasSubmittedInput()) {
+				return;
 			}
+
+			String message = results.getSubmittedInput();
+			setFilterText(message == null ? "" : message, false);
 		});
 	}
 
@@ -2926,13 +3175,27 @@ public class TableViewPainted
 		Utils.execSWTThread(new AERunnable() {
 			@Override
 			public void runSupport() {
-				for (TableRowCore row : deselectedRows) {
-					row.invalidate();
-					redrawRow((TableRowPainted) row, false);
+				if ( deselectedRows.length > 100 ){
+					for (TableRowCore row : deselectedRows) {
+						row.invalidate();
+					}
+					redrawTable();
+				}else{
+					for (TableRowCore row : deselectedRows) {
+						row.invalidate();
+						redrawRow((TableRowPainted) row, false);
+					}
 				}
-				for (TableRowCore row : newlySelectedRows) {
-					row.invalidate();
-					redrawRow((TableRowPainted) row, false);
+				if ( newlySelectedRows.length > 100 ){
+					for (TableRowCore row : newlySelectedRows) {
+						row.invalidate();
+					}
+					redrawTable();
+				}else{
+					for (TableRowCore row : newlySelectedRows) {
+						row.invalidate();
+						redrawRow((TableRowPainted) row, false);
+					}
 				}
 			}
 		});
@@ -3020,19 +3283,25 @@ public class TableViewPainted
 					menu.setData(MENUKEY_IS_HEADER, true);
 
 				} else {
-					TableRowCore row = getTableRowWithCursor();
-					boolean noRow = row == null;
-
-					// If shell is not active, right clicking on a row will
-					// result in a MenuDetect, but not a MouseDown or MouseUp
-					if (!isSelected(row)) {
-						setSelectedRows(new TableRowCore[] { row });
+					boolean noRow;
+					if (event.detail == SWT.MENU_KEYBOARD) {
+						noRow = getFocusedRow() == null;
+					} else {
+						TableRowCore row = getTableRowWithCursor();
+						noRow = row == null;
+	
+						// If shell is not active, right clicking on a row will
+						// result in a MenuDetect, but not a MouseDown or MouseUp
+						if (!isSelected(row)) {
+							setSelectedRows(new TableRowCore[] { row });
+						}
 					}
 
 					menu.setData(MENUKEY_IN_BLANK_AREA, noRow);
 					menu.setData(MENUKEY_IS_HEADER, false);
 				}
 				Point pt = cHeaderArea.toControl(event.x, event.y);
+				menu.setData(TableContextMenuItemImpl.MENUKEY_TABLE_VIEW, TableViewPainted.this );
 				menu.setData(MENUKEY_COLUMN, getTableColumnByOffset(pt.x));
 			}
 		});
@@ -3065,13 +3334,6 @@ public class TableViewPainted
 				});
 
 		return menu;
-	}
-
-	@Override
-	public void showColumnEditor() {
-		if (tvSWTCommon != null) {
-			tvSWTCommon.showColumnEditor();
-		}
 	}
 
 	@Override
@@ -3181,13 +3443,15 @@ public class TableViewPainted
 			int newHeight) {
 
 		synchronized (heightChangeSync) {
-  		totalHeight += (newHeight - oldHeight);
-  		//System.out.println("Height delta: " + (newHeight - oldHeight) + ";ttl=" + totalHeight);
-
-  		if (qdRowHeightChanged) {
-  			return;
-  		}
-  		qdRowHeightChanged = true;
+			totalHeight += (newHeight - oldHeight);
+			//System.out.println("Height delta: " + (newHeight - oldHeight) + ";ttl=" + totalHeight);
+			if ( totalHeight < 0 ){
+				Debug.out( "eh?" );
+			}
+			if (qdRowHeightChanged) {
+				return;
+			}
+			qdRowHeightChanged = true;
 		}
 		Utils.execSWTThreadLater(0, new SWTRunnable() {
 			@Override
@@ -3271,7 +3535,7 @@ public class TableViewPainted
 			// optimize multiple row withdraws (e.g. on view construction) so invalidate the
 			// aggregate area
 
-		synchronized( pending_rows ){
+		synchronized( visibleRows_sync ){
 
 			pending_rows.add( row );
 		}
@@ -3283,7 +3547,7 @@ public class TableViewPainted
 
 				List<TableRowPainted>	rows;
 
-				synchronized( pending_rows ){
+				synchronized( visibleRows_sync ){
 
 					if ( pending_rows.size() == 0 ){
 
@@ -3380,6 +3644,13 @@ public class TableViewPainted
 		return tv == this || (tv == null && isFocused) || (tv != this && tv != null && tv.getSelectedRowsSize() == 0);
 	}
 
+	@Override
+	protected boolean
+	isTableFocused()
+	{
+		return( isFocused );
+	}
+	
 	public boolean isEnabled() {
 		return cTable.isEnabled();
 	}

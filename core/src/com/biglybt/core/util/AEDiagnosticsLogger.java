@@ -20,7 +20,6 @@
 package com.biglybt.core.util;
 
 import java.io.*;
-import java.text.SimpleDateFormat;
 import java.util.*;
 
 import com.biglybt.core.logging.Logger;
@@ -58,7 +57,7 @@ AEDiagnosticsLogger
 	static{
 		long		now = System.currentTimeMillis();
 
-		start_date = new SimpleDateFormat().format( new Date(now));
+		start_date = DisplayFormatters.formatDateYMDHM( now );
 
 		timezone_offset = TimeZone.getDefault().getOffset(now);
 	}
@@ -169,7 +168,7 @@ AEDiagnosticsLogger
 
 			System.err.println( str );
 
-			// Logger dumps the stderr, but if it's not setup, do it outselves
+			// Logger dumps the stderr, but if it's not setup, do it ourselves
 			if (Logger.getOldStdErr() == null) {
 				log( str );
 			}
@@ -250,6 +249,25 @@ AEDiagnosticsLogger
 	log(
 		String	_str )
 	{
+		if ( AEDiagnostics.loggers_disabled ){
+			
+			synchronized( this ){
+				
+				if ( current_writer != null ){
+					
+					try{
+						current_writer.close();
+						
+					}finally{
+						
+						current_writer = null;
+					}
+				}
+			}
+			
+			return;
+		}
+		
 		if ( !AEDiagnostics.loggers_enabled ){
 
 			if ( !force ){

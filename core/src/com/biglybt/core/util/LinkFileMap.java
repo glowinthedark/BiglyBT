@@ -21,9 +21,13 @@ package com.biglybt.core.util;
 
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.biglybt.core.util.StringInterner.FileKey;
 
 public class
 LinkFileMap
+	implements BEncodableObject
 {
 		/*
 		 * History here: Before 5001_B22 file linkage was performed by linking source files and target files - source file being the
@@ -42,15 +46,29 @@ LinkFileMap
 		 * Note that the FileManagerImpl's getLink requires access to the from-name to verify that the link it looks up
 		 * is valid (principally caused by the 'move' method running BEFORE links are updated - really this should be
 		 * reworked
+		 * 
+		 * From 3701 the FileKey has been introduced to reduce memory usage of full file name storage
+		 * Also we never write entries for deleted links (target=null) and treat source=dest as deleted link
 		 */
 
-	private final Map<wrapper,Entry>	name_map 	= new HashMap<>();
-	private final Map<Integer,Entry>	index_map 	= new HashMap<>();
+	// private final Map<FileKey,Entry>	name_map 	= new HashMap<>();	removed 3700
+	
+	private static final boolean	STORE_FROM_KEY = true;	// can set false from 3801+ and users can still revert to 3800 if wanted (but not earlier...)
+	
+	private final IndexResolver	resolver;
+	
+	private final Map<Integer,Entry>	index_map 	= new ConcurrentHashMap<>();
 
+	public
+	LinkFileMap(
+		IndexResolver	_resolver )
+	{
+		resolver = _resolver;
+	}
+	
 	public File
 	get(
-		int			index,
-		File		from_file )
+		int			index )
 	{
 		if ( index >= 0 ){
 
@@ -58,38 +76,21 @@ LinkFileMap
 
 			if ( entry != null ){
 
-				return( entry.getToFile());
+				FileKey to_fk = entry.getToFile();
+				
+				return( to_fk==null?null:to_fk.getFile());
 			}
 		}else{
 
-			Debug.out( "unexpected index" );
+			Debug.out( "unexpected index: " + index );
 		}
 
-		Entry entry = name_map.get( new wrapper( from_file ));
-
-		if ( entry == null ){
-
-			return( null );
-
-		}else{
-
-				// migration - all existing links to migrate have an index of -1
-
-			int	e_index = entry.getIndex();
-
-			if ( e_index >= 0 && e_index != index ){
-
-				return( null );
-			}
-
-			return( entry.getToFile());
-		}
+		return( null );
 	}
 
 	public Entry
 	getEntry(
-		int			index,
-		File		from_file )
+		int			index )
 	{
 		if ( index >= 0 ){
 
@@ -104,152 +105,154 @@ LinkFileMap
 			Debug.out( "unexpected index" );
 		}
 
-		Entry entry = name_map.get( new wrapper( from_file ));
-
-		if ( entry == null ){
-
-			return( null );
-
-		}else{
-
-				// migration - all existing links to migrate have an index of -1
-
-			int	e_index = entry.getIndex();
-
-			if ( e_index >= 0 && e_index != index ){
-
-				return( null );
-			}
-
-			return( entry );
-		}
+		return( null );
 	}
 
 	public void
 	put(
 		int			index,
-		File		from_file,
-		File		to_file )
-	{
-		Entry entry = new Entry( index, from_file, to_file );
-
-		if ( index >= 0 ){
-
-			index_map.put( index, entry );
-
-				// remove any legacy entry
-
-			if ( name_map.size() > 0 ){
-
-				name_map.remove( new wrapper( from_file ));
-			}
+		FileKey		from_fk_maybe_null,
+		FileKey		to_fk )
+	{			
+		if ( to_fk == null || ( from_fk_maybe_null != null && from_fk_maybe_null.equals(to_fk))){
+			
+			index_map.remove( index );
+			
 		}else{
-
-			wrapper wrap = new wrapper( from_file );
-
-			Entry existing = name_map.get( wrap );
-
-			if ( 	existing == null ||
-					!existing.getFromFile().equals( from_file) ||
-					!existing.getToFile().equals( to_file )){
-
+			
+			Entry entry = new Entry( index, from_fk_maybe_null, to_fk );
+	
+			if ( index >= 0 ){
+	
+				index_map.put( index, entry );
+	
+			}else{
+	
 				Debug.out( "unexpected index" );
 			}
-
-			name_map.put( wrap, entry );
 		}
 	}
 
 	public void
-	putMigration(
-		File		from_file,
-		File		to_file )
+	clear()
 	{
-		Entry entry = new Entry( -1, from_file, to_file );
-
-		name_map.put( new wrapper( from_file ), entry );
+		index_map.clear();
 	}
-
-	public void
-	remove(
-		int			index,
-		File		key )
+	
+	public Iterator<LinkFileMap.Entry>
+	entryIterator()
 	{
-		if ( index >= 0 ){
-
-			index_map.remove( index );
-
-		}else{
-			// this can happen when removing non-resolved entries, not a problem
-			//Debug.out( "unexpected index" );
-		}
-
-		if ( name_map.size() > 0 ){
-
-			name_map.remove( new wrapper( key ));
-		}
+		return( index_map.values().iterator());
 	}
-
-	public boolean
-	hasLinks()
-	{
-		for (Entry entry: index_map.values()){
-
-			File to_file = entry.getToFile();
-
-			if ( to_file != null ){
-
-				if ( !entry.getFromFile().equals( to_file )){
-
-					return( true );
-				}
-			}
-		}
-
-		return( false );
-	}
-
+	
 	public int
 	size()
 	{
-		int	size = 0;
+		return( index_map.size());
+	}
 
-		for (Entry entry: index_map.values()){
+	@Override
+	public Object 
+	toBencodeObject()
+	{
+			// I'd like to add some common-prefix optimisations to this encoding but this
+			// would break backwards compatibility so it would need to be added in parallel 
+			// to the existing crap method for a few releases before actually switching
+			// which would make things worse for a while and I can't summon the strength
+		
+		List<String>	list = new ArrayList<>();
 
-			File to_file = entry.getToFile();
+		Iterator<LinkFileMap.Entry>	it = entryIterator();
 
-			if ( to_file != null ){
+		while( it.hasNext()){
 
-				if ( !entry.getFromFile().equals( to_file )){
+			LinkFileMap.Entry	entry = it.next();
 
-					size++;
+			int		index	= entry.getIndex();
+			
+			StringInterner.FileKey	source_maybe_null 	= entry.getFromFileMaybeNull();
+			
+			StringInterner.FileKey	target 	= entry.getToFile();
+
+			StringBuilder	str = new StringBuilder( 512 );
+			
+			str.append( index );
+			str.append( "\n" );
+			if ( source_maybe_null != null ){
+				str.append( source_maybe_null.toString());
+			}
+			str.append( "\n" );
+			str.append( target.toString());
+						
+			list.add( str.toString());
+		}
+		
+		return( list );
+	}
+	
+	public void
+	fromBencodeObject(
+		List<String>		list )
+	{
+		for (int i=0;i<list.size();i++){
+
+			String	entry = (String)list.get(i);
+
+			String[] bits = entry.split( "\n" );
+
+			if ( bits.length >= 2 ){
+
+				try{
+					int		index 	= Integer.parseInt( bits[0].trim());
+					
+					String from_str = bits[1];
+					
+					StringInterner.FileKey	source_maybe_null	= from_str.isEmpty()?null: new StringInterner.FileKey( from_str );
+					
+					StringInterner.FileKey	target;
+					
+					if ( bits.length < 3 ){
+						
+						target = null;
+						
+					}else{
+						
+						String to_str = bits[2];
+							
+						target	= new StringInterner.FileKey( to_str );
+					}
+
+					if ( index >= 0 ){
+
+						put( index, source_maybe_null, target );
+
+					}else{
+						
+							// partially migrated entry, try and resolve the from file to an index
+						
+						if ( resolver != null ){
+						
+							index = resolver.resolveFile(from_str);
+							
+							if ( index >= 0 ){
+								
+								put( index, source_maybe_null, target );
+							}
+						}
+						
+						if ( index < 0 ){
+						
+							Debug.out( "unexpected index" );
+						}
+					}
+				}catch( Throwable e ){
+
+					Debug.out( e );
 				}
 			}
 		}
-
-		return( size );
 	}
-
-	public Iterator<Entry>
-	entryIterator()
-	{
-		if ( index_map.size() > 0 ){
-
-			if ( name_map.size() == 0 ){
-
-				return( index_map.values().iterator());
-			}
-
-			Set<Entry> entries = new HashSet<>(index_map.values());
-
-			entries.addAll( name_map.values());
-
-			return( entries.iterator());
-		}
-
-		return( name_map.values().iterator());
-	}
-
+	
 	public String
 	getString()
 	{
@@ -267,18 +270,6 @@ LinkFileMap
 			str += "i_map={ " + i_str + " }";
 		}
 
-		if ( name_map.size() > 0 ){
-
-			String n_str = "";
-
-			for ( Entry e: name_map.values()){
-
-				n_str += (n_str.length()==0?"":", ") + e.getString();
-			}
-
-			str += "n_map={ " + n_str + " }";
-		}
-
 		return( str );
 	}
 
@@ -286,18 +277,18 @@ LinkFileMap
 	Entry
 	{
 		private final int		index;
-		private final File	from_file;
-		private final File	to_file;
+		private final FileKey	from_file_maybe_null;
+		private final FileKey	to_file;
 
 		private
 		Entry(
-			int		_index,
-			File	_from_file,
-			File	_to_file )
+			int			_index,
+			FileKey		_from_file_maybe_null,
+			FileKey		_to_file )
 		{
-			index		= _index;
-			from_file	= _from_file;
-			to_file		= _to_file;
+			index					= _index;
+			from_file_maybe_null	= STORE_FROM_KEY?_from_file_maybe_null:null;
+			to_file					= _to_file;
 		}
 
 		public int
@@ -306,13 +297,13 @@ LinkFileMap
 			return( index );
 		}
 
-		public File
-		getFromFile()
+		public FileKey
+		getFromFileMaybeNull()
 		{
-			return( from_file );
+			return( from_file_maybe_null );
 		}
 
-		public File
+		public FileKey
 		getToFile()
 		{
 			return( to_file );
@@ -321,39 +312,15 @@ LinkFileMap
 		public String
 		getString()
 		{
-			return( index + ": " + from_file + " -> " + to_file );
+			return( index + ": " + from_file_maybe_null + " -> " + to_file );
 		}
 	}
-
-	private static class
-	wrapper
+	
+	public interface
+	IndexResolver
 	{
-		private final String		file_str;
-
-		protected
-		wrapper(
-			File	file )
-		{
-			file_str	= file.toString();
-		}
-
-
-		public boolean
-		equals(
-			Object	other )
-		{
-			if ( other instanceof wrapper ){
-
-				return( file_str.equals(((wrapper)other).file_str ));
-			}
-
-			return( false );
-		}
-
 		public int
-		hashCode()
-		{
-			return( file_str.hashCode());
-		}
+		resolveFile(
+			String	file );
 	}
 }

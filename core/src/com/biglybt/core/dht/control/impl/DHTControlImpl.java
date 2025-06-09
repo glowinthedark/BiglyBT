@@ -27,6 +27,7 @@ import java.net.InetSocketAddress;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.gudy.bouncycastle.crypto.CipherParameters;
 import org.gudy.bouncycastle.crypto.engines.RC4Engine;
@@ -1859,6 +1860,8 @@ DHTControlImpl
 			new DHTOperationListenerDemuxer(
 				new DHTOperationListener()
 				{
+					private AtomicBoolean done = new AtomicBoolean();
+					
 					@Override
 					public void
 					searching(
@@ -1909,6 +1912,11 @@ DHTControlImpl
 					complete(
 						boolean				timeout )
 					{
+						if ( !done.compareAndSet( false, true )){
+							
+							return;
+						}
+						
 						try{
 							get_listener.complete(timeout);
 
@@ -2180,7 +2188,7 @@ DHTControlImpl
 						closest(
 							List	closest )
 						{
-							/* we don't use teh cache-at-closest kad feature
+							/* we don't use the cache-at-closest kad feature
 							if ( found_values.size() > 0 ){
 
 								DHTTransportValue[]	values = new DHTTransportValue[found_values.size()];
@@ -2243,18 +2251,40 @@ DHTControlImpl
 		String					description,
 		DHTOperationListener	listener )
 	{
+		return( remove( unencoded_key, description, (short)0, listener ));
+	}
+	
+	@Override
+	public byte[]
+	remove(
+		byte[]					unencoded_key,
+		String					description,
+		short					flags,
+		DHTOperationListener	listener )
+	{
 		final byte[]	encoded_key = encodeKey( unencoded_key );
 
 		if ( DHTLog.isOn()){
 			DHTLog.log( "remove for " + DHTLog.getString( encoded_key ));
 		}
-
-		DHTDBValue	res = database.remove( local_contact, new HashWrapper( encoded_key ));
+		
+		DHTDBValue	res = database.remove( local_contact, new HashWrapper( encoded_key ), flags );
 
 		if ( res == null ){
 
 				// not found locally, nothing to do
 
+			try{
+				if ( listener != null ){
+					
+					listener.complete( false );
+				}
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+			
 			return( null );
 
 		}else{
@@ -2297,6 +2327,17 @@ DHTControlImpl
 
 				// not found locally, nothing to do
 
+			try{
+				if ( listener != null ){
+					
+					listener.complete( false );
+				}
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+			
 			return( null );
 
 		}else{
@@ -2983,8 +3024,10 @@ DHTControlImpl
 				}
 
 				@Override
-				public String getDescription() {
-					return (description);
+				public String 
+				getDescription() 
+				{
+					return( description + ": p=" + high_priority + ",t=" + timeout );
 				}
 
 				@Override

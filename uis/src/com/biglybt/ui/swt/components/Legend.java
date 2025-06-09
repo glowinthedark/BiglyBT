@@ -56,7 +56,7 @@ import com.biglybt.ui.swt.views.tableitems.pieces.BlocksItem;
  */
 public class Legend {
 	/**
-	 * Create a legend containing a modifyable color box and description
+	 * Create a legend containing a modifiable color box and description
 	 *
 	 * @param panel Where to add legend to
 	 * @param blockColors array of colors for each legend entry.  This
@@ -99,7 +99,7 @@ public class Legend {
 		return( createLegendComposite( panel, blockColors, keys, null, layoutData, true ));
 	}
 	/**
-	 * Create a legend containing a modifyable color box and description
+	 * Create a legend containing a modifiable color box and description
 	 *
 	 * @param panel Where to add legend to
 	 * @param blockColors array of colors for each legend entry.  This
@@ -130,7 +130,7 @@ public class Legend {
 		
 		for ( int i=0;i<keys.length;i++){
 			if ( keys[i].equals( key )){
-				def = BlocksItem.colors[i];
+				def = defs[i];
 			}
 		}
 		
@@ -183,6 +183,7 @@ public class Legend {
 		layout.marginTop = 0;
 		layout.marginLeft = 0;
 		layout.marginRight = 0;
+		layout.marginHeight = 0;
 		layout.spacing = 0;
 		legend.setLayout(layout);
 
@@ -223,22 +224,24 @@ public class Legend {
 			cColor.addMouseListener(new MouseAdapter() {
 				@Override
 				public void mouseUp(MouseEvent e) {
-					Integer iIndex = (Integer)cColor.getData("Index");
+					Integer iIndex = (Integer) cColor.getData("Index");
 					if (iIndex == null)
 						return;
 					int index = iIndex.intValue();
 
-					if (e.button == 1) {
-
-						RGB rgb = Utils.showColorDialog( panel, blockColors[index].getRGB());
-
-						if ( rgb != null ){
-
-							config.setRGBParameter(keys[index], rgb.red, rgb.green, rgb.blue, true);
-						}
-					}else{
+					if (e.button == 2
+							|| (e.button == 1 && (e.stateMask & SWT.MOD1) > 0)) {
 
 						config.removeRGBParameter(keys[index]);
+					} else if (e.button == 1) {
+
+						RGB rgb = Utils.showColorDialog(panel, blockColors[index].getRGB());
+
+						if (rgb != null) {
+
+							config.setRGBParameter(keys[index], rgb.red, rgb.green, rgb.blue,
+									true);
+						}
 					}
 				}
 			});
@@ -263,14 +266,14 @@ public class Legend {
 						boolean vis = !config.getBooleanParameter(keys[f_i] + ".vis", true );
 						config.setParameter(keys[f_i] + ".vis", vis );
 						listener.visibilityChange( vis, f_i );
-						lblDesc.setForeground(vis?Colors.getSystemColor(lblDesc.getDisplay(), SWT.COLOR_BLACK ):Colors.grey );
+						Utils.setSkinnedForeground(lblDesc,(vis?null:(Utils.isDarkAppearanceNative()?Colors.dark_grey:Colors.grey )));
 					}
 				});
 
 				boolean vis = config.getBooleanParameter(keys[f_i] + ".vis", true );
 				if ( !vis ){
 					listener.visibilityChange( vis, i );
-					lblDesc.setForeground( Colors.grey );
+					Utils.setSkinnedForeground( lblDesc, Utils.isDarkAppearanceNative()?Colors.dark_grey:Colors.grey, true );
 				}
 			}
 
@@ -314,6 +317,10 @@ public class Legend {
 										cColor.redraw();
 									}
 								});
+							}
+							
+							if (listener != null) {
+								listener.colorChange(index);
 							}
 						}
 					}
@@ -543,5 +550,9 @@ public class Legend {
 		visibilityChange(
 			boolean	visible,
 			int		index );
+		
+		default public void
+			colorChange(
+				int index) {}
 	}
 }

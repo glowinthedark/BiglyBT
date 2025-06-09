@@ -48,6 +48,7 @@ import com.biglybt.core.peer.PEPeerSource;
 import com.biglybt.core.peermanager.utils.PeerClassifier;
 import com.biglybt.core.proxy.AEProxyFactory;
 import com.biglybt.core.proxy.AEProxyFactory.PluginProxy;
+import com.biglybt.core.proxy.impl.AEPluginProxyHandler;
 import com.biglybt.core.security.SESecurityManager;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentAnnounceURLSet;
@@ -240,6 +241,30 @@ TRTrackerBTAnnouncerImpl
 								final private int	public_pending	= tracker_timer_public.getEventCount( SystemTime.getCurrentTime());
 								final private int	private_pending	= tracker_timer_private.getEventCount( SystemTime.getCurrentTime() );
 								
+								final List<String>	public_active;
+								final List<String>	private_active;
+								
+								{
+									List<TimerEvent> events = tracker_timer_public.getActiveEvents();
+									
+									long mono_now = SystemTime.getMonotonousTime();
+									
+									public_active = new ArrayList<String>( events.size());
+									
+									for ( TimerEvent e: events ){
+																				
+										public_active.add( e.getName() + " (" + (mono_now - e.getExecutionStartMonoTime()) + " " + MessageText.getString( "ConfigView.section.stats.millis.short" ) + ")");									}
+									
+									events = tracker_timer_private.getActiveEvents();
+									
+									private_active = new ArrayList<String>( events.size());
+									
+									for ( TimerEvent e: events ){
+										
+										private_active.add( e.getName() + " (" + (mono_now - e.getExecutionStartMonoTime()) + " " + MessageText.getString( "ConfigView.section.stats.millis.short" ) + ")");						
+									}
+								}
+								
 								public long
 								getPublicLagMillis()
 								{
@@ -250,6 +275,20 @@ TRTrackerBTAnnouncerImpl
 								getPrivateLagMillis()
 								{
 									return( private_lag );
+								}
+								
+								@Override
+								public List<String> 
+								getPublicActive()
+								{
+									return( public_active );
+								}
+								
+								@Override
+								public List<String> 
+								getPrivateActive()
+								{	
+									return( private_active );
 								}
 								
 								public int
@@ -358,6 +397,7 @@ TRTrackerBTAnnouncerImpl
 	private long				current_time_to_wait_secs;
 	private final boolean		manual_control;
 
+	private final int	dispersal_random = RandomUtils.nextInt( 10 );
 	private long		tracker_interval;
 	private long		tracker_min_interval;
 
@@ -402,6 +442,7 @@ TRTrackerBTAnnouncerImpl
 	private byte autoUDPprobeEvery = 1;
 	private int autoUDPProbeSuccessCount;
 
+	private InetSocketAddress working_udp_ia;
 
 	private String tracker_id = "";
 
@@ -503,7 +544,7 @@ TRTrackerBTAnnouncerImpl
 			{
 				if ( manual_control ){
 
-					requestUpdateSupport();
+					requestUpdateSupport( this_event );
 
 					return;
 				}
@@ -512,7 +553,7 @@ TRTrackerBTAnnouncerImpl
 
 				try{
 
-					secs_to_wait = requestUpdateSupport();
+					secs_to_wait = requestUpdateSupport( this_event );
 
 					if ( tracker_state != TRTrackerAnnouncer.TS_STOPPED ){
 						
@@ -695,6 +736,8 @@ TRTrackerBTAnnouncerImpl
 
 		}
 
+		secs_to_wait += dispersal_random;
+		
 		return( secs_to_wait );
 	}
 
@@ -930,7 +973,8 @@ TRTrackerBTAnnouncerImpl
 	}
 
 	protected long
-	requestUpdateSupport()
+	requestUpdateSupport(
+		TimerEvent		timer_event )
 	{
 
 		boolean	clear_progress = true;
@@ -974,7 +1018,7 @@ TRTrackerBTAnnouncerImpl
 
 				}else if ( tracker_state != TRTrackerAnnouncer.TS_STOPPED ){
 
-					response = stopSupport();
+					response = stopSupport( timer_event );
 
 					if ( response.getStatus() == TRTrackerAnnouncerResponse.ST_ONLINE ){
 
@@ -993,7 +1037,7 @@ TRTrackerBTAnnouncerImpl
 					// always go through the "start" phase, even if we're already complete
 					// as some trackers insist on the initial "start"
 
-				response = startSupport();
+				response = startSupport( timer_event );
 
 				if ( response.getStatus() == TRTrackerAnnouncerResponse.ST_ONLINE ){
 
@@ -1003,7 +1047,7 @@ TRTrackerBTAnnouncerImpl
 
 				if ( !complete_reported ){
 
-					response = completeSupport();
+					response = completeSupport( timer_event );
 
 						// treat the "complete" as processed if the tracker replies either OK or an explicit
 						// error. In particular, if the tracker has returned an error to control seed limits
@@ -1019,12 +1063,12 @@ TRTrackerBTAnnouncerImpl
 				}else{
 					tracker_state = TRTrackerAnnouncer.TS_COMPLETED;
 
-					response = updateSupport();
+					response = updateSupport( timer_event );
 				}
 
 			}else{
 
-				response = updateSupport();
+				response = updateSupport( timer_event );
 			}
 
 			if ( response != null ){
@@ -1110,45 +1154,46 @@ TRTrackerBTAnnouncerImpl
 		}
 	}
 
-	protected TRTrackerAnnouncerResponseImpl startSupport() {
+	protected TRTrackerAnnouncerResponseImpl startSupport( TimerEvent timer_event ) {
 		if (Logger.isEnabled())
 			Logger.log(new LogEvent(torrent, LOGID, "Tracker Announcer is sending "
 					+ "a start Request"));
 
-    return (update("started"));
+    return (update("started", timer_event ));
   }
 
-  protected TRTrackerAnnouncerResponseImpl completeSupport() {
+  protected TRTrackerAnnouncerResponseImpl completeSupport( TimerEvent timer_event ) {
   	if (Logger.isEnabled())
 			Logger.log(new LogEvent(torrent, LOGID, "Tracker Announcer is sending "
 					+ "a completed Request"));
 
-		return (update("completed"));
+		return (update("completed", timer_event));
   }
 
-  protected TRTrackerAnnouncerResponseImpl stopSupport() {
+  protected TRTrackerAnnouncerResponseImpl stopSupport( TimerEvent timer_event ) {
   	if (Logger.isEnabled())
 			Logger.log(new LogEvent(torrent, LOGID, "Tracker Announcer is sending "
 					+ "a stopped Request"));
 
-    return (update("stopped"));
+    return (update("stopped", timer_event));
   }
 
-  protected TRTrackerAnnouncerResponseImpl updateSupport() {
+  protected TRTrackerAnnouncerResponseImpl updateSupport( TimerEvent timer_event ) {
   	if (Logger.isEnabled())
 			Logger.log(new LogEvent(torrent, LOGID, "Tracker Announcer is sending "
 					+ "an update Request"));
 
-    return update("");
+    return update("", timer_event);
   }
 
   	private TRTrackerAnnouncerResponseImpl
 	update(
-		String evt )
+		String 		evt,
+		TimerEvent	timer_event )
   	{
   		// this method filters out any responses incompatible with the network selection
 
-  		TRTrackerAnnouncerResponseImpl	resp = update2( evt );
+  		TRTrackerAnnouncerResponseImpl	resp = update2( evt, timer_event );
 
   		TRTrackerAnnouncerResponsePeer[]	peers = resp.getPeers();
 
@@ -1201,9 +1246,9 @@ TRTrackerBTAnnouncerImpl
   	}
 
     private TRTrackerAnnouncerResponseImpl
-    update2(String evt)
+    update2(String evt, TimerEvent timer_event )
     {
-    	TRTrackerAnnouncerResponseImpl resp = update2Support( evt );
+    	TRTrackerAnnouncerResponseImpl resp = update2Support( evt, timer_event );
     
     	URL url = resp.getURL();
     	
@@ -1216,7 +1261,7 @@ TRTrackerBTAnnouncerImpl
     }
     
   private TRTrackerAnnouncerResponseImpl
-  update2Support(String evt)
+  update2Support(String evt, TimerEvent event )
   {
   	TRTrackerAnnouncerResponseImpl	last_failure_resp = null;
 
@@ -1265,7 +1310,7 @@ TRTrackerBTAnnouncerImpl
 		  
 		  try{
 
-			request_obj =  constructRequest( evt,original_url );
+			request_obj =  constructRequest( evt, original_url, event );
 			
 			all_trackers.addActiveRequest( request_obj );
 			
@@ -1572,9 +1617,17 @@ TRTrackerBTAnnouncerImpl
 
 			  			// if we've got some kind of response then return it
 
-					if ( message.size() > 0 ){
+			  		int size = message.size();
+			  		
+					if ( size > 0 ){
 
 						return( message.toByteArray());
+						
+					}else if ( stopped && failure_reason== null ){
+						
+							// some trackers don't bother returning anything on a 'stopped' event, grrr
+						
+						return( BEncoder.encode( new HashMap()));
 					}
 
 					if ( failure_reason == null ){
@@ -2010,11 +2063,6 @@ TRTrackerBTAnnouncerImpl
  					}
  				}
 
- 				if (Logger.isEnabled())
-					Logger.log(new LogEvent(torrent, LOGID, "Tracker Announcer ["
-							+ lastUsedUrl + "] has received : " + message));
-
-
  			}catch( SSLException e ){
 
  					// gotta let this through as an exception as it drives the auto-cert install process
@@ -2057,8 +2105,6 @@ TRTrackerBTAnnouncerImpl
  		URL						original_reqUrl,
 		ByteArrayOutputStream	message,
 		boolean                 is_probe )
-
- 		throws IOException
  	{
  		long timeout = is_probe?10000: PRUDPPacket.DEFAULT_UDP_TIMEOUT;
 
@@ -2080,234 +2126,310 @@ TRTrackerBTAnnouncerImpl
  				 auth = SESecurityManager.getPasswordAuthentication( UDP_REALM, reqUrl );
  			}
 
- 			PRUDPPacketHandler handler = PRUDPPacketHandlerFactory.getHandler( UDPNetworkManager.getSingleton().getUDPNonDataListeningPortNumber());
-
- 			InetSocketAddress destination = new InetSocketAddress(reqUrl.getHost(),reqUrl.getPort()==-1?80:reqUrl.getPort());
-
- 			handler = handler.openSession( destination );
-
- 			try{
-
-	 			for (int retry_loop=0;retry_loop<PRUDPPacketTracker.DEFAULT_RETRY_COUNT;retry_loop++){
-
-	 				try{
-
-			 			PRUDPPacket connect_request = new PRUDPPacketRequestConnect();
-
-			 			PRUDPPacket reply = handler.sendAndReceive( auth, connect_request, destination, timeout );
-
-			 			if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_CONNECT ){
-
-			 				PRUDPPacketReplyConnect connect_reply = (PRUDPPacketReplyConnect)reply;
-
-			 				long	my_connection = connect_reply.getConnectionId();
-
-			 				PRUDPPacketRequest request;
-
-			 				if ( PRUDPPacketTracker.VERSION == 1 ){
-
-			 					PRUDPPacketRequestAnnounce announce_request = new PRUDPPacketRequestAnnounce( my_connection );
-
-			 					request = announce_request;
-
-				 					// bit of a hack this...
-
-				 				String	url_str = reqUrl.toString();
-
-				 				int		p_pos = url_str.indexOf("?");
-
-				 				url_str	= url_str.substring(p_pos+1);
-
-				 				String event_str = getURLParam( url_str, "event" );
-
-				 				int	event = PRUDPPacketRequestAnnounce.EV_UPDATE;
-
-				 				if ( event_str != null ){
-
-				 					if ( event_str.equals( "started" )){
-
-				 						event = PRUDPPacketRequestAnnounce.EV_STARTED;
-
-				 					}else if ( event_str.equals( "stopped" )){
-
-				 						event = PRUDPPacketRequestAnnounce.EV_STOPPED;
-
-				 					}else if ( event_str.equals( "completed" )){
-
-				 						event = PRUDPPacketRequestAnnounce.EV_COMPLETED;
-				 					}
-				 				}
-
-				 				String	ip_str = getURLParam( url_str, "ip" );
-
-				 				int	ip = 0;
-
-				 				if ( ip_str != null ){
-
-				 					ip = PRHelpers.addressToInt( ip_str);
-				 				}
-
-				 				announce_request.setDetails(
-				 					torrent_hash_target.getBytes(),
-				 					tracker_peer_id,
-									getLongURLParam( url_str, "downloaded" ),
-									event,
-									ip,
-									(int)getLongURLParam( url_str, "numwant" ),
-									getLongURLParam( url_str, "left" ),
-									(short)getLongURLParam( url_str, "port" ),
-									getLongURLParam( url_str, "uploaded" ));
-
-			 				}else{
-			 					PRUDPPacketRequestAnnounce2 announce_request = new PRUDPPacketRequestAnnounce2( my_connection );
-
-			 					request = announce_request;
-
-			 					// bit of a hack this...
-
-				 				String	url_str = reqUrl.toString();
-
-				 				int		p_pos = url_str.indexOf("?");
-
-				 				url_str	= url_str.substring(p_pos+1);
-
-				 				String event_str = getURLParam( url_str, "event" );
-
-				 				int	event = PRUDPPacketRequestAnnounce.EV_UPDATE;
-
-				 				if ( event_str != null ){
-
-				 					if ( event_str.equals( "started" )){
-
-				 						event = PRUDPPacketRequestAnnounce.EV_STARTED;
-
-				 					}else if ( event_str.equals( "stopped" )){
-
-				 						event = PRUDPPacketRequestAnnounce.EV_STOPPED;
-
-				 					}else if ( event_str.equals( "completed" )){
-
-				 						event = PRUDPPacketRequestAnnounce.EV_COMPLETED;
-				 					}
-				 				}
-
-				 				String	ip_str = getURLParam( url_str, "ip" );
-
-				 				int	ip = 0;
-
-				 				if ( ip_str != null ){
-
-				 					ip = PRHelpers.addressToInt( ip_str);
-				 				}
-
-				 				announce_request.setDetails(
-				 					torrent_hash_target.getBytes(),
-				 					tracker_peer_id,
-									getLongURLParam( url_str, "downloaded" ),
-									event,
-									ip,
-									helper.getUDPKey(),
-									(int)getLongURLParam( url_str, "numwant" ),
-									getLongURLParam( url_str, "left" ),
-									(short)getLongURLParam( url_str, "port" ),
-									getLongURLParam( url_str, "uploaded" ));
-			 				}
-
-			 				reply = handler.sendAndReceive( auth, request, destination );
-
-			 				if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_ANNOUNCE ){
-
-			 					if ( auth != null ){
-
-			 						SESecurityManager.setPasswordAuthenticationOutcome( UDP_REALM, reqUrl, true );
-			 					}
-
-			 					if ( PRUDPPacketTracker.VERSION == 1 ){
-				 					PRUDPPacketReplyAnnounce	announce_reply = (PRUDPPacketReplyAnnounce)reply;
-
-				 					Map	map = new HashMap();
-
-				 					map.put( "interval", new Long( announce_reply.getInterval()));
-
-				 					int[]	addresses 	= announce_reply.getAddresses();
-				 					short[]	ports		= announce_reply.getPorts();
-
-				 					List	peers = new ArrayList();
-
-				 					map.put( "peers", peers );
-
-				 					for (int i=0;i<addresses.length;i++){
-
-				 						Map	peer = new HashMap();
-
-				 						peers.add( peer );
-
-				 						peer.put( "ip", PRHelpers.intToAddress(addresses[i]).getBytes());
-				 						peer.put( "port", new Long( ports[i]));
-				 					}
-
-				 					byte[] data = BEncoder.encode( map );
-
-				 					message.write( data );
-
-				 					return( null );
-
-			 					}
-
-				 					PRUDPPacketReplyAnnounce2	announce_reply = (PRUDPPacketReplyAnnounce2)reply;
-
-				 					Map	map = new HashMap();
-
-				 					map.put( "interval", new Long( announce_reply.getInterval()));
-
-				 					int[]	addresses 	= announce_reply.getAddresses();
-				 					short[]	ports		= announce_reply.getPorts();
-
-				 					map.put( "complete", new Long(announce_reply.getSeeders()));
-				 					map.put( "incomplete", new Long(announce_reply.getLeechers()));
-
-				 					List	peers = new ArrayList();
-
-				 					map.put( "peers", peers );
-
-				 					for (int i=0;i<addresses.length;i++){
-
-				 						Map	peer = new HashMap();
-
-				 						peers.add( peer );
-
-				 						peer.put( "ip", PRHelpers.intToAddress(addresses[i]).getBytes());
-				 						peer.put( "port", new Long( ports[i]));
-				 					}
-
-				 					byte[] data = BEncoder.encode( map );
-
-				 					message.write( data );
-
-				 					return( null );
-
-			 				}
-
-			 				failure_reason = ((PRUDPPacketReplyError)reply).getMessage();
-
-			 			}else{
-
-			 				failure_reason = ((PRUDPPacketReplyError)reply).getMessage();
+ 			int handler_port = UDPNetworkManager.getSingleton().getUDPNonDataListeningPortNumber();
+ 			
+ 			int retries = PRUDPPacketTracker.DEFAULT_RETRY_COUNT;
+ 			
+ 			List<InetSocketAddress>	url_addresses = UrlUtils.getURLAddresses( reqUrl );
+ 			
+ 			if ( url_addresses.size() > 1 ){
+ 				
+ 				Collections.shuffle(url_addresses);
+ 				
+ 				if ( working_udp_ia != null ){
+ 					
+ 					if ( url_addresses.remove( working_udp_ia )){
+ 						
+ 						url_addresses.add( 0, working_udp_ia );
+ 					}
+ 				}
+ 			}
+ 			
+ 			Throwable last_error = null;
+ 			
+ 			boolean all_skipped = true;
+ 			
+ 			boolean ipv6_enabled =  NetworkAdmin.getSingleton().isIPV6Enabled();
+ 			
+ 			for ( InetSocketAddress destination: url_addresses ){
+ 			
+ 				if ( destination.getAddress() instanceof Inet6Address && !ipv6_enabled ){
+ 					
+ 					continue;
+ 				}
+ 				
+ 				all_skipped = false;
+ 				
+ 				try{
+	 	 			PRUDPPacketHandler handler = PRUDPPacketHandlerFactory.getHandler( handler_port );
+	
+	 	 			handler = handler.openSession( destination );
+	
+		 			try{
+		
+			 			for (int retry_loop=0;retry_loop<retries;retry_loop++){
+		
+			 				try{
+		
+					 			PRUDPPacket connect_request = new PRUDPPacketRequestConnect();
+		
+					 			PRUDPPacket reply = handler.sendAndReceive( auth, connect_request, destination, timeout );
+		
+					 			if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_CONNECT ){
+		
+					 				PRUDPPacketReplyConnect connect_reply = (PRUDPPacketReplyConnect)reply;
+		
+					 				long	my_connection = connect_reply.getConnectionId();
+		
+					 				PRUDPPacketRequest request;
+		
+					 				if ( PRUDPPacketTracker.VERSION == 1 ){
+		
+					 					PRUDPPacketRequestAnnounce announce_request = new PRUDPPacketRequestAnnounce( my_connection );
+		
+					 					request = announce_request;
+		
+						 					// bit of a hack this...
+		
+						 				String	url_str = reqUrl.toString();
+		
+						 				int		p_pos = url_str.indexOf("?");
+		
+						 				url_str	= url_str.substring(p_pos+1);
+		
+						 				String event_str = getURLParam( url_str, "event" );
+		
+						 				int	event = PRUDPPacketRequestAnnounce.EV_UPDATE;
+		
+						 				if ( event_str != null ){
+		
+						 					if ( event_str.equals( "started" )){
+		
+						 						event = PRUDPPacketRequestAnnounce.EV_STARTED;
+		
+						 					}else if ( event_str.equals( "stopped" )){
+		
+						 						event = PRUDPPacketRequestAnnounce.EV_STOPPED;
+		
+						 					}else if ( event_str.equals( "completed" )){
+		
+						 						event = PRUDPPacketRequestAnnounce.EV_COMPLETED;
+						 					}
+						 				}
+		
+						 				String	ip_str = getURLParam( url_str, "ip" );
+		
+						 				int	ip = 0;
+		
+						 				if ( ip_str != null ){
+		
+						 					ip = PRHelpers.addressToInt( ip_str);
+						 				}
+		
+						 				announce_request.setDetails(
+						 					torrent_hash_target.getBytes(),
+						 					tracker_peer_id,
+											getLongURLParam( url_str, "downloaded" ),
+											event,
+											ip,
+											(int)getLongURLParam( url_str, "numwant" ),
+											getLongURLParam( url_str, "left" ),
+											(short)getLongURLParam( url_str, "port" ),
+											getLongURLParam( url_str, "uploaded" ));
+		
+					 				}else{
+					 					PRUDPPacketRequestAnnounce2 announce_request = new PRUDPPacketRequestAnnounce2( my_connection );
+		
+					 					request = announce_request;
+		
+					 					// bit of a hack this...
+		
+						 				String	url_str = reqUrl.toString();
+		
+						 				int		p_pos = url_str.indexOf("?");
+		
+						 				url_str	= url_str.substring(p_pos+1);
+		
+						 				String event_str = getURLParam( url_str, "event" );
+		
+						 				int	event = PRUDPPacketRequestAnnounce.EV_UPDATE;
+		
+						 				if ( event_str != null ){
+		
+						 					if ( event_str.equals( "started" )){
+		
+						 						event = PRUDPPacketRequestAnnounce.EV_STARTED;
+		
+						 					}else if ( event_str.equals( "stopped" )){
+		
+						 						event = PRUDPPacketRequestAnnounce.EV_STOPPED;
+		
+						 					}else if ( event_str.equals( "completed" )){
+		
+						 						event = PRUDPPacketRequestAnnounce.EV_COMPLETED;
+						 					}
+						 				}
+		
+						 				String	ip_str = getURLParam( url_str, "ip" );
+		
+						 				int	ip = 0;
+		
+						 				if ( ip_str != null ){
+		
+						 					ip = PRHelpers.addressToInt( ip_str);
+						 				}
+		
+						 				announce_request.setDetails(
+						 					torrent_hash_target.getBytes(),
+						 					tracker_peer_id,
+											getLongURLParam( url_str, "downloaded" ),
+											event,
+											ip,
+											helper.getUDPKey(),
+											(int)getLongURLParam( url_str, "numwant" ),
+											getLongURLParam( url_str, "left" ),
+											(short)getLongURLParam( url_str, "port" ),
+											getLongURLParam( url_str, "uploaded" ));
+					 				}
+		
+					 				reply = handler.sendAndReceive( auth, request, destination );
+		
+					 				if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_ANNOUNCE ){
+		
+					 					if ( auth != null ){
+		
+					 						SESecurityManager.setPasswordAuthenticationOutcome( UDP_REALM, reqUrl, true );
+					 					}
+		
+					 					if ( PRUDPPacketTracker.VERSION == 1 ){
+						 					PRUDPPacketReplyAnnounce	announce_reply = (PRUDPPacketReplyAnnounce)reply;
+		
+						 					Map	map = new HashMap();
+		
+						 					map.put( "interval", new Long( announce_reply.getInterval()));
+		
+						 					int[]	addresses 	= announce_reply.getAddresses();
+						 					short[]	ports		= announce_reply.getPorts();
+		
+						 					List	peers = new ArrayList();
+		
+						 					map.put( "peers", peers );
+		
+						 					for (int i=0;i<addresses.length;i++){
+		
+						 						Map	peer = new HashMap();
+		
+						 						peers.add( peer );
+		
+						 						peer.put( "ip", PRHelpers.intToAddress(addresses[i]).getBytes());
+						 						peer.put( "port", new Long( ports[i]));
+						 					}
+		
+						 					byte[] data = BEncoder.encode( map );
+		
+						 					message.write( data );
+		
+						 					working_udp_ia = destination;
+						 					
+						 					return( null );
+		
+					 					}
+		
+					 					PRUDPPacketReplyAnnounce2	announce_reply = (PRUDPPacketReplyAnnounce2)reply;
+		
+					 					Map	map = new HashMap();
+		
+					 					map.put( "interval", new Long( announce_reply.getInterval()));
+		
+					 					byte[][]	addresses 	= announce_reply.getAddresses();
+					 					short[]		ports		= announce_reply.getPorts();
+		
+					 					map.put( "complete", new Long(announce_reply.getSeeders()));
+					 					map.put( "incomplete", new Long(announce_reply.getLeechers()));
+		
+					 					if ( announce_reply.isIPV6()){
+					 						
+					 						byte[] v6peers = new byte[addresses.length*18];
+					 						
+					 						map.put( "peers6", v6peers );
+					 						
+					 						int pos = 0;
+					 						
+						 					for (int i=0;i<v6peers.length;i+=18){
+			
+						 						System.arraycopy( addresses[pos], 0, v6peers, i, 16 );
+			
+						 						short port = ports[pos];
+						 						
+						 						v6peers[i+16] = (byte)(port>>8);
+						 						v6peers[i+17] = (byte)(port&0xff);
+						 						
+						 						pos++;
+						 					}
+					 					}else{
+					 						
+						 					List	peers = new ArrayList();
+		
+						 					map.put( "peers", peers );
+			
+						 					for (int i=0;i<addresses.length;i++){
+			
+						 						Map	peer = new HashMap();
+			
+						 						peers.add( peer );
+			
+						 						peer.put( "ip", PRHelpers.bytesToAddress(addresses[i]).getBytes());
+						 						peer.put( "port", new Long( ports[i]));
+						 					}
+					 					}
+		
+					 					byte[] data = BEncoder.encode( map );
+		
+					 					message.write( data );
+		
+					 					working_udp_ia = destination;
+
+					 					return( null );
+		
+					 				}
+		
+					 				failure_reason = ((PRUDPPacketReplyError)reply).getMessage();
+		
+					 			}else{
+		
+					 				failure_reason = ((PRUDPPacketReplyError)reply).getMessage();
+					 			}
+					 		}catch( PRUDPPacketHandlerException e ){
+		
+					 			if ( e.getMessage() == null ||
+									!e.getMessage().contains("timed out")){
+		
+					 				throw( e );
+					 			}
+					 		}
 			 			}
-			 		}catch( PRUDPPacketHandlerException e ){
-
-			 			if ( e.getMessage() == null ||
-							!e.getMessage().contains("timed out")){
-
-			 				throw( e );
-			 			}
+			 		}finally{
+		
+			 			handler.closeSession();
 			 		}
-	 			}
-	 		}finally{
-
-	 			handler.closeSession();
-	 		}
-
+ 				}catch( Throwable e){
+ 					
+ 					last_error = e;
+ 					
+ 					retries	= 1;
+ 					timeout = 10*1000;	// if we have lots of addresses we don't want to be wasting loads of time
+ 				}
+ 			}
+ 			
+ 			if ( all_skipped ){
+ 				
+ 				throw( new Exception( "IPv6 disabled" ));
+ 			}
+ 			
+ 			if ( last_error != null ){
+ 				
+ 				throw( last_error );
+ 			}
  		}catch( Throwable e ){
 
  			failure_reason = exceptionToString(e);
@@ -2419,8 +2541,9 @@ TRTrackerBTAnnouncerImpl
 
   private TRTrackerAnnouncerRequestImpl
   constructRequest(
-  	String 	evt,
-	URL		_url)
+  	String 		evt,
+	URL			_url,
+	TimerEvent	timer_event )
 
   	throws Exception
   {
@@ -2449,6 +2572,11 @@ TRTrackerBTAnnouncerImpl
   	
   	if ( att != null ){
   
+  		if ( timer_event != null ){
+  		
+  			timer_event.setName( att.getTrackerName());
+  		}
+  		
   		Map<String,Object>	options = att.getOptions();
   		
   		if ( options != null ){
@@ -2542,7 +2670,9 @@ TRTrackerBTAnnouncerImpl
 
     request.append("&no_peer_id=1");
 
-    String	tracker_network	= AENetworkClassifier.categoriseAddress( _url.getHost());
+    String	tracker_network_host	= _url.getHost();
+    
+    String	tracker_network			= AENetworkClassifier.categoriseAddress( tracker_network_host );
 
     	// latest space saving measure, a compact return type where peers are returned
     	// as 6 byte entries in a single byte[] (4 bytes ip, 2 byte port)
@@ -2560,19 +2690,19 @@ TRTrackerBTAnnouncerImpl
     	// make sure this tracker network is enabled
 
     boolean	network_ok			= false;
-    boolean	normal_network_ok	= false;
+    boolean	has_public_net		= false;
 
     if ( peer_networks == null ){
 
     	network_ok			= true;
-    	normal_network_ok	= true;
+    	has_public_net		= true;
 
     }else{
 	    for (int i=0;i<peer_networks.length;i++){
 
 	    	if ( peer_networks[i] == AENetworkClassifier.AT_PUBLIC ){
 
-	    		normal_network_ok = true;
+	    		has_public_net = true;
 	    	}
 
 	    	if ( peer_networks[i] == tracker_network ){
@@ -2587,12 +2717,18 @@ TRTrackerBTAnnouncerImpl
     	throw( new Exception( "Network not enabled for url '" + _url + "'" ));
     }
 
-    String	normal_explicit = null;
+    String	public_ip_override = null;
 
    	if ( explicit_ips.length() > 0 ){
 
    			// gotta select an appropriate override based on network type
 
+   			// UDP protocol only support IPv4 overrides so select IPv4 over IPv6 if possible
+   		
+   		boolean is_udp = _url.getProtocol().equalsIgnoreCase( "udp" );
+   		
+   		boolean found_invalid_udp = false;
+   		
 		StringTokenizer	tok = new StringTokenizer( explicit_ips, ";" );
 
 		while( tok.hasMoreTokens()){
@@ -2605,7 +2741,23 @@ TRTrackerBTAnnouncerImpl
 
 				if ( cat == AENetworkClassifier.AT_PUBLIC ){
 
-					normal_explicit	= this_address;
+					if ( is_udp ){
+						
+						try{
+							InetAddress i_address = HostNameToIPResolver.syncResolve(this_address);
+						
+							if ( i_address.getAddress().length != 4 ){
+					
+								found_invalid_udp = true;
+								
+								continue;
+							}
+						}catch( Throwable e ){
+							
+						}
+					}
+					
+					public_ip_override	= this_address;
 				}
 
 				if ( tracker_network == cat ){
@@ -2616,15 +2768,23 @@ TRTrackerBTAnnouncerImpl
 				}
 			}
 		}
+		
+		if ( ip == null && found_invalid_udp && tracker_network == AENetworkClassifier.AT_PUBLIC ){
+			
+			if ( Constants.IS_CVS_VERSION ){
+				
+				Debug.outNoStack( "Announce for " + _url + ": no valid IPv4 override found");
+			}
+		}
    	}
 
    	if ( ip == null ){
 
    			// if we have a normal explicit override and this is enabled then use it
 
-   		if ( normal_network_ok && normal_explicit != null ){
+   		if ( has_public_net && public_ip_override != null ){
 
-   			ip = normal_explicit;
+   			ip = public_ip_override;
 
    		}else{
 
@@ -2632,6 +2792,26 @@ TRTrackerBTAnnouncerImpl
 
 	   			ip = ip_override;
 	   		}
+   		}
+   	}
+   	
+   	if ( ip == null && tracker_network == AENetworkClassifier.AT_TOR ){
+   		   				
+   		InetSocketAddress tor_local = AEPluginProxyHandler.getLocalAddress( tracker_network_host, has_public_net?27657:27658 );
+   		
+   		if ( tor_local != null ){
+   			
+   			ip = tor_local.getHostString();
+   			
+   			request = new StringBuffer( request.toString().replaceAll( "&port=[0-9]+", "&port=" + tor_local.getPort()));
+   			
+   		}else{
+   			
+   			request = new StringBuffer( request.toString().replaceAll( "&port=[0-9]+", "&port=0"));
+   			
+   			if (Logger.isEnabled())
+				Logger.log(new LogEvent(torrent, LOGID, LogEvent.LT_ERROR,
+						"IP Override missing for Tor tracker, incoming connections disabled"));
    		}
    	}
 
@@ -2897,7 +3077,7 @@ TRTrackerBTAnnouncerImpl
 
 				URL url = torrent.getAnnounceURL();
 
-					//We then contruct a list of one element, containing this url, and put this list
+					//We then construct a list of one element, containing this url, and put this list
 					//into the list of lists of urls.
 
 				List<URL> list = new ArrayList();
@@ -3019,47 +3199,51 @@ TRTrackerBTAnnouncerImpl
 
 	 					// handle any user warnings in the response
 
+	 				String warning_message = null;
+	 				
 	 				try{
 	 					byte[]	b_warning_message = (byte[])metaData.get( "warning message" );
-
-	 					if ( 	b_warning_message != null &&
-								COConfigurationManager.getBooleanParameter( "Tracker Client Show Warnings" )){
-
-	 						String	warning_message = new String(b_warning_message);
-
-								// don't report the same message twice per torrent
-
-							if ( !warning_message.equals( last_tracker_message )){
-
-								last_tracker_message	= warning_message;
-
-								boolean	log_it = false;
-
-									// only report a given message once per tracker
-
-								try{
-									class_mon.enter();
-
-									String last_warning_message = (String)tracker_report_map.get( url.getHost());
-
-									if ( 	last_warning_message == null ||
-											!warning_message.equals( last_warning_message )){
-
-										log_it	= true;
-
-										tracker_report_map.put( url.getHost(), warning_message );
+	 					
+	 					if ( b_warning_message != null ){
+	 						
+	 						warning_message = new String(b_warning_message);
+	 					
+	 						if ( COConfigurationManager.getBooleanParameter( "Tracker Client Show Warnings" )){
+	
+									// don't report the same message twice per torrent
+	
+								if ( !warning_message.equals( last_tracker_message )){
+	
+									last_tracker_message	= warning_message;
+	
+									boolean	log_it = false;
+	
+										// only report a given message once per tracker
+	
+									try{
+										class_mon.enter();
+	
+										String last_warning_message = (String)tracker_report_map.get( url.getHost());
+	
+										if ( 	last_warning_message == null ||
+												!warning_message.equals( last_warning_message )){
+	
+											log_it	= true;
+	
+											tracker_report_map.put( url.getHost(), warning_message );
+										}
+									}finally{
+	
+										class_mon.exit();
 									}
-								}finally{
-
-									class_mon.exit();
+	
+									if ( log_it ){
+			 							Logger.logTextResource(new LogAlert(torrent,
+			 									LogAlert.UNREPEATABLE, LogAlert.AT_WARNING,
+												"TrackerClient.announce.warningmessage"), new String[] {
+												announce_data_provider.getName() + " - " + UrlUtils.getBaseURL( url ), warning_message });
+			 						}
 								}
-
-								if ( log_it ){
-		 							Logger.logTextResource(new LogAlert(torrent,
-		 									LogAlert.UNREPEATABLE, LogAlert.AT_WARNING,
-											"TrackerClient.announce.warningmessage"), new String[] {
-											announce_data_provider.getName() + " - " + UrlUtils.getBaseURL( url ), warning_message });
-		 						}
 							}
 	 					}
 	 				}catch( Throwable e ){
@@ -3071,79 +3255,90 @@ TRTrackerBTAnnouncerImpl
 
 					try {
 						if ( !metaData.containsKey( "interval" )){
-							throw( new Exception( "interval missing" ));
-						}
-
-						tracker_interval = time_to_wait = ((Long) metaData.get("interval")).longValue();
-
-						Long raw_min_interval = (Long) metaData.get("min interval");
-
-						if (Logger.isEnabled()) {
-							Logger.log(new LogEvent(torrent, LOGID, LogEvent.LT_INFORMATION,
-									"Received from announce: 'interval' = " + time_to_wait
-											+ "; 'min interval' = " + raw_min_interval));
-						}
-
-						// guard against crazy return values
-						if (time_to_wait < 0 || time_to_wait > 0xffffffffL) {
-							time_to_wait = 0xffffffffL;
-						}
-
-						if (raw_min_interval != null) {
-							tracker_min_interval = min_interval = raw_min_interval.longValue();
-
-							// ignore useless values
-							// Note: Many trackers set min_interval and interval the same.
-							if (min_interval < 1) {
-								if (Logger.isEnabled()) {
-									Logger.log(new LogEvent(
-											torrent,
-											LOGID,
-											LogEvent.LT_INFORMATION,
-											"Tracker being silly and "
-													+ "returning a 'min interval' of less than 1 second ("
-													+ min_interval + ")"));
-								}
-								min_interval = 0;
-							} else if (min_interval > time_to_wait) {
-								if (Logger.isEnabled()) {
-									Logger.log(new LogEvent(
-											torrent,
-											LOGID,
-											LogEvent.LT_INFORMATION,
-											"Tracker being silly and "
-													+ "returning a 'min interval' ("
-													+ min_interval
-													+ ") greater than recommended announce 'interval'"
-													+ " (" + time_to_wait + ")"));
-								}
-								min_interval = 0;
+							
+								// deal with trackers that return empty response on 'stop'
+							
+							if ( stopped ){
+							
+								time_to_wait = 60;	// irrelevant as stopped
+								
+							}else{
+								
+								throw( new Exception( "interval missing" ));
 							}
-						} else {
-							// tracker owners complain we announce too much but then never
-							// implement "min interval".  So take it into our own hands
-							// and enforce a min_interval of interval when there is no
-							// "min interval"
-							min_interval = time_to_wait > 30 ? time_to_wait - 10 : time_to_wait;
-						}
+						}else{
 
-						if(userMinInterval != 0)
-						{
-							time_to_wait = Math.max(userMinInterval, time_to_wait);
-							min_interval = Math.max(min_interval, userMinInterval);
+							tracker_interval = time_to_wait = ((Long) metaData.get("interval")).longValue();
+	
+							Long raw_min_interval = (Long) metaData.get("min interval");
+	
 							if (Logger.isEnabled()) {
 								Logger.log(new LogEvent(torrent, LOGID, LogEvent.LT_INFORMATION,
-										"Overriding with user settings: 'interval' = " + time_to_wait
-												+ "; 'min interval' = " + min_interval));
+										"Received from announce: 'interval' = " + time_to_wait
+												+ "; 'min interval' = " + raw_min_interval));
 							}
-						}
+	
+							// guard against crazy return values
+							if (time_to_wait < 0 || time_to_wait > 0xffffffffL) {
+								time_to_wait = 0xffffffffL;
+							}
+	
+							if (raw_min_interval != null) {
+								tracker_min_interval = min_interval = raw_min_interval.longValue();
+	
+								// ignore useless values
+								// Note: Many trackers set min_interval and interval the same.
+								if (min_interval < 1) {
+									if (Logger.isEnabled()) {
+										Logger.log(new LogEvent(
+												torrent,
+												LOGID,
+												LogEvent.LT_INFORMATION,
+												"Tracker being silly and "
+														+ "returning a 'min interval' of less than 1 second ("
+														+ min_interval + ")"));
+									}
+									min_interval = 0;
+								} else if (min_interval > time_to_wait) {
+									if (Logger.isEnabled()) {
+										Logger.log(new LogEvent(
+												torrent,
+												LOGID,
+												LogEvent.LT_INFORMATION,
+												"Tracker being silly and "
+														+ "returning a 'min interval' ("
+														+ min_interval
+														+ ") greater than recommended announce 'interval'"
+														+ " (" + time_to_wait + ")"));
+									}
+									min_interval = 0;
+								}
+							} else {
+								// tracker owners complain we announce too much but then never
+								// implement "min interval".  So take it into our own hands
+								// and enforce a min_interval of interval when there is no
+								// "min interval"
+								min_interval = time_to_wait > 30 ? time_to_wait - 10 : time_to_wait;
+							}
+	
+							if(userMinInterval != 0)
+							{
+								time_to_wait = Math.max(userMinInterval, time_to_wait);
+								min_interval = Math.max(min_interval, userMinInterval);
+								if (Logger.isEnabled()) {
+									Logger.log(new LogEvent(torrent, LOGID, LogEvent.LT_INFORMATION,
+											"Overriding with user settings: 'interval' = " + time_to_wait
+													+ "; 'min interval' = " + min_interval));
+								}
+							}
 
 
-						// roll back 10 seconds to make sure we announce before the tracker
-						// times us out.  This is done after min_interval in order not to
-						// mess up the "ignore useless values"
-						if (time_to_wait > 30){
-							time_to_wait -= 10;
+							// roll back 10 seconds to make sure we announce before the tracker
+							// times us out.  This is done after min_interval in order not to
+							// mess up the "ignore useless values"
+							if (time_to_wait > 30){
+								time_to_wait -= 10;
+							}
 						}
 						
 						if ( metaData.containsKey( "failure reason")){
@@ -3162,7 +3357,7 @@ TRTrackerBTAnnouncerImpl
     										"Problems with Tracker, will retry in "
     												+ getErrorRetryInterval() + "ms"));
 
-    				       return( new TRTrackerAnnouncerResponseImpl( url, torrent_hash_actual, TRTrackerAnnouncerResponse.ST_OFFLINE, getErrorRetryInterval(), "Unknown cause" ));
+    				       return( new TRTrackerAnnouncerResponseImpl( url, torrent_hash_actual, TRTrackerAnnouncerResponse.ST_OFFLINE, getErrorRetryInterval(), "Unknown cause: " + Debug.getNestedExceptionMessage(e)));
 
     				     }
 
@@ -3801,44 +3996,54 @@ TRTrackerBTAnnouncerImpl
 
 				    		// 16 bytes for v6 + 2 bytes for port
 
-						final int entry_size = 18;
-
-						final byte[] rawAddr = new byte[16];
-
-						for (int i=0; i<v6peers.length; i+=entry_size ){
-
-							System.arraycopy( v6peers, i, rawAddr, 0, 16 );
-
-							String ip = InetAddress.getByAddress(rawAddr).getHostAddress();
-
-				    		int	po1 = 0xFF & v6peers[i+16];
-				    		int	po2 = 0xFF & v6peers[i+17];
-
-							int tcp_port = po1*256 + po2;
-
-							if (tcp_port < 0 || tcp_port > 65535){
-
-								if (Logger.isEnabled()){
-
-									Logger.log(new LogEvent(torrent, LOGID, LogEvent.LT_ERROR, "Invalid compactv6 peer port given: " + ip + ": " + tcp_port));
+				    	try{
+							final int entry_size = 18;
+	
+							final byte[] rawAddr = new byte[16];
+	
+							for (int i=0; i<v6peers.length; i+=entry_size ){
+	
+								System.arraycopy( v6peers, i, rawAddr, 0, 16 );
+	
+								String ip = InetAddress.getByAddress(rawAddr).getHostAddress();
+	
+					    		int	po1 = 0xFF & v6peers[i+16];
+					    		int	po2 = 0xFF & v6peers[i+17];
+	
+								int tcp_port = po1*256 + po2;
+	
+								if (tcp_port < 0 || tcp_port > 65535){
+	
+									if (Logger.isEnabled()){
+	
+										Logger.log(new LogEvent(torrent, LOGID, LogEvent.LT_ERROR, "Invalid compactv6 peer port given: " + ip + ": " + tcp_port));
+									}
+	
+									continue;
 								}
-
-								continue;
+	
+								byte[] peer_peer_id = TRTrackerAnnouncerFactoryImpl.getAnonymousPeerId( ip, tcp_port );
+	
+								short protocol = DownloadAnnounceResultPeer.PROTOCOL_NORMAL;
+	
+								TRTrackerAnnouncerResponsePeerImpl peer = new TRTrackerAnnouncerResponsePeerImpl(PEPeerSource.PS_BT_TRACKER, peer_peer_id, ip, tcp_port, 0, 0, protocol, TRTrackerAnnouncer.AZ_TRACKER_VERSION_1, (short) 0);
+	
+								if (Logger.isEnabled()){
+	
+									Logger.log(new LogEvent(torrent, LOGID, "COMPACTv6 PEER: " + peer.getString()));
+								}
+	
+								valid_meta_peers.add(peer);
 							}
-
-							byte[] peer_peer_id = TRTrackerAnnouncerFactoryImpl.getAnonymousPeerId( ip, tcp_port );
-
-							short protocol = DownloadAnnounceResultPeer.PROTOCOL_NORMAL;
-
-							TRTrackerAnnouncerResponsePeerImpl peer = new TRTrackerAnnouncerResponsePeerImpl(PEPeerSource.PS_BT_TRACKER, peer_peer_id, ip, tcp_port, 0, 0, protocol, TRTrackerAnnouncer.AZ_TRACKER_VERSION_1, (short) 0);
-
+				    	}catch( Throwable e ){
+				    		
+				    		// seen corrupt v6 peers being returned
+				    		
 							if (Logger.isEnabled()){
-
-								Logger.log(new LogEvent(torrent, LOGID, "COMPACTv6 PEER: " + peer.getString()));
+								
+								Logger.log(new LogEvent(torrent, LOGID, LogEvent.LT_ERROR, "Invalid compactv6: " + Base32.encode( v6peers )));
 							}
-
-							valid_meta_peers.add(peer);
-						}
+				    	}
 					}
 
 
@@ -3850,6 +4055,10 @@ TRTrackerBTAnnouncerImpl
 
 					TRTrackerAnnouncerResponseImpl resp = new TRTrackerAnnouncerResponseImpl( url, torrent_hash_actual, TRTrackerAnnouncerResponse.ST_ONLINE, time_to_wait, peers );
 
+					if ( warning_message != null ){
+						
+						resp.setAdditionalInfo( warning_message );
+					}
 						//reset failure retry interval on successful connect
 
 					failure_added_time = 0;
@@ -3891,7 +4100,7 @@ TRTrackerBTAnnouncerImpl
 						int downloaded 	= downloaded_l == null ? -1 : downloaded_l.intValue();
 
 						if (complete < 0 || incomplete < 0) {
-							resp.setFailureReason(MessageText.getString(
+							resp.setAdditionalInfo(MessageText.getString(
 									"Tracker.announce.ignorePeerSeed",
 									new String[] { (complete < 0
 											? MessageText.getString("MyTorrentsView.seeds") + " == "
@@ -4293,6 +4502,13 @@ TRTrackerBTAnnouncerImpl
 		return( helper.getTrackerResponseCache());
 	}
 
+	@Override
+	public void
+	clearTrackerResponseCache()
+	{
+		helper.clearTrackerResponseCache();
+	}
+	
 	@Override
 	public TrackerPeerSource
 	getTrackerPeerSource(

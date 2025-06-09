@@ -24,12 +24,16 @@ import com.biglybt.core.CoreFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.DisposeEvent;
 import org.eclipse.swt.events.DisposeListener;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.events.PaintListener;
+import org.eclipse.swt.events.ShellAdapter;
+import org.eclipse.swt.events.ShellEvent;
 import org.eclipse.swt.graphics.*;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -39,8 +43,14 @@ import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.DelayedEvent;
+import com.biglybt.core.util.SystemTime;
+import com.biglybt.core.util.ThreadPool;
+import com.biglybt.ui.swt.UIExitUtilsSWT;
 import com.biglybt.ui.swt.Utils;
+import com.biglybt.ui.swt.UIExitUtilsSWT.canCloseListener;
 import com.biglybt.ui.swt.mainwindow.Colors;
+import com.biglybt.ui.swt.shells.MessageBoxShell;
+import com.biglybt.ui.swt.shells.opentorrent.OpenTorrentOptionsWindow;
 import com.biglybt.core.CoreOperation;
 import com.biglybt.core.CoreOperationListener;
 import com.biglybt.core.CoreOperationTask;
@@ -51,10 +61,167 @@ import com.biglybt.ui.swt.imageloader.ImageLoader;
 public class
 ProgressWindow
 {
+	private static canCloseListener canCloseListener;
+	
+	private static final AtomicInteger	window_id_next = new AtomicInteger();
+
+	private static List<ProgressWindow>	active_windows = new ArrayList();
+	
 	public static void
 	register(
 		Core core )
 	{
+		canCloseListener = new canCloseListener() {
+			@Override
+			public boolean
+			canClose()
+			{
+				try{
+					Supplier<String> getActiveOps = ()->{
+						List<CoreOperation> ops = core.getOperations();
+
+						String active = "";
+						
+						for ( CoreOperation op: ops ){
+							
+							if ( op.isRemoved()){
+								
+								continue;
+							}
+							
+							int type = op.getOperationType();
+							
+							if (	type == CoreOperation.OP_DOWNLOAD_CHECKING ||
+									type == CoreOperation.OP_DOWNLOAD_COPY ||
+									type == CoreOperation.OP_DOWNLOAD_EXPORT ||
+									type == CoreOperation.OP_FILE_MOVE ){
+								
+								CoreOperationTask task = op.getTask();
+															
+								if ( task != null ){
+						
+									ProgressCallback cb = task.getProgressCallback();
+
+									if ( cb != null ){
+										
+										int state = cb.getTaskState();
+										
+										if ( state == ProgressCallback.ST_CANCEL ){
+											
+											continue;
+										}
+									}
+									
+									if ( active.length() > 128 ){
+										
+										active += ", ...";
+										
+										break;
+									}
+									
+									active += ( active.isEmpty()?"":", ") + task.getName();							
+								}							
+							}
+						}
+						
+						return( active );
+					};
+					
+					String active = getActiveOps.get();
+					
+					if ( active.isEmpty()){
+						
+						return( true );
+						
+					}else{
+						
+						String title = MessageText.getString("coreops.active.quit.title");
+						String text = MessageText.getString(
+								"coreops.active.quit.text",
+								new String[] {
+									active
+								});
+	
+						MessageBoxShell mb = new MessageBoxShell(
+								title,
+								text,
+								new String[] {
+										MessageText.getString("UpdateWindow.quit"),
+										MessageText.getString("Content.alert.notuploaded.button.abort")
+								}, 1);
+	
+						mb.open(null);
+		
+						boolean[]	close_on_idle = { false };
+						
+						AEThread2.createAndStartDaemon( "opschecker", ()->{
+							
+							long	idle_start = -1;
+							
+							while( true ){
+								
+								try{
+									Thread.sleep( 250 );
+								
+								}catch( Throwable e ){
+								}
+								
+								if ( getActiveOps.get().isEmpty()){
+								
+									long now = SystemTime.getMonotonousTime();
+									
+									if ( idle_start == -1 ){
+										
+										idle_start = now;
+										
+									}else{
+										
+										if ( now - idle_start > 2500 ){
+									
+											synchronized( close_on_idle ){
+												
+												close_on_idle[0] = true;
+											}
+											
+											mb.close();
+										
+											break;
+										}
+									}
+								}else{
+									
+									idle_start = -1;
+								}
+							}
+						});
+						
+						mb.waitUntilClosed();
+
+						int result = mb.getResult();
+						
+						if ( result == 0 ){
+							
+							return( true );
+							
+						}else{
+							
+							synchronized( close_on_idle ){
+								
+								return( close_on_idle[0] );
+							}
+						}
+					}
+				}catch ( Throwable e ){
+
+					Debug.out(e);
+
+					return true;
+				}
+			}
+		};
+		
+		UIExitUtilsSWT.addListener(canCloseListener);
+		
 		core.addOperationListener(
 			new CoreOperationListener()
 			{
@@ -67,6 +234,7 @@ ProgressWindow
 					
 					if ( 	( 	type == CoreOperation.OP_FILE_MOVE ||
 								type == CoreOperation.OP_DOWNLOAD_EXPORT ||
+								type == CoreOperation.OP_DOWNLOAD_COPY ||
 								type == CoreOperation.OP_PROGRESS ) &&
 							Utils.isThisThreadSWT()){
 
@@ -74,20 +242,45 @@ ProgressWindow
 						
 						if ( task != null ){
 
-							if ( 	type ==  CoreOperation.OP_FILE_MOVE && 
-									COConfigurationManager.getBooleanParameter("Suppress File Move Dialog" )){
+								// if someone kicks off a batch move with loads of affected downloads (for example) we can end up 
+								// stack-overflowing in the ProgressWindow as it runs a dispatch loop.
+							
+							if ( 	( Utils.getDispatchLoopDepth() > 20 ) ||
+									(	type ==  CoreOperation.OP_FILE_MOVE && 
+										COConfigurationManager.getBooleanParameter("Suppress File Move Dialog" ))){
 
-								AEThread2.createAndStartDaemon( "Core Operation", ()->{
-									
-									try{
-										task.run( operation );
-										
-									}finally{
-										
-										core.removeOperation( operation );
-									}
-								});
-								
+								core_op_pool.run( 
+									new AERunnable()
+									{
+										public void 
+										runSupport() 
+										{
+											boolean done  = true;
+											
+											try{
+												done = task.runOperation( operation );
+												
+												if ( !done ){
+													
+													try{
+														Thread.sleep( 50 );
+																												
+													}catch( Throwable e ){	
+													}
+													
+														// reschedule
+													
+													core_op_pool.run( this );
+												}
+											}finally{
+												
+												if ( done ){
+												
+													core.removeOperation( operation );
+												}
+											}
+										}
+									});			
 							}else{
 								
 								new ProgressWindow( operation );
@@ -116,6 +309,16 @@ ProgressWindow
 			});
 	}
 
+	public static void
+	unregister()
+	{
+		UIExitUtilsSWT.removeListener(canCloseListener);
+	}
+	
+    private static final ThreadPool<AERunnable>	core_op_pool = new ThreadPool<>( "ProgressWindow:coreops", 32, true );
+	
+	private final int window_id = window_id_next.incrementAndGet();
+
 	private volatile Shell 			shell;
 	private volatile boolean 		task_complete;
 
@@ -142,6 +345,8 @@ ProgressWindow
 			resource = "progress.window.msg.filemove";
 		}else if ( op_type == CoreOperation.OP_DOWNLOAD_EXPORT ){
 			resource = "progress.window.msg.dlexport";
+		}else if ( op_type == CoreOperation.OP_DOWNLOAD_COPY ){
+			resource = "progress.window.msg.dlcopy";
 		}else{
 			resource = "progress.window.msg.progress";
 			
@@ -202,6 +407,10 @@ ProgressWindow
 															
 															style |= SWT.APPLICATION_MODAL;
 														}
+														if ((s & ProgressCallback.STYLE_MINIMIZE) != 0 ){
+															
+															style |= SWT.MIN;
+														}
 													}
 												}
 												
@@ -233,7 +442,19 @@ ProgressWindow
 						throw( new RuntimeException( "Task not available" ));
 					}
 
-					task.run( operation );
+					while( true ){
+					
+						if ( task.runOperation( operation )){
+							
+							break;
+						}
+						
+						try{
+							Thread.sleep( 50 );
+							
+						}catch( Throwable e ){
+						}
+					}
 
 				}catch( RuntimeException e ){
 
@@ -265,12 +486,8 @@ ProgressWindow
 		}.start();
 
 		try{
-			final Display display = Utils.getDisplay();
-
-			while( !( task_complete || display.isDisposed())){
-
-				if (!display.readAndDispatch()) display.sleep();
-			}
+			Utils.readAndDispatchLoop(()->task_complete);
+			
 		}finally{
 
 				// bit of boiler plate in case something fails in the dispatch loop
@@ -348,6 +565,12 @@ ProgressWindow
 		}
 	}
 
+	private Shell
+	getShell()
+	{
+		return( shell );
+	}
+	
 	protected void
 	showDialog(
 		Shell			_shell,
@@ -359,14 +582,36 @@ ProgressWindow
 			
 			return;
 		}
-		
-		boolean closeable = (shell.getStyle() & SWT.CLOSE ) != 0;
-		
+				
 		shell.setText( MessageText.getString( "progress.window.title" ));
 
 		CoreOperationTask task = _core_op==null?null:_core_op.getTask();
 		
 		ProgressCallback progress = task==null?null:task.getProgressCallback();
+		
+		boolean closeable = (shell.getStyle() & SWT.CLOSE ) != 0;
+
+		if ( progress != null ){
+			
+			int s = progress.getStyle();
+			
+			if ((s & ProgressCallback.STYLE_NO_CLOSE) != 0 ){
+				
+				closeable = false;
+			}
+			
+			if ((s & ProgressCallback.STYLE_MINIMIZE) != 0 ){
+
+				shell.addShellListener( 
+					new ShellAdapter(){
+						@Override
+						public void shellIconified(ShellEvent e){
+							progress.setTaskState(ProgressCallback.ST_MINIMIZE);
+							e.doit = false;
+						}
+					});
+			}
+		}
 		
 		boolean alreadyPositioned = Utils.linkShellMetricsToConfig( shell, "com.biglybt.ui.swt.progress.ProgressWindow" + "." + _core_op.getOperationType());
 		
@@ -381,7 +626,7 @@ ProgressWindow
 		layout.numColumns = 2;
 		shell.setLayout(layout);
 
-		Color bg = Utils.isDarkAppearancePartial()?null:Colors.white;
+		Color bg = ( Utils.isDarkAppearanceNative() || Utils.isDarkAppearancePartial())?null:Colors.white;
 		
 		shell.setBackground( bg );
 		
@@ -511,11 +756,12 @@ ProgressWindow
 		
 		if ( progress != null ){
 		
-			Composite compProg = new Composite(shell,SWT.BORDER);
 			gridData = new GridData(GridData.FILL_HORIZONTAL);
 			gridData.grabExcessHorizontalSpace = true;
 			gridData.horizontalSpan = 2;
-			compProg.setLayoutData(gridData);
+			
+			Composite compProg = Utils.createSkinnedComposite(shell,SWT.BORDER,gridData);
+			
 			GridLayout layoutProgress = new GridLayout();
 			layoutProgress.numColumns = 1;
 			layoutProgress.marginWidth = layoutProgress.marginHeight = 0;
@@ -534,7 +780,7 @@ ProgressWindow
 			
 			if ((states & ProgressCallback.ST_BUTTONS) != 0 ){
 				
-				Label labelSeparator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
+				Control labelSeparator = Utils.createSkinnedLabelSeparator( shell, SWT.HORIZONTAL);
 				gridData = new GridData(GridData.FILL_HORIZONTAL);
 				gridData.horizontalSpan = 2;
 				labelSeparator.setLayoutData(gridData);
@@ -721,7 +967,69 @@ ProgressWindow
 			}
 		}
 		
-		shell.open();
+		ProgressWindow moveBelow = null;
+		
+		for ( ProgressWindow window: active_windows ){
+			
+			if ( 	moveBelow == null || 
+					moveBelow.window_id < window.window_id ){
+				
+				moveBelow = window;
+			}
+		}
+		
+		active_windows.add( this );
+		
+		shell.addListener( SWT.Dispose, (ev)->{ active_windows.remove( this ); });
+
+		if ( moveBelow == null ){
+			
+			shell.open();
+			
+		}else{
+			
+			shell.moveBelow(moveBelow.getShell());
+
+			shell.setVisible(true);
+		}
+		
+			// don't want them appearing on top of each other
+
+		int	num_active_windows = active_windows.size();
+
+		if ( num_active_windows > 1 ){
+
+			int	max_x = Integer.MIN_VALUE;
+			int max_y = Integer.MIN_VALUE;
+
+			for ( ProgressWindow window: active_windows ){
+						
+				Rectangle rect = window.getShell().getBounds();
+
+				max_x = Math.max( max_x, rect.x );
+				max_y = Math.max( max_y, rect.y );
+			}
+
+			if ( max_x > Integer.MIN_VALUE ){
+				
+				Rectangle rect = shell.getBounds();
+
+				rect.x = max_x + 16;
+				rect.y = max_y + 16;
+
+				try{
+					Utils.setShellMetricsConfigEnabled( shell, false );
+				
+					shell.setBounds( rect );
+					
+				}finally{
+					
+					Utils.setShellMetricsConfigEnabled( shell, true );
+				}
+			}
+		}
+
+		Utils.verifyShellRect( shell, true );
 	}
 
 	public void

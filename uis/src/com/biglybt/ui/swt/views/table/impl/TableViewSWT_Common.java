@@ -43,6 +43,7 @@ import com.biglybt.ui.common.util.MenuItemManager;
 import com.biglybt.ui.swt.*;
 import com.biglybt.ui.swt.mainwindow.TorrentOpener;
 import com.biglybt.ui.swt.shells.MessageBoxShell;
+import com.biglybt.ui.swt.shells.SpeedScaleShell;
 import com.biglybt.ui.swt.views.columnsetup.TableColumnSetupWindow;
 import com.biglybt.ui.swt.views.table.*;
 import com.biglybt.ui.swt.views.table.utils.TableColumnSWTUtils;
@@ -51,8 +52,8 @@ import com.biglybt.pif.download.Download;
 import com.biglybt.pif.ui.menus.MenuManager;
 import com.biglybt.pif.ui.tables.*;
 
-public class TableViewSWT_Common
-	implements MouseListener, MouseMoveListener, SelectionListener, KeyListener
+public abstract class TableViewSWT_Common
+	implements MouseListener, MouseMoveListener, SelectionListener, KeyListener, MenuDetectListener
 {
 
 	TableViewSWT<?> tv;
@@ -105,6 +106,40 @@ public class TableViewSWT_Common
 				if (event.skipCoreFunctionality) {
 					lCancelSelectionTriggeredOn = System.currentTimeMillis();
 				}
+			}
+		}
+	}
+	
+	public void 
+	menuDetected(
+		MenuDetectEvent e )
+	{
+		Composite comp = tv.getTableComposite();
+		
+		Point mapped = comp.getDisplay().map( null, comp, new Point( e.x, e.y ));
+		
+		TableColumnCore tc = tv.getTableColumnByOffset(mapped.x);
+		TableCellCore cell = tv.getTableCell( mapped.x, mapped.y );
+		
+		if ( tc != null && cell instanceof TableCellSWT ){
+			
+			TableCellMenuEvent event = new TableCellMenuEvent( cell, e );
+			
+			Rectangle clientArea = tv.getClientArea();
+						
+			event.x		= clientArea.x + mapped.x;
+			event.y		= mapped.y;
+			
+			tc.invokeCellMenuListeners( event );
+			
+			if ( !event.skipCoreFunctionality){
+				
+				cell.invokeMenuListeners(event);
+			}
+			
+			if ( event.skipCoreFunctionality ){
+					
+				e.doit = false;
 			}
 		}
 	}
@@ -278,7 +313,7 @@ public class TableViewSWT_Common
 
 	private TableCellMouseEvent createMouseEvent(TableCellCore cell, MouseEvent e,
 			int type, boolean allowOOB) {
-		TableCellMouseEvent event = new TableCellMouseEvent();
+		TableCellMouseEvent event = new TableCellMouseEvent( e );
 		event.cell = cell;
 		if (cell != null) {
 			event.row = cell.getTableRow();
@@ -308,7 +343,7 @@ public class TableViewSWT_Common
 
 	private TableRowMouseEvent createMouseEvent(TableRowSWT row, MouseEvent e,
 			int type, boolean allowOOB) {
-		TableCellMouseEvent event = new TableCellMouseEvent();
+		TableCellMouseEvent event = new TableCellMouseEvent( e );
 		event.row = row;
 		event.eventType = type;
 		event.button = e.button;
@@ -483,7 +518,7 @@ public class TableViewSWT_Common
 					}
 				});
 			} else {
-				tv.sortRows(true);
+				tv.sortRows(true,false);
 			}
 			event.doit = false;
 			return;
@@ -526,7 +561,7 @@ public class TableViewSWT_Common
 				case 'g':
 					System.out.println("force sort");
 					tv.resetLastSortedOn();
-					tv.sortRows(true);
+					tv.sortRows(true,false);
 					break;
 				case 'v':
 					if ( filter == null || !inFilterBox){
@@ -645,7 +680,7 @@ public class TableViewSWT_Common
 						if (filter.nextText != null
 								&& (force || !filter.nextText.equals(filter.text))) {
 							filter.text = filter.nextText;
-							filter.checker.filterSet(filter.text);
+							filter.checker.filterSet(filter.text, filter.regex);
 							tv.refilter();
 						}
 					}
@@ -653,7 +688,7 @@ public class TableViewSWT_Common
 	}
 
 	public void runDefaultAction(int stateMask, int origin ) {
-		// Don't allow mutliple run defaults in quick succession
+		// Don't allow multiple run defaults in quick succession
 		if (lastSelectionTriggeredOn > 0
 				&& System.currentTimeMillis() - lastSelectionTriggeredOn < 200) {
 			return;
@@ -858,7 +893,7 @@ public class TableViewSWT_Common
 			itemChangeTable.addListener(SWT.Selection, new Listener() {
 				@Override
 				public void handleEvent(Event e) {
-					showColumnEditor();
+					showColumnEditor( column );
 				}
 			});
 
@@ -902,27 +937,27 @@ public class TableViewSWT_Common
 
 		// Add Plugin Context menus..
 		boolean enable_items = selectedRows.length > 0;
+		boolean needsSeparator = false;
 
 		TableContextMenuItem[] items = TableContextMenuManager.getInstance().getAllAsArray(
-				sMenuID);
+				Utils.getBaseViewID(sMenuID));
 
 		if (items.length > 0 || menu_items.length > 0) {
 			new org.eclipse.swt.widgets.MenuItem(menu, SWT.SEPARATOR);
+			needsSeparator = true;
 
 			// Add download context menu items.
-			if (menu_items != null) {
+			Object[] target;
+			if (isDownloadContext) {
 				// getSelectedDataSources(false) returns us plugin items.
-				Object[] target;
-				if (isDownloadContext) {
-					Object[] dataSources = tv.getSelectedDataSources(false);
-					target = new Download[dataSources.length];
-					System.arraycopy(dataSources, 0, target, 0, target.length);
-				} else {
-					target = selectedRows;
-				}
-				MenuBuildUtils.addPluginMenuItems(menu_items, menu, true, true,
-						new MenuBuildUtils.MenuItemPluginMenuControllerImpl(target));
+				Object[] dataSources = tv.getSelectedDataSources(false);
+				target = new Download[dataSources.length];
+				System.arraycopy(dataSources, 0, target, 0, target.length);
+			} else {
+				target = selectedRows;
 			}
+			MenuBuildUtils.addPluginMenuItems(menu_items, menu, true, true,
+					new MenuBuildUtils.MenuItemPluginMenuControllerImpl(target));
 
 			if (items.length > 0) {
 				MenuBuildUtils.addPluginMenuItems(items, menu, true, enable_items,
@@ -963,6 +998,10 @@ public class TableViewSWT_Common
 							}
 							
 							@Override
+							public void buildStarts(Menu menu){
+							}
+							
+							@Override
 							public void buildComplete(Menu menu){
 							}
 						});
@@ -975,6 +1014,7 @@ public class TableViewSWT_Common
 				TableContextMenuItem[] columnItems = column.getContextMenuItems(TableColumnCore.MENU_STYLE_COLUMN_DATA);
 				if (columnItems.length > 0) {
 					new MenuItem(menu, SWT.SEPARATOR);
+					needsSeparator = true;
 
 					MenuBuildUtils.addPluginMenuItems(
 							columnItems,
@@ -986,7 +1026,17 @@ public class TableViewSWT_Common
 
 				}
 			}
+			
+			if (needsSeparator) {
+				new MenuItem(menu, SWT.SEPARATOR);
+			}
 
+			final MenuItem itemSelectAll = new MenuItem(menu, SWT.PUSH);
+			Messages.setLanguageText(itemSelectAll, "Button.selectAll");
+			itemSelectAll.addListener(SWT.Selection, (ev)->{
+				tv.selectAll();
+			});
+			
 			if (tv.getSWTFilter() != null) {
 				final MenuItem itemFilter = new MenuItem(menu, SWT.PUSH);
 				Messages.setLanguageText(itemFilter, "MyTorrentsView.menu.filter");
@@ -997,17 +1047,45 @@ public class TableViewSWT_Common
 					}
 				});
 			}
+			
+			MenuItem itemRowDetails = new MenuItem(menu, SWT.PUSH);
+			Messages.setLanguageText(itemRowDetails,
+					"MyTorrentsView.menu.row.details");
+
+			itemRowDetails.addListener(SWT.Selection, new Listener() {
+				@Override
+				public void handleEvent(Event e) {
+					TableRowCore focusedRow = tv.getFocusedRow();
+					if (focusedRow == null || focusedRow.isRowDisposed()) {
+						focusedRow = tv.getRow(0);
+					}
+					String tableID = tv.getTableID();
+					new TableRowViewer(tv.getDataSourceType(), tableID, focusedRow );
+				}
+			});
+			
+			MenuItem itemChangeTable = new MenuItem(menu, SWT.PUSH);
+			Messages.setLanguageText(itemChangeTable,
+					"MyTorrentsView.menu.editTableColumns");
+			Utils.setMenuItemImage(itemChangeTable, "columns");
+
+			itemChangeTable.addListener(SWT.Selection, new Listener() {
+				@Override
+				public void handleEvent(Event e) {
+					showColumnEditor( column );
+				}
+			});
 		}
 	}
 
-	public void showColumnEditor() {
+	public void showColumnEditor(TableColumnCore column) {
 		TableRowCore focusedRow = tv.getFocusedRow();
 		if (focusedRow == null || focusedRow.isRowDisposed()) {
 			focusedRow = tv.getRow(0);
 		}
 		String tableID = tv.getTableID();
-		new TableColumnSetupWindow(tv.getDataSourceType(), tableID, focusedRow,
-				TableStructureEventDispatcher.getInstance(tableID)).open();
+		new TableColumnSetupWindow(tv.getDataSourceType(), tableID, column, focusedRow,
+				TableStructureEventDispatcher.getInstance(tableID), false);
 	}
 
 
@@ -1032,9 +1110,7 @@ public class TableViewSWT_Common
 			// Add Plugin Context menus..
 			TableContextMenuItem[] items = column.getContextMenuItems(TableColumnCore.MENU_STYLE_HEADER);
 			if (items.length > 0) {
-				if (menu.getItemCount() > 0) {
-					new MenuItem(menu, SWT.SEPARATOR);
-				}
+				MenuBuildUtils.addSeparator( menu );
 
 				MenuBuildUtils.addPluginMenuItems(items, menu, true, true,
 					new MenuBuildUtils.MenuItemPluginMenuControllerImpl(
@@ -1042,9 +1118,7 @@ public class TableViewSWT_Common
 
 			}
 
-			if (menu.getItemCount() > 0) {
-				new MenuItem(menu, SWT.SEPARATOR);
-			}
+			MenuBuildUtils.addSeparator( menu );
 
 			TableColumnCore[] sortColumns = tv.getSortColumns();
 			boolean columnIsSort = false;
@@ -1054,14 +1128,12 @@ public class TableViewSWT_Common
 					break;
 				}
 			}
+			MenuItem menuSortByColumn = new MenuItem(menu, SWT.PUSH);
 			if (columnIsSort) {
-				MenuItem menuSortByColumn = new MenuItem(menu, SWT.PUSH);
 				Messages.setLanguageText(menuSortByColumn, "TableColumn.sort.reverse");
 				menuSortByColumn.addListener(SWT.Selection, e -> {
 					TableColumnCore tcc = (TableColumnCore) menu.getData("column");
-
-					tcc.setSortAscending(!tcc.isSortAscending());
-					tv.setSortColumns(tv.getSortColumns(), false);
+					tv.addSortColumn( tcc ); // this flips sort if already added and does history...
 				});
 				if (sortColumns.length > 1) {
 					MenuItem menuRemoveSort = new MenuItem(menu, SWT.PUSH);
@@ -1076,7 +1148,6 @@ public class TableViewSWT_Common
 					});
 				}
 			} else {
-				MenuItem menuSortByColumn = new MenuItem(menu, SWT.PUSH);
 				Messages.setLanguageText(menuSortByColumn, "TableColumn.sort.bythiscolumn");
 				menuSortByColumn.addListener(SWT.Selection, e -> {
 					TableColumnCore tcc = (TableColumnCore) menu.getData("column");
@@ -1139,24 +1210,50 @@ public class TableViewSWT_Common
 
 			});
 			
+			if ( column.getIconReference() != null ){
+				
+				final MenuItem showIcon = new MenuItem(menu, SWT.CHECK);
+				Messages.setLanguageText(showIcon,
+						"pairing.ui.icon.show");
+
+				showIcon.setSelection( column.getIconReferenceEnabled());
+				
+				showIcon.addListener(SWT.Selection, e -> {
+					column.setIconReferenceEnabled( !column.getIconReferenceEnabled());
+					String tableID = tv.getTableID();
+					TableStructureEventDispatcher.getInstance(
+							tableID).tableStructureChanged(false, null);
+				});
+			}
+				
 			final MenuItem itemPrefSize = new MenuItem(menu, SWT.PUSH);
 			Messages.setLanguageText(itemPrefSize, "table.columns.pref.size");
 			itemPrefSize.addListener(SWT.Selection, e -> Utils.execSWTThread(() -> {
 				column.setPreferredWidth(-1);
 
-				tv.runForAllRows(new TableGroupRowRunner() {
-					@Override
-					public void run(TableRowCore row) {
-						row.fakeRedraw( column.getName());
-					}
-				});
+				int done =
+					tv.runForAllRows(new TableGroupRowRunner() {
+						@Override
+						public void run(TableRowCore row) {
+							row.fakeRedraw( column.getName());
+						}
+					});
 
 				int pref = column.getPreferredWidth();
 
+				if ( done == 0 ){
+					
+					pref = Math.max( column.getMinWidth(), column.getPreferredHeaderWidth());
+				}
+				
 				if ( pref != -1 ){
 
 					column.setWidth( pref );
 				}
+				
+					// we need this to avoid scroll bars getting confused for some reason...
+				
+				TableStructureEventDispatcher.getInstance(tv.getTableID()).tableStructureChanged(false, null);
 			}));
 
 			new MenuItem(menu, SWT.SEPARATOR);
@@ -1166,7 +1263,7 @@ public class TableViewSWT_Common
 			menuHideColumn.addListener(SWT.Selection,
 					e -> TableColumnSWTUtils.changeColumnVisiblity(tv, column, false));
 		}
-
+		
 		final MenuItem itemResetColumns = new MenuItem(menu, SWT.PUSH);
 		Messages.setLanguageText(itemResetColumns, "table.columns.reset");
 		itemResetColumns.addListener(SWT.Selection, new Listener() {
@@ -1195,6 +1292,12 @@ public class TableViewSWT_Common
 			}
 		});
 
+		final MenuItem itemSelectAll = new MenuItem(menu, SWT.PUSH);
+		Messages.setLanguageText(itemSelectAll, "Button.selectAll");
+		itemSelectAll.addListener(SWT.Selection, (ev)->{
+			tv.selectAll();
+		});
+
 		final MenuItem itemChangeTable = new MenuItem(menu, SWT.PUSH);
 		Messages.setLanguageText(itemChangeTable,
 				"MyTorrentsView.menu.editTableColumns");
@@ -1203,11 +1306,49 @@ public class TableViewSWT_Common
 		itemChangeTable.addListener(SWT.Selection, new Listener() {
 			@Override
 			public void handleEvent(Event e) {
-				showColumnEditor();
+				showColumnEditor( column );
 			}
 		});
 
 		menu.setData("column", column);
+
+		new MenuItem(menu, SWT.SEPARATOR);
+		final MenuItem itemSetRowHeight = new MenuItem(menu, SWT.PUSH);
+		Messages.setLanguageText(itemSetRowHeight, "Table.menu.set.height");
+		itemSetRowHeight.addListener(SWT.Selection, event -> showRowHeightDialog());
+	}
+
+	private void showRowHeightDialog() {
+		int originalHeight = tv.getRowDefaultHeight();
+		SpeedScaleShell optionShell = new SpeedScaleShell() {
+			@Override
+			public void setValue(int value) {
+				super.setValue(value);
+				Utils.execSWTThreadLater(100, () -> tv.setRowHeight(getValue()));
+			}
+
+			@Override
+			public String getStringValue(int value, String sValue) {
+				if (sValue != null) {
+					return sValue;
+				}
+				return "" + value + " px";
+			}
+		};
+		optionShell.setMinValue(tv.getRowMinHeight());
+		int lineHeight = tv.getLineHeight();
+		optionShell.setMaxValue(lineHeight * 8 + 2);
+		for (int i = 1; i < 5; i++) {
+			optionShell.addOption(i == 1 ? MessageText.getString("Table.line.one")
+					: MessageText.getString("Table.line.many", new String[] {
+						String.valueOf(i)
+					}), i * lineHeight + 2);
+		}
+		if (optionShell.open(null, tv.getRowDefaultHeight(), false)) {
+			tv.setRowHeight(optionShell.getValue());
+		} else {
+			tv.setRowHeight(originalHeight);
+		}
 	}
 
 	public void addMenuFillListener(TableViewSWTMenuFillListener l) {

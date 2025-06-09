@@ -26,6 +26,8 @@ import java.net.*;
 import java.util.*;
 import java.util.regex.Pattern;
 
+import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.security.SESecurityManager;
 import com.biglybt.pifimpl.local.utils.UtilitiesImpl.runnableWithException;
 
@@ -40,7 +42,8 @@ NetUtils
 
 	private static long	last_ni_check	= -1;
 
-	private static volatile List<NetworkInterface>		current_interfaces = new ArrayList<>();
+	private static volatile List<NetworkInterface>		current_all_interfaces 	= new ArrayList<>();
+	private static volatile List<NetworkInterface>		current_up_interfaces 	= new ArrayList<>();
 
 	private static boolean						first_check	= true;
 	private static boolean						check_in_progress;
@@ -53,6 +56,15 @@ NetUtils
 
 	public static List<NetworkInterface>
 	getNetworkInterfaces()
+
+		throws SocketException
+	{
+		return( getNetworkInterfaces( false ));
+	}
+	
+	public static List<NetworkInterface>
+	getNetworkInterfaces(
+		boolean	up_only )
 
 		throws SocketException
 	{
@@ -80,7 +92,7 @@ NetUtils
 		}
 
 		if ( do_check ){
-
+			
 			final runnableWithException<SocketException> do_it =
 				new runnableWithException<SocketException>()
 				{
@@ -90,7 +102,8 @@ NetUtils
 
 						throws SocketException
 					{
-						List<NetworkInterface> result = new ArrayList<>();
+						List<NetworkInterface> result_all	= new ArrayList<>();
+						List<NetworkInterface> result_up	= new ArrayList<>();
 
 						try{
 								// got some major CPU issues on some machines with crap loads of NIs
@@ -101,7 +114,7 @@ NetUtils
 
 							long	elapsed_millis = ( SystemTime.getHighPrecisionCounter() - start ) / 1000000;
 
-							long	old_period = current_check_millis;
+							// long	old_period = current_check_millis;
 
 							if ( elapsed_millis > (Constants.isAndroid?5000:1000) ){
 
@@ -116,16 +129,29 @@ NetUtils
 								current_check_millis = MIN_NI_CHECK_MILLIS;
 							}
 
+							/*
 							if ( old_period != current_check_millis ){
 
 								Debug.out( "Network interface enumeration took " + elapsed_millis + ": " + (old_period<current_check_millis?"increased":"decreased" ) + " refresh frequency to " + current_check_millis + "ms" );
 							}
-
+							*/
+							
 							if ( nis != null ){
 
 								while( nis.hasMoreElements()){
 
-									result.add( nis.nextElement());
+									NetworkInterface ni = nis.nextElement();
+									
+									result_all.add( ni );
+									
+									try{
+										if ( ni.isUp()){
+											
+											result_up.add( ni );
+										}
+									}catch( Throwable e ){
+										
+									}
 								}
 							}
 
@@ -133,45 +159,47 @@ NetUtils
 
 						}finally{
 
-							synchronized( NetUtils.class ){
-
-								boolean changed = result.size() != current_interfaces.size();
-								
-								if ( !changed ){
-								
-									for ( int i=0;i<result.size();i++){
-										
-										if ( !result.get(i).equals( current_interfaces.get(i))){
-										
-											changed= true;
+							try{
+								synchronized( NetUtils.class ){
+	
+									boolean changed = result_all.size() != current_all_interfaces.size();
+									
+									if ( !changed ){
+									
+										for ( int i=0;i<result_all.size();i++){
 											
-											break;
+											if ( !result_all.get(i).equals( current_all_interfaces.get(i))){
+											
+												changed = true;
+												
+												break;
+											}
 										}
 									}
-								}
-								
-								check_in_progress	= false;
-								current_interfaces 	= result;
-
-								last_ni_check	= SystemTime.getMonotonousTime();
-								
-								SecurityManager sec = System.getSecurityManager();
-								
-								if ( sec instanceof SESecurityManager.MySecurityManager ){
 									
-									if (((SESecurityManager.MySecurityManager)sec).filterNetworkInterfaces( result )){
+									check_in_progress		= false;
+									current_all_interfaces 	= result_all;
+									current_up_interfaces	= result_up;
+									
+									last_ni_check	= SystemTime.getMonotonousTime();
+									
+									try{
+										changed = SESecurityManager.filterNetworkInterfaces( result_all );
 										
-										changed = true;
+									}catch( Throwable e ){
+																															
+										Debug.out( e );
+									}
+									
+									if ( changed ){
+									
+										host_or_address_map.clear();
 									}
 								}
-								
-								if ( changed ){
-								
-									host_or_address_map.clear();
-								}
-							}
+							}finally{
 
-							ni_sem.releaseForever();
+								ni_sem.releaseForever();
+							}
 						}
 					}
 				};
@@ -192,8 +220,12 @@ NetUtils
 							do_it.run();
 
 						}catch( SocketException e ){
-
+							
 							error[0] = e;
+							
+						}catch( Throwable e ){
+
+							error[0] = new SocketException(Debug.getNestedExceptionMessage(e));
 
 						}finally{
 
@@ -223,7 +255,7 @@ NetUtils
 
 		ni_sem.reserve();
 
-		return( current_interfaces );
+		return( up_only?current_up_interfaces:current_all_interfaces );
 	}
 
 	public static InetAddress
@@ -377,7 +409,7 @@ NetUtils
 						try{
 							Pattern p = RegExUtil.getCachedPattern( "NetUtils:display", expr, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
 						
-							List<NetworkInterface> ifs = current_interfaces;
+							List<NetworkInterface> ifs = current_all_interfaces;
 
 							if ( ifs != null ){
 								
@@ -604,5 +636,32 @@ NetUtils
 		}
 
 		throw se;
+	}
+		
+	public static List<String>
+	getTestDomains()
+	{
+		List<String>	result = new ArrayList<>();
+		
+		try{
+			String domains = COConfigurationManager.getStringParameter( ConfigKeys.Connection.SCFG_CONNECTION_TEST_DOMAIN );
+			
+			String[] bits = domains.split("[,;]");
+			
+			for ( String bit: bits ){
+				
+				bit = bit.trim();
+				
+				if ( !bit.isEmpty()){
+					
+					result.add( bit );
+				}
+			}
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+		}
+		
+		return( result );
 	}
 }

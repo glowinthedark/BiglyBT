@@ -31,6 +31,7 @@ import com.biglybt.core.diskmanager.file.FMFile;
 import com.biglybt.core.diskmanager.file.FMFileManagerException;
 import com.biglybt.core.diskmanager.file.FMFileOwner;
 import com.biglybt.core.util.DirectByteBuffer;
+import com.biglybt.core.util.StringInterner;
 
 public class
 FMFileUnlimited
@@ -38,11 +39,11 @@ FMFileUnlimited
 {
 	protected
 	FMFileUnlimited(
-		FMFileOwner			owner,
-		FMFileManagerImpl	manager,
-		File				file,
-		int					type,
-		boolean				force )
+		FMFileOwner					owner,
+		FMFileManagerImpl			manager,
+		StringInterner.FileKey		file,
+		int							type,
+		boolean						force )
 
 		throws FMFileManagerException
 	{
@@ -117,10 +118,24 @@ FMFileUnlimited
 
 			got_mon = true;
 			
-			ensureOpen( "FMFileUnlimited:getLength" );
-
-			return( getLengthSupport());
-
+			if ( isOpen()){
+				
+				return( getLengthSupport());
+			}
+			
+				// if the file doesn't exist then we don't want to ensure it is open to get the length
+				// as this will create the file
+			
+			if ( !exists()){
+				
+				return( 0 );
+				
+			}else{
+				
+				ensureOpen( "FMFileUnlimited:getLength" );
+	
+				return( getLengthSupport());
+			}
 		}finally{
 
 			if ( got_mon ){

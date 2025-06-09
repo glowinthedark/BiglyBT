@@ -383,10 +383,7 @@ public class SWTSkinObjectBasic
 
 	@Override
 	public void setBackground(String sConfigID, String sSuffix) {
-		Image imageBG;
-		Image imageBGLeft;
-		Image imageBGRight;
-
+		
 		if (sConfigID == null) {
 			return;
 		}
@@ -461,9 +458,15 @@ public class SWTSkinObjectBasic
 			((Composite) control).setBackgroundMode(SWT.INHERIT_DEFAULT);
 		}
 
-		// XXX Is this needed?  It causes flicker and slows things down.
-		//     Maybe a redraw instead (if anything at all)?
-		//control.update();
+			// the "BGImage" hack stores the child's bg image on the parent control so we need to redraw
+			// the children to get things to update correctly
+		
+		if ( control instanceof Composite ){
+			Control[] swtChildren = ((Composite) control).getChildren();
+			for ( Control c: swtChildren ){
+				c.redraw();
+			}
+		}
 	}
 
 	// @see java.lang.Object#toString()
@@ -724,7 +727,8 @@ public class SWTSkinObjectBasic
 				}
 
 				Color fg = getColor_SuffixWalkback(sConfigID + ".fgcolor");
-				control.setForeground(fg);
+				
+				Utils.setSkinnedForeground( control, fg );
 
 				// Color,[width]
 				String sBorderStyle = properties.getStringValue(sConfigID + ".border"

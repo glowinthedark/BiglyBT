@@ -25,6 +25,7 @@ import java.util.*;
 
 import org.gudy.bouncycastle.util.encoders.Base64;
 
+import com.biglybt.core.CoreFactory;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.LogEvent;
@@ -283,6 +284,25 @@ MagnetURIHandlerImpl
 				boolean	close = false;
 
 				try{
+					long start = SystemTime.getMonotonousTime();
+					
+					while( !CoreFactory.isCoreRunning()){
+					
+						if ( SystemTime.getMonotonousTime() - start > 60*1000 ){
+						
+							Debug.out( "Timeout waiting for core to start" );
+							
+							break;
+						}
+						
+						try{
+							Thread.sleep(1000);
+							
+						}catch( Throwable e ){
+							
+						}
+					}
+					
 					close = process( get, new BufferedReader( new InputStreamReader( is )), os );
 
 				}catch( Throwable e ){
@@ -714,10 +734,11 @@ MagnetURIHandlerImpl
 							}
 						});
 
+				final byte[][] 		f_data 	= { null };
+
 				try{
 					final String f_arg_str = arg_str;
 
-					final byte[][] 		f_data 	= { null };
 					final Throwable[]	f_error = { null };
 
 					final AESemaphore wait_sem = new AESemaphore( "download-waiter" );
@@ -866,6 +887,8 @@ MagnetURIHandlerImpl
 
 				}finally{
 
+					f_data[0] = null;
+					
 					keep_alive.cancel();
 				}
 

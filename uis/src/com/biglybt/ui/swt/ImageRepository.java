@@ -118,8 +118,13 @@ public class ImageRepository
 				"Ignore Icon Exts" );		
 	}
 	
-	public static Image getIconFromExtension(File file, String ext, boolean bBig,
-			boolean minifolder) {
+	public static Image 
+	getIconFromExtension(
+		File file, 
+		String ext, 
+		boolean bBig,
+		boolean minifolder) 
+	{
 		Image image = null;
 
 		try {
@@ -138,81 +143,84 @@ public class ImageRepository
 			ImageLoader.getInstance().releaseImage(key);
 			image = null;
 
-			ImageData imageData = null;
+			if ( Utils.isFileResponding( file )){
 
-			if (Constants.isWindows) {
+				ImageData imageData = null;
+
+				if (Constants.isWindows) {
+						
+						// Alcohol causing crashes on various file types. Really can't be bothered
 					
-					// Alcohol causing crashes on various file types. Really can't be bothered
-				
-				if ( ignore_icon_exts.contains( ext.toLowerCase( Locale.US  ))){
+					if ( ignore_icon_exts.contains( ext.toLowerCase( Locale.US  ))){
+						
+						return ImageLoader.getInstance().getImage(minifolder ? "folder" : "transparent");
+					}
 					
-					return ImageLoader.getInstance().getImage(minifolder ? "folder" : "transparent");
-				}
-				
-				try {
-					//Image icon = Win32UIEnhancer.getFileIcon(new File(path), big);
-
-					Class<?> enhancerClass = Class.forName("com.biglybt.ui.swt.win32.Win32UIEnhancer");
-					Method method = enhancerClass.getMethod("getFileIcon",
-							new Class[] {
-								File.class,
-								boolean.class
-							});
-					image = (Image) method.invoke(null, new Object[] {
-						file,
-						bBig
-					});
-					if (image != null) {
-						if (!bBig)
-							image = force16height(image);
-						if (minifolder)
-							image = minifolderize(file.getParent(), image, bBig);
-						ImageLoader.getInstance().addImageNoDipose(key, image);
-						return image;
+					try {
+						//Image icon = Win32UIEnhancer.getFileIcon(new File(path), big);
+	
+						Class<?> enhancerClass = Class.forName("com.biglybt.ui.swt.win32.Win32UIEnhancer");
+						Method method = enhancerClass.getMethod("getFileIcon",
+								new Class[] {
+									File.class,
+									boolean.class
+								});
+						image = (Image) method.invoke(null, new Object[] {
+							file,
+							bBig
+						});
+						if (image != null) {
+							if (!bBig)
+								image = force16height(image);
+							if (minifolder)
+								image = minifolderize(file.getParent(), image, bBig);
+							ImageLoader.getInstance().addImageNoDipose(key, image);
+							return image;
+						}
+					} catch (Exception e) {
+						Debug.printStackTrace(e);
 					}
-				} catch (Exception e) {
-					Debug.printStackTrace(e);
-				}
-			} else if (Constants.isOSX) {
-				try {
-					Class<?> enhancerClass = Class.forName("com.biglybt.ui.swt.osx.CocoaUIEnhancer");
-					Method method = enhancerClass.getMethod("getFileIcon",
-							new Class[] {
-								String.class,
-								int.class
-							});
-					image = (Image) method.invoke(null, new Object[] {
-						file.getAbsolutePath(),
-						(int) (bBig ? 128 : 16)
-					});
-					if (image != null) {
-						if (!bBig)
-							image = force16height(image);
-						if (minifolder)
-							image = minifolderize(file.getParent(), image, bBig);
-						ImageLoader.getInstance().addImageNoDipose(key, image);
-						return image;
+				} else if (Constants.isOSX) {
+					try {
+						Class<?> enhancerClass = Class.forName("com.biglybt.ui.swt.osx.CocoaUIEnhancer");
+						Method method = enhancerClass.getMethod("getFileIcon",
+								new Class[] {
+									String.class,
+									int.class
+								});
+						image = (Image) method.invoke(null, new Object[] {
+							file.getAbsolutePath(),
+							(int) (bBig ? 128 : 16)
+						});
+						if (image != null) {
+							if (!bBig)
+								image = force16height(image);
+							if (minifolder)
+								image = minifolderize(file.getParent(), image, bBig);
+							ImageLoader.getInstance().addImageNoDipose(key, image);
+							return image;
+						}
+					} catch (Throwable t) {
+						Debug.printStackTrace(t);
 					}
-				} catch (Throwable t) {
-					Debug.printStackTrace(t);
 				}
-			}
-
-			if (imageData == null) {
-				Program program = Program.findProgram(ext);
-				if (program != null) {
-					imageData = program.getImageData();
+			
+				if (imageData == null) {
+					Program program = Program.findProgram(ext);
+					if (program != null) {
+						imageData = program.getImageData();
+					}
 				}
-			}
-
-			if (imageData != null) {
-				image = new Image(Display.getDefault(), imageData);
-				if (!bBig)
-					image = force16height(image);
-				if (minifolder)
-					image = minifolderize(file.getParent(), image, bBig);
-
-				ImageLoader.getInstance().addImageNoDipose(key, image);
+	
+				if (imageData != null) {
+					image = new Image(Display.getDefault(), imageData);
+					if (!bBig)
+						image = force16height(image);
+					if (minifolder)
+						image = minifolderize(file.getParent(), image, bBig);
+	
+					ImageLoader.getInstance().addImageNoDipose(key, image);
+				}
 			}
 		} catch (Throwable e) {
 			// seen exceptions thrown here, due to images.get failing in Program.hashCode
@@ -272,8 +280,12 @@ public class ImageRepository
 	* @param path Absolute path to the file or directory
 	* @return The image
 	*/
-	public static Image getPathIcon(final String path, boolean bBig,
-			boolean minifolder) {
+	public static Image 
+	getPathIcon(
+		final String path, 
+		boolean bBig,
+		boolean minifolder) 
+	{
 		if (path == null)
 			return null;
 
@@ -290,7 +302,7 @@ public class ImageRepository
 			// Mac OS X - Do not mix AWT with SWT (possible workaround: use IPC/Cocoa)
 
 			String key;
-			if (file.isDirectory()) {
+			if ( Utils.isDirectoryWithTimeout( file )) {
 				if (noAWT) {
 					if (Constants.isWindows || Constants.isOSX) {
 						return getIconFromExtension(file, "-folder", bBig, false);
@@ -343,7 +355,7 @@ public class ImageRepository
 			ImageLoader.getInstance().releaseImage(key);
 			image = null;
 
-			bDeleteFile = !file.exists();
+			bDeleteFile = !Utils.fileExistsWithTimeout(file);
 			if (bDeleteFile) {
 				file = File.createTempFile("AZ_", FileUtil.getExtension(path));
 			}
@@ -393,7 +405,7 @@ public class ImageRepository
 
 				ImageLoader.getInstance().addImageNoDipose(key, image);
 
-				if (bDeleteFile && file != null && file.exists()) {
+				if (bDeleteFile && file != null && Utils.fileExistsWithTimeout( file )) {
 					file.delete();
 				}
 				return image;
@@ -402,7 +414,7 @@ public class ImageRepository
 			//Debug.printStackTrace(e);
 		}
 
-		if (bDeleteFile && file != null && file.exists()) {
+		if (bDeleteFile && file != null && Utils.fileExistsWithTimeout( file )) {
 			file.delete();
 		}
 

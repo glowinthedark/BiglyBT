@@ -33,6 +33,7 @@ import java.util.*;
 import com.biglybt.core.Core;
 import com.biglybt.core.category.Category;
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerInitialisationAdapter;
@@ -100,7 +101,6 @@ DownloadManagerImpl
 	private CopyOnWriteList<DownloadWillBeAddedListener>	dwba_listeners	= new CopyOnWriteList<>();
 	private AEMonitor		listeners_mon	= new AEMonitor( "DownloadManager:L");
 
-	private List<Download>						downloads		= new ArrayList<>();
 	private Map<DownloadManager,DownloadImpl>	pending_dls		= new IdentityHashMap<>();
 	private Map<DownloadManager,DownloadImpl>	download_map	= new IdentityHashMap<>();
 
@@ -141,24 +141,23 @@ DownloadManagerImpl
 					try{
 						listeners_mon.enter();
 
-						dl = download_map.get( dm );
+						dl = download_map.remove( dm );
 
 						if ( dl == null ){
 
-							System.out.println( "DownloadManager:unknown manager removed");
+							Debug.out( "DownloadManager:unknown manager removed");
 
 						}else{
 
-							downloads.remove( dl );
-
-							download_map.remove( dm );
-
-							pending_dls.remove( dm );
-
 							dl.destroy();
-
-							listeners_ref = listeners;
 						}
+						
+						if ( pending_dls.remove( dm ) != null ){
+							
+							Debug.out( "Download removed without being added" );
+						}
+						
+						listeners_ref = listeners;
 
 					}finally{
 
@@ -306,11 +305,11 @@ DownloadManagerImpl
 				dl = pending_dls.remove( dm );
 
 				if ( dl == null ){
-
+					
+						// this is normal case for downloads already in BiglyBT on startup
+					
 					dl = new DownloadImpl( this, dm);
 				}
-
-				downloads.add( dl );
 
 				download_map.put( dm, dl );
 
@@ -532,63 +531,64 @@ DownloadManagerImpl
 
 		throws DownloadException
 	{
-		DownloadImpl dl = download_map.get(dm);
+		DownloadImpl dl = null;
 
-		if ( dl == null ){
+		try{
+			listeners_mon.enter();
 
-				// timing issue?
-
-			try{
-				listeners_mon.enter();
-
-				dl = download_map.get(dm);
-
-				if ( dl != null ){
-
-					return( dl );
-				}
-
-				dl = pending_dls.get( dm );
-
-			}finally{
-
-				listeners_mon.exit();
-			}
+			dl = download_map.get(dm);
 
 			if ( dl != null ){
-
-				long	 now = SystemTime.getMonotonousTime();
-
-					// give the dl a chance to complete initialisation and appear in the right place...
-
-				while( true ){
-
-					DownloadImpl dl2 = download_map.get(dm);
-
-					if ( dl2 != null ){
-
-						return( dl2 );
-					}
-
-					if ( SystemTime.getMonotonousTime() - now > 5000 ){
-
-						break;
-					}
-
-					try{
-						Thread.sleep(100);
-
-					}catch( Throwable e ){
-					}
-				}
 
 				return( dl );
 			}
 
-			throw( new DownloadException("DownloadManager::getDownload: download not found"));
+			dl = pending_dls.get( dm );
+
+		}finally{
+
+			listeners_mon.exit();
 		}
 
-		return( dl );
+		if ( dl != null ){
+
+			long	 now = SystemTime.getMonotonousTime();
+
+				// give the dl a chance to complete initialisation and appear in the right place...
+
+			while( true ){
+
+				try{
+					listeners_mon.enter();
+					
+					DownloadImpl dl2 = download_map.get(dm);
+	
+					if ( dl2 != null ){
+	
+						return( dl2 );
+					}
+
+				}finally{
+
+					listeners_mon.exit();
+				}
+				
+				if ( SystemTime.getMonotonousTime() - now > 5000 ){
+
+					break;
+				}
+
+				try{
+					Thread.sleep(100);
+
+				}catch( Throwable e ){
+				}
+			}
+
+			return( dl );
+		}
+
+		throw( new DownloadException("DownloadManager::getDownload: download not found"));
 	}
 
 	public static DownloadImpl[] getDownloadStatic(DownloadManager[] dm) {
@@ -664,23 +664,28 @@ DownloadManagerImpl
 	{
 		if ( torrent != null ){
 
-			for (int i=0;i<downloads.size();i++){
-
-				Download	dl = (Download)downloads.get(i);
-
-				TorrentImpl	t = (TorrentImpl)dl.getTorrent();
-
-					// can be null if broken torrent
-
-				if ( t == null ){
-
-					continue;
+			try{
+				listeners_mon.enter();
+				
+				for ( Download dl: download_map.values()){
+	
+					TorrentImpl	t = (TorrentImpl)dl.getTorrent();
+	
+						// can be null if broken torrent
+	
+					if ( t == null ){
+	
+						continue;
+					}
+	
+					if ( t.getTorrent().hasSameHashAs( torrent )){
+	
+						return( dl );
+					}
 				}
-
-				if ( t.getTorrent().hasSameHashAs( torrent )){
-
-					return( dl );
-				}
+			}finally{
+				
+				listeners_mon.exit();
 			}
 		}
 
@@ -720,7 +725,8 @@ DownloadManagerImpl
 	@Override
 	public Download
 	getDownload(
-		byte[]	hash )
+		byte[]	hash,
+		boolean	check_truncated )
 	{
 		DownloadManager manager = global_manager.getDownloadManager(new HashWrapper(hash));
 		if (manager != null) {
@@ -748,19 +754,24 @@ DownloadManagerImpl
 						return( getDownload( torrent ));
 					}
 					
-						// support looking up by truncated v2 hash so that magnet downloads for hybrid torrents using just
-						// the btmh urn at least find content in our library
+						// the v2 hash details aren't currently cached so this will result in the
+						// download torrent state being loaded - avoid if possible
 					
-					byte[] v2_trunc = torrent.getTruncatedHash( TOTorrent.TT_V2 );
+					if ( check_truncated ){
 					
-					if ( v2_trunc != null ){
-												
-						if ( Arrays.equals( v2_trunc, hash )){
-
-							return( getDownload( torrent ));
+							// support looking up by truncated v2 hash so that magnet downloads for hybrid torrents using just
+							// the btmh urn at least find content in our library
+						
+						byte[] v2_trunc = torrent.getTruncatedHash( TOTorrent.TT_V2 );
+						
+						if ( v2_trunc != null ){
+													
+							if ( Arrays.equals( v2_trunc, hash )){
+	
+								return( getDownload( torrent ));
+							}
 						}
 					}
-					
 				}catch( DownloadException e ){
 
 						// not found
@@ -789,7 +800,7 @@ DownloadManagerImpl
 		try{
 			listeners_mon.enter();
 
-			res_l = new LinkedHashSet<>(downloads.size());
+			res_l = new LinkedHashSet<>();
 
 			for (int i=0;i<dms.size();i++){
 
@@ -798,21 +809,6 @@ DownloadManagerImpl
 				if ( dl != null ){
 
 					res_l.add( dl );
-				}
-			}
-
-			if ( res_l.size() < downloads.size()){
-
-					// now add in any external downloads
-
-				for (int i=0;i<downloads.size();i++){
-
-					Download	download = downloads.get(i);
-
-					if ( !res_l.contains( download )){
-
-						res_l.add( download );
-					}
 				}
 			}
 		}finally{
@@ -829,21 +825,18 @@ DownloadManagerImpl
 
 	@Override
 	public Download[]
-	getDownloads(boolean bSorted)
+	getDownloads(
+		boolean bSorted )
 	{
-		if (bSorted){
+		if ( bSorted ){
 
-			return getDownloads();
+			return( getDownloads());
 		}
 
 		try{
 			listeners_mon.enter();
 
-			Download[]	res = new Download[downloads.size()];
-
-			downloads.toArray( res );
-
-			return( res );
+			return( download_map.values().toArray( new Download[ download_map.size()]));
 
 		}finally{
 
@@ -920,7 +913,7 @@ DownloadManagerImpl
 			new_listeners.add(l);
 			listeners = new_listeners;
 			if (notify_of_current_downloads) {
-				downloads_copy = new ArrayList<>(downloads);
+				downloads_copy = new ArrayList<>( download_map.values());
 				// randomize list so that plugins triggering dlm-state fixups don't lock each other by doing everything in the same order
 				Collections.shuffle(downloads_copy);
 			}
@@ -950,7 +943,7 @@ DownloadManagerImpl
 			new_listeners.remove(l);
 			listeners = new_listeners;
 			if (notify_of_current_downloads) {
-				downloads_copy = new ArrayList<>(downloads);
+				downloads_copy = new ArrayList<>( download_map.values());
 			}
 		}
 		finally {
@@ -1052,76 +1045,6 @@ DownloadManagerImpl
 
 		}finally{
 			listeners_mon.exit();
-		}
-	}
-
-	public void
-	addExternalDownload(
-		Download	download )
-	{
-		List<DownloadManagerListener>			listeners_ref 	= null;
-
-		try{
-			listeners_mon.enter();
-
-			if ( downloads.contains( download )){
-
-				return;
-			}
-
-			downloads.add( download );
-
-			listeners_ref = listeners;
-
-		}finally{
-
-			listeners_mon.exit();
-		}
-
-		for (int i=0;i<listeners_ref.size();i++){
-
-			try{
-				listeners_ref.get(i).downloadAdded( download );
-
-			}catch( Throwable e ){
-
-				Debug.printStackTrace( e );
-			}
-		}
-	}
-
-	public void
-	removeExternalDownload(
-		Download	download )
-	{
-		List<DownloadManagerListener>			listeners_ref 	= null;
-
-		try{
-			listeners_mon.enter();
-
-			if ( !downloads.contains( download )){
-
-				return;
-			}
-
-			downloads.remove( download );
-
-			listeners_ref = listeners;
-
-		}finally{
-
-			listeners_mon.exit();
-		}
-
-		for (int i=0;i<listeners_ref.size();i++){
-
-			try{
-				listeners_ref.get(i).downloadRemoved( download );
-
-			}catch( Throwable e ){
-
-				Debug.printStackTrace( e );
-			}
 		}
 	}
 
@@ -1264,7 +1187,23 @@ DownloadManagerImpl
 
 			return( false );
 		}
-
+		
+		/* Although this would seem to be the better thing to do it hides the actual cause
+		 * of the veto (e.g. tag prevents removal) and makes it hard for a user to diagnose the
+		 * reason. Better to allow things to go ahead and then fail on the removal attempt where
+		 * the user can be told of the cause.
+		 
+		try{
+			return( download.canBeRemoved());
+			
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+			
+			return( false );
+		}
+		*/
+		
 		return( true );
 	}
 
@@ -1433,7 +1372,7 @@ DownloadManagerImpl
 			if ( core_dm == null ){
 
 				try{
-					DownloadManagerStateFactory.deleteDownloadState( torrent_hash );
+					DownloadManagerStateFactory.deleteDownloadState( torrent_hash, false );
 
 				}catch( Throwable e ){
 
@@ -1452,6 +1391,46 @@ DownloadManagerImpl
 					Debug.out( e );
 				}
 
+				File existing_location = core_dm.getSaveLocation();
+				
+				String stub_location = stub.getSavePath();
+				
+				if ( stub_location != null && !stub_location.isEmpty()){
+					
+					File f_stub = FileUtil.newFile( stub_location );
+					
+					if ( !f_stub.equals( existing_location )){
+						
+						core_dm.setTorrentSaveDir( f_stub, true );
+					}
+				}
+				
+				try{
+					
+					File	torrent_file = FileUtil.newFile( core_dm.getTorrentFileName() );
+
+					if ( !torrent_file.exists()){
+						
+						// user might have moved torrent file backup location, see if the
+						// torrent exists there
+						
+						String save_dir = COConfigurationManager.getDirectoryParameter( ConfigKeys.File.SCFG_GENERAL_DEFAULT_TORRENT_DIRECTORY );
+
+						if ( !save_dir.isEmpty()){
+							
+							File	test_file = FileUtil.newFile( save_dir, torrent_file.getName());
+
+							if ( test_file.exists()){
+								
+								core_dm.setTorrentFileName( test_file.getAbsolutePath());
+							}
+						}
+					}
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+				
 				synchronized( download_stubs ){
 
 					download_stubs.remove( stub );

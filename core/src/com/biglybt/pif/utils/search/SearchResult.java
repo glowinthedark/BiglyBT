@@ -47,9 +47,13 @@ SearchResult
 	public static final int	PR_VERSION				= 22;	// Long (-1 n/a)
 	public static final int	PR_TORRENT_LINK			= 23;	// URL as String - for whatever reason, PR_DOWNLOAD_LINK will be populated with the 'download button link'
 															// from a result in preference to the 'download link' - sometimes these are different... so added this one to
-															// always return teh 'download link'
+															// always return the 'download link'
 
 	public static final int	PR_ASSET_DATE			= 24;
+	public static final int	PR_TAGS					= 25;	// String[]
+
+	public static final int	PR_COMPLETED_COUNT		= 26;	// Long	(-1 unknown)
+	public static final int	PR_DESCRIPTION			= 27;	// String	// NOT MAPPED AS PER BELOW
 
 		// if you add more properties make sure you amend the mapping in PluginEngine appropriately
 		// AND the reverse mapping in MetaSearchManagerImpl

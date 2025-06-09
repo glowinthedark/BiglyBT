@@ -18,7 +18,9 @@
 
 package com.biglybt.ui.swt.mainwindow;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
@@ -89,11 +91,22 @@ public class PluginsMenuHelper
 		}
 		createViewInfoMenuItems(viewMenu, mainViewBuilders);
 
+		if ( viewMenu.getItemCount() > itemCount ){
+		
+			MenuFactory.addSeparatorMenuItem( viewMenu );
+		}
+		
+		MenuItem menu_plugin_logViews = MenuFactory.addLogsViewMenuItem(viewMenu);
+		ViewManagerSWT vi = ViewManagerSWT.getInstance();
+		List<UISWTViewBuilderCore> logViewBuilders = getLogViewBuilders(vi);
+		createViewInfoMenuItems(menu_plugin_logViews.getMenu(),	logViewBuilders);
+				
 		return viewMenu.getItemCount() > itemCount;
 	}
 
 	public static void buildPluginMenu(Menu pluginMenu, boolean showPluginViews) {
 
+		/*
 		if (showPluginViews) {
 			ViewManagerSWT vi = ViewManagerSWT.getInstance();
 			List<UISWTViewBuilderCore> mainViewBuilders = getMainViewBuilder(vi);
@@ -117,13 +130,15 @@ public class PluginsMenuHelper
 				MenuFactory.addSeparatorMenuItem(pluginMenu);
 			}
 		}
-
+		*/
+		
 		MenuFactory.addGetPluginsMenuItem(pluginMenu);
 		
 		MenuFactory.addPluginInstallFromFileItem( pluginMenu );		
 		
 		MenuFactory.addPluginUnInstallMenuItem(pluginMenu);
-		
+
+		/*
 		if ( !showPluginViews ){
 			
 			MenuFactory.addSeparatorMenuItem(pluginMenu);
@@ -134,6 +149,7 @@ public class PluginsMenuHelper
 				ViewManagerSWT.getInstance());
 			createViewInfoMenuItems(menu_plugin_logViews.getMenu(), logViewBuilders);
 		}
+		*/
 	}
 
 	private static List<UISWTViewBuilderCore> getMainViewBuilder(
@@ -171,6 +187,15 @@ public class PluginsMenuHelper
 
 	private static void createViewInfoMenuItems(Menu parent,
 			List<UISWTViewBuilderCore> list) {
+		
+		list = new ArrayList<>( list );
+		
+		Comparator<String> comp = FormattersImpl.getAlphanumericComparator2(true);
+		
+		Collections.sort( list, (m1,m2)->{
+			return( comp.compare(m1.getInitialTitle(),m2.getInitialTitle()));
+		});
+		
 		for (UISWTViewBuilderCore builder : list) {
 			createViewInfoMenuItem(parent, builder);
 		}

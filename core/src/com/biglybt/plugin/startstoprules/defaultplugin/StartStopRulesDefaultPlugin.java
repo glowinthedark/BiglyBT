@@ -119,9 +119,11 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 	private static final int SMOOTHING_PERIOD_SECS 	= 15;
 	private static final int SMOOTHING_PERIOD 		= SMOOTHING_PERIOD_SECS*1000;
 
+	private static final Object DEBUG_LINE_KEY = new Object();
+	
 	private TagManager tag_manager;
 		
-	private volatile boolean tagsHaveDLLimits;
+	private volatile boolean tagsHaveDLorCDLimits;
 	
 	private com.biglybt.core.util.average.Average globalDownloadSpeedAverage = AverageFactory.MovingImmediateAverage(SMOOTHING_PERIOD/PROCESS_CHECK_PERIOD );
 
@@ -171,7 +173,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 
 	private int minSpeedForActiveSeeding;
 
-	/** Maximimum # of stalled torrents that are in seeding mode */
+	/** Maximum # of stalled torrents that are in seeding mode */
 	private int maxStalledSeeding;
 	private int maxOverLimitSeeding;
 	private boolean stalledSeedingIgnoreZP;
@@ -265,7 +267,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 		
 		if ( tag_manager != null && tag_manager.isEnabled()){
 			
-			Map<TagFeatureRateLimit,Integer>	tags_with_dl_limit	= new IdentityHashMap<>();
+			Map<TagFeatureRateLimit,Integer>	tags_with_limit	= new IdentityHashMap<>();
 
 			TagType tt = tag_manager.getTagType( TagType.TT_DOWNLOAD_MANUAL );
 			
@@ -306,17 +308,17 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						
 							TagFeatureRateLimit t = (TagFeatureRateLimit)tag;
 							
-							int max = t.getMaxActiveDownloads();
+							int max = t.getMaxActiveDownloads() + t.getMaxActiveSeeds();
 							
 							if ( max > 0 ){
 									
-								synchronized( tags_with_dl_limit ){
+								synchronized( tags_with_limit ){
 								
-									tags_with_dl_limit.put( t, max );
+									tags_with_limit.put( t, max );
 									
 									tag.addTagListener( tag_listener, false );
 									
-									tagsHaveDLLimits = true;
+									tagsHaveDLorCDLimits = true;
 								}
 								
 								requestProcessCycle( null );
@@ -332,27 +334,27 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 							
 							TagFeatureRateLimit t = (TagFeatureRateLimit)tag;
 							
-							int max = t.getMaxActiveDownloads();
+							int max = t.getMaxActiveDownloads() + t.getMaxActiveSeeds();
 
 							if ( max > 0 ){
 								
 								boolean changed = false;
 								
-								synchronized( tags_with_dl_limit ){
+								synchronized( tags_with_limit ){
 								
-									Integer old = tags_with_dl_limit.get( t );
+									Integer old = tags_with_limit.get( t );
 									
 									if ( old == null ){
 										
-										tags_with_dl_limit.put( t, max );
+										tags_with_limit.put( t, max );
 										
 										tag.addTagListener( tag_listener, false );
 										
-										tagsHaveDLLimits = true;
+										tagsHaveDLorCDLimits = true;
 										
 									}else if ( old != max ){
 										
-										tags_with_dl_limit.put( t, max );
+										tags_with_limit.put( t, max );
 									}
 								}
 								
@@ -364,15 +366,15 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 							
 								boolean removed = false;
 								
-								synchronized( tags_with_dl_limit ){
+								synchronized( tags_with_limit ){
 								
-									if ( tags_with_dl_limit.remove( t ) != null ){
+									if ( tags_with_limit.remove( t ) != null ){
 									
 										tag.removeTagListener( tag_listener );
 										
-										if ( tags_with_dl_limit.isEmpty()){
+										if ( tags_with_limit.isEmpty()){
 											
-											tagsHaveDLLimits = false;
+											tagsHaveDLorCDLimits = false;
 										}
 										
 										removed = true;
@@ -395,15 +397,15 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 							
 							boolean removed = false;
 							
-							synchronized( tags_with_dl_limit ){
+							synchronized( tags_with_limit ){
 								
-								if ( tags_with_dl_limit.remove((TagFeatureRateLimit)tag ) != null ){
+								if ( tags_with_limit.remove((TagFeatureRateLimit)tag ) != null ){
 								
 									tag.removeTagListener( tag_listener );
 									
-									if ( tags_with_dl_limit.isEmpty()){
+									if ( tags_with_limit.isEmpty()){
 										
-										tagsHaveDLLimits = false;
+										tagsHaveDLorCDLimits = false;
 									}
 									
 									removed = true;
@@ -482,7 +484,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						
 						seedingRankColumn.initialize(TableColumn.ALIGN_TRAIL, TableColumn.POSITION_LAST, 80, TableColumn.INTERVAL_LIVE);
 	
-						TableCellRefreshListener columnListener = new SeedingRankColumnListener( StartStopRulesDefaultPlugin.this );
+						TableCellRefreshListener columnListener = new SeedingRankColumnListener();
 						
 						seedingRankColumn.addCellRefreshListener(columnListener);
 	
@@ -509,7 +511,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					if ( instance.getUIType().equals(UIInstance.UIT_SWT) ){
 
 						try{
-							swt_ui = (UIAdapter)Class.forName("com.biglybt.plugin.startstoprules.defaultplugin.ui.swt.StartStopRulesDefaultPluginSWTUI").newInstance();
+							swt_ui = (UIAdapter)Class.forName("com.biglybt.ui.swt.plugin.startstoprules.defaultplugin.ui.swt.StartStopRulesDefaultPluginSWTUI").newInstance();
 
 						}catch( Throwable e ){
 
@@ -540,9 +542,9 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 	}
 	
 	public boolean 
-	hasTagDLLimits()
+	hasTagDLorCDLimits()
 	{
-		return( tagsHaveDLLimits );
+		return( tagsHaveDLorCDLimits );
 	}
 	
 	private void recalcAllSeedingRanks() {
@@ -722,11 +724,13 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 			// Skip if error (which happens when listener is first added and the
 			// torrent isn't scraped yet)
 			if (result.getResponseType() == DownloadScrapeResult.RT_ERROR) {
-				if (bDebugLog)
-					log.log(dl.getTorrent(), LoggerChannel.LT_INFORMATION,
-							"Ignored somethingChanged: new scrapeResult (RT_ERROR)");
-				if (dlData != null)
+				if (bDebugLog){
+					// removed, not useful
+					// log.log(dl.getTorrent(), LoggerChannel.LT_INFORMATION, "Ignored somethingChanged: new scrapeResult (RT_ERROR)");
+				}
+				if (dlData != null){
 					dlData.scrapeReceived( result );
+				}
 				return;
 			}
 
@@ -767,7 +771,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 
 			if ( dlData != null ){
 			
-				if ( dlData.activationRequest()){
+				if ( dlData.activationRequest(()->{requestProcessCycle( dlData );})){
 					
 					requestProcessCycle( dlData );
 
@@ -1078,6 +1082,8 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 							try {
 								fp_tag = tt.createTag( "First Priority", true );
 								
+								fp_tag.setPublic( false );
+								
 							}catch( Throwable e ){
 								
 								Debug.out( e );
@@ -1091,7 +1097,9 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					
 						try{
 							not_fp_tag = tt.createTag( "Not First Priority", true );
-														
+								
+							not_fp_tag.setPublic( false );
+							
 						}catch( Throwable e ){
 							
 							Debug.out( e );
@@ -1575,18 +1583,42 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 	}
 
 	private static class 
-	ProcessTagVars
+	ProcessTagVarsIncomplete
 	{
-		final int	maxDLs;
+		final int		maxDLs;
+		final boolean	isStrictLimit;	// if strict then stalled downloads aren't included in calcs
 		
 		int numWaitingOrDLing; // Running Count
 		
+		int stalledDownloaders; // Running Count
+
 		boolean	higherDLtoStart;
 		
-		ProcessTagVars(
-			int		max )
+		ProcessTagVarsIncomplete(
+			int			max,
+			boolean		strict )
 		{
-			maxDLs = max;
+			maxDLs 			= max;
+			isStrictLimit	= strict;
+		}
+	}
+	
+	private static class 
+	ProcessTagVarsComplete
+	{
+		final int		maxCDs;
+		final boolean	isStrictLimit;	// if strict then stalled downloads aren't included in calcs
+
+		int numWaitingOrSeeding; // Running Count
+			
+		int stalledSeeders; // Running Count
+		
+		ProcessTagVarsComplete(
+			int			max,
+			boolean		strict )
+		{
+			maxCDs 			= max;
+			isStrictLimit	= strict;
 		}
 	}
 	
@@ -1596,7 +1628,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 
 	private long processMaxMS = 0;
 
-	private long processLastComplete = 0;
+	private long processLastCompleteMono = -1;
 
 	private long processTotalGap = 0;
 
@@ -1604,13 +1636,22 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 
 	private long processTotalZeroRecalcs = 0;
 
+	private long lastDebugNoChangesMono = -1;
+	
 	protected void process() {
-		long now = 0;
+		long nowMono = -1;
 		try {
 			this_mon.enter();
 
-			now = SystemTime.getCurrentTime();
+			nowMono = SystemTime.getMonotonousTime();
 
+			boolean debugNoChange = lastDebugNoChangesMono == -1 || nowMono - lastDebugNoChangesMono >= 60000;
+				
+			if ( debugNoChange ){
+				
+				lastDebugNoChangesMono = nowMono;
+			}
+						
 			somethingChanged = false;
 			Object[] recalcArray;
 			try {
@@ -1625,10 +1666,15 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 				DefaultRankCalculator rankObj = (DefaultRankCalculator) recalcArray[i];
 				if (bDebugLog) {
 					long oldSR = rankObj.getSeedingRank();
+					
 					rankObj.recalcSeedingRank();
-					String s = "recalc seeding rank.  old/new=" + oldSR + "/"
-							+ rankObj.getSeedingRank();
-					log.log(rankObj.getRelatedTo(), LoggerChannel.LT_INFORMATION, s);
+					
+					int newSR=rankObj.getSeedingRank();
+					
+					if ( oldSR != newSR ){
+						String s = "recalc seeding rank.  old/new=" + oldSR + "/" + newSR;
+						log.log(rankObj.getRelatedTo(), LoggerChannel.LT_INFORMATION, s);
+					}
 				} else {
 					rankObj.recalcSeedingRank();
 				}
@@ -1719,13 +1765,27 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 			}
 
 			// Sort: SeedingRank Desc, Position Desc
-			Arrays.sort(dlDataArray);
+			
+			// unfortunately the comparables aren't stable and can result in TimSort throwing a wobbly and
+			// 'general contract violated' exception. We don't really care so...
+			
+			for ( int i=0;i<10;i++){
+				
+				try{
+					Arrays.sort(dlDataArray);
+					
+					break;
+					
+				}catch( IllegalArgumentException e ){
+				}
+			}
 			
 			ProcessVars vars = new ProcessVars();
 
 			ProcessVarsComplete	cvars = vars.comp;
 			
-			Map<TagFeatureRateLimit,ProcessTagVars>	tvarsMap = new IdentityHashMap<>();
+			Map<TagFeatureRateLimit,ProcessTagVarsIncomplete>	tvarsIncompleteMap = new IdentityHashMap<>();
+			Map<TagFeatureRateLimit,ProcessTagVarsComplete>		tvarsCompleteMap = new IdentityHashMap<>();
 			
 			// pre-included Forced Start torrents so a torrent "above" it doesn't
 			// start (since normally it would start and assume the torrent below it
@@ -1821,19 +1881,19 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					
 					TagFeatureRateLimit[] tagLimits = dlData.getTagsWithDLLimits();
 					
-					ProcessTagVars[] tvars;
+					ProcessTagVarsIncomplete[] tvars;
 					
 					if ( tagLimits.length == 0 ){
 						
-						tvars = new ProcessTagVars[0];
+						tvars = new ProcessTagVarsIncomplete[0];
 						
 					}else{
 						
-						List<ProcessTagVars> temp = new ArrayList<>( tagLimits.length );
+						List<ProcessTagVarsIncomplete> temp = new ArrayList<>( tagLimits.length );
 						
 						for ( TagFeatureRateLimit tag: tagLimits ){
 							
-							ProcessTagVars t = tvarsMap.get( tag );
+							ProcessTagVarsIncomplete t = tvarsIncompleteMap.get( tag );
 							
 							if ( t == null ){
 								
@@ -1841,9 +1901,9 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 								
 								if ( maxDLs > 0 ){
 									
-									t = new ProcessTagVars( maxDLs );
+									t = new ProcessTagVarsIncomplete( maxDLs, tag.getStrictActivityLimits());
 									
-									tvarsMap.put( tag,  t );
+									tvarsIncompleteMap.put( tag,  t );
 									
 									temp.add( t );
 								}
@@ -1852,14 +1912,52 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 								temp.add(t);
 							}
 						}
-						tvars = temp.toArray(new ProcessTagVars[temp.size()]);
+						tvars = temp.toArray(new ProcessTagVarsIncomplete[temp.size()]);
 					}
+					
 					handleInCompleteDownload(dlData, vars, tvars, totals);
-				} else {
+					
+				}else{
 					
 					completeDownloads.add( dlData );
 					
-					handleCompletedDownload(dlDataArray, dlData, vars, totals);
+					TagFeatureRateLimit[] tagLimits = dlData.getTagsWithCDLimits();
+					
+					ProcessTagVarsComplete[] tvars;
+					
+					if ( tagLimits.length == 0 ){
+						
+						tvars = new ProcessTagVarsComplete[0];
+						
+					}else{
+						
+						List<ProcessTagVarsComplete> temp = new ArrayList<>( tagLimits.length );
+						
+						for ( TagFeatureRateLimit tag: tagLimits ){
+							
+							ProcessTagVarsComplete t = tvarsCompleteMap.get( tag );
+							
+							if ( t == null ){
+								
+								int maxCDs = tag.getMaxActiveSeeds();
+								
+								if ( maxCDs > 0 ){
+									
+									t = new ProcessTagVarsComplete( maxCDs, tag.getStrictActivityLimits());
+									
+									tvarsCompleteMap.put( tag,  t );
+									
+									temp.add( t );
+								}
+							}else{
+								
+								temp.add(t);
+							}
+						}
+						tvars = temp.toArray(new ProcessTagVarsComplete[temp.size()]);
+					}
+						
+					handleCompletedDownload( dlData, vars, tvars, totals, debugNoChange );
 				}
 			} // Loop 2/2 (Start/Stopping)
 			
@@ -1944,9 +2042,9 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						"freeS=" + lightSeedingSlots, "", true, null);
 			}
 		} finally {
-			if (now > 0) {
+			if (nowMono >= 0) {
 				processCount++;
-				long timeTaken = (SystemTime.getCurrentTime() - now);
+				long timeTaken = (SystemTime.getMonotonousTime() - nowMono);
 				if (bDebugLog) {
 					log.log(LoggerChannel.LT_INFORMATION, "process() took " + timeTaken);
 				}
@@ -1954,10 +2052,10 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 				if (timeTaken > processMaxMS) {
 					processMaxMS = timeTaken;
 				}
-				if (processLastComplete > 0) {
-					processTotalGap += (now - processLastComplete);
+				if (processLastCompleteMono >= 0) {
+					processTotalGap += (nowMono - processLastCompleteMono);
 				}
-				processLastComplete = now;
+				processLastCompleteMono = nowMono;
 			}
 
 			immediateProcessingScheduled = false;
@@ -2043,7 +2141,8 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 				}
 			}
 		}else if ( 	iDownloadSortType == DefaultRankCalculator.DOWNLOAD_ORDER_SIZE || 
-					iDownloadSortType == DefaultRankCalculator.DOWNLOAD_ORDER_REVERSE_SIZE){
+					iDownloadSortType == DefaultRankCalculator.DOWNLOAD_ORDER_REVERSE_SIZE ||
+					iDownloadSortType == DefaultRankCalculator.DOWNLOAD_ORDER_REMAINING ){
 
 			Collections.sort(
 				downloads,
@@ -2055,19 +2154,64 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						DefaultRankCalculator d1,
 						DefaultRankCalculator d2)
 					{
-						long l1 = d1.getSizeExcludingDND();
-						long l2 = d2.getSizeExcludingDND();
-	
-						int result = Long.compare( l2, l1 );
-						
-						if ( iDownloadSortType == DefaultRankCalculator.DOWNLOAD_ORDER_SIZE ){
-	
+						if ( iDownloadSortType == DefaultRankCalculator.DOWNLOAD_ORDER_REMAINING  ){
+							long l1 = d1.getRemainingExcludingDND();
+							long l2 = d2.getRemainingExcludingDND();
+		
+							int result = Long.compare( l1, l2 );
+
 							return( result );
 							
 						}else{
+							long l1 = d1.getSizeExcludingDND();
+							long l2 = d2.getSizeExcludingDND();
+		
+							int result = Long.compare( l2, l1 );
 							
-							return( -result );
+							if ( iDownloadSortType == DefaultRankCalculator.DOWNLOAD_ORDER_SIZE ){
+		
+								return( result );
+								
+							}else{
+								
+								return( -result );
+							}
 						}
+					}
+				});
+	
+			for ( int i=0;i<downloads.size();i++){
+	
+				DefaultRankCalculator drc = downloads.get(i);
+	
+				if ( drc.getPosition() != (i+1)){
+	
+					drc.moveTo( i+1 );
+				}
+			}
+		}else if ( iDownloadSortType == DefaultRankCalculator.DOWNLOAD_ORDER_FILE_PRIORITIES ){ 
+
+			Collections.sort(
+				downloads,
+				new Comparator<DefaultRankCalculator>()
+				{
+					@Override
+					public int
+					compare(
+						DefaultRankCalculator d1,
+						DefaultRankCalculator d2)
+					{
+						int[] p1 = d1.getFilePriorityStats();
+						int[] p2 = d2.getFilePriorityStats();
+	
+						int result = Integer.compare( p2[1],  p1[1] );
+						
+						if ( result == 0 ){
+							
+							result = Integer.compare( p2[3],  p1[3] );
+						}
+						
+						return( result );
 					}
 				});
 	
@@ -2346,10 +2490,10 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 	 */
 	private void 
 	handleInCompleteDownload(
-		DefaultRankCalculator 	dlData,
-		ProcessVars 			vars, 
-		ProcessTagVars[]		tagVars,
-		TotalsStats 			totals ) 
+		DefaultRankCalculator 		dlData,
+		ProcessVars 				vars, 
+		ProcessTagVarsIncomplete[]	tagVars,
+		TotalsStats 				totals ) 
 	{
 		int state = dlData.getState();
 
@@ -2382,7 +2526,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 		// middle of resume-data building, or file allocating.
 		if (state == Download.ST_PREPARING){
 			ivars.numWaitingOrDLing++;
-			for (ProcessTagVars tvars: tagVars ){
+			for (ProcessTagVarsIncomplete tvars: tagVars ){
 				tvars.numWaitingOrDLing++;
 			}
 			if (bDebugLog) {
@@ -2418,7 +2562,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 		}else{
 			tagMaxDLs = Integer.MAX_VALUE;
 	
-			for (ProcessTagVars tvars: tagVars ){
+			for (ProcessTagVarsIncomplete tvars: tagVars ){
 				tagMaxDLs = Math.min( tagMaxDLs, tvars.maxDLs );
 			}
 		}
@@ -2463,8 +2607,14 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 				|| state == Download.ST_READY || state == Download.ST_WAITING
 				|| state == Download.ST_PREPARING) {
 			ivars.numWaitingOrDLing++;
-			for (ProcessTagVars tvars: tagVars ){
+			for (ProcessTagVarsIncomplete tvars: tagVars ){
 				tvars.numWaitingOrDLing++;
+			}
+		}else{
+			if ( state == Download.ST_DOWNLOADING ){
+				for (ProcessTagVarsIncomplete tvars: tagVars ){
+					tvars.stalledDownloaders++;
+				}
 			}
 		}
 
@@ -2474,9 +2624,11 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 			boolean bOverLimit = 	ivars.numWaitingOrDLing > maxDLs ||
 									(ivars.numWaitingOrDLing >= maxDLs && ivars.higherDLtoStart);
 
-			for (ProcessTagVars tvars: tagVars ){
-				if ( 	tvars.numWaitingOrDLing > tvars.maxDLs || 
-						(tvars.numWaitingOrDLing >= tvars.maxDLs && tvars.higherDLtoStart)){
+			for (ProcessTagVarsIncomplete tvars: tagVars ){
+				int active = tvars.numWaitingOrDLing + (tvars.isStrictLimit?tvars.stalledDownloaders:0);
+				
+				if ( 	active > tvars.maxDLs || 
+						(active == tvars.maxDLs && tvars.higherDLtoStart)){
 					
 					bOverLimit = true;
 					
@@ -2507,7 +2659,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					dlData.stopAndQueue();
 					// reduce counts
 					ivars.numWaitingOrDLing--;
-					for (ProcessTagVars tvars: tagVars ){
+					for (ProcessTagVarsIncomplete tvars: tagVars ){
 						tvars.numWaitingOrDLing--;
 					}
 					if (state == Download.ST_DOWNLOADING)
@@ -2577,8 +2729,8 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 			if ((maxDownloads == 0) || 
 				(ivars.numWaitingOrDLing < maxDLs)) {
 								
-				for (ProcessTagVars tvars: tagVars ){
-					if ( tvars.numWaitingOrDLing >= tvars.maxDLs){						
+				for (ProcessTagVarsIncomplete tvars: tagVars ){
+					if ( tvars.numWaitingOrDLing + (tvars.isStrictLimit?tvars.stalledDownloaders:0) >= tvars.maxDLs){						
 						tvarsMaxDLsExceeded = true;
 						break;
 					}
@@ -2596,7 +2748,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 	
 						// increase counts
 						ivars.numWaitingOrDLing++;
-						for (ProcessTagVars tvars: tagVars ){
+						for (ProcessTagVarsIncomplete tvars: tagVars ){
 							tvars.numWaitingOrDLing++;
 						}
 						totals.waitingToDL++;
@@ -2605,6 +2757,12 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					} catch (Exception ignore) {/*ignore*/
 					}
 					state = dlData.getState();
+				}else{
+					if ( bDebugLog ){
+						String s = "Not starting, tag max exceeded";
+						log.log(dlData.getRelatedTo(), LoggerChannel.LT_INFORMATION, s);
+						dlData.appendTrace( s + "\n" );
+					}
 				}
 			}
 		}
@@ -2624,8 +2782,8 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						|| state == Download.ST_WAITING || state == Download.ST_PREPARING)) {
 			
 			if ( tvarsMaxDLsExceeded ){
-				for (ProcessTagVars tvars: tagVars ){
-					if ( tvars.numWaitingOrDLing >= tvars.maxDLs ){
+				for (ProcessTagVarsIncomplete tvars: tagVars ){
+					if ( tvars.numWaitingOrDLing + ( tvars.isStrictLimit?tvars.stalledDownloaders:0) >= tvars.maxDLs ){
 						tvars.higherDLtoStart = true;
 					}
 				}
@@ -2660,8 +2818,14 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 	 * @param vars Running calculations
 	 * @param totals Summary values used in logic
 	 */
-	private void handleCompletedDownload(DefaultRankCalculator[] dlDataArray,
-			DefaultRankCalculator dlData, ProcessVars vars, TotalsStats totals) {
+	private void 
+	handleCompletedDownload(
+		DefaultRankCalculator 		dlData, 
+		ProcessVars 				vars,
+		ProcessTagVarsComplete[]	tagVars,
+		TotalsStats 				totals,
+		boolean						debugNoChange )
+	{
 		if (!totals.bOkToStartSeeding)
 			return;
 
@@ -2734,6 +2898,10 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						dlData.restart(); // set to Waiting
 						totals.waitingToSeed++;
 						cvars.numWaitingOrSeeding++;
+						
+						for ( ProcessTagVarsComplete tv: tagVars ){
+							tv.numWaitingOrSeeding++;
+						}
 
 						state = dlData.getState();
 						if (state == Download.ST_READY) {
@@ -2752,6 +2920,10 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						dlData.start();
 						totals.activelyCDing++;
 						cvars.numWaitingOrSeeding++;
+						
+						for ( ProcessTagVarsComplete tv: tagVars ){
+							tv.numWaitingOrSeeding++;
+						}
 					} catch (Exception ignore) {/*ignore*/
 					}
 				}
@@ -2832,6 +3004,10 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 	  				
 	  				cvars.stalledSeeders++;
 	  				
+	  				for ( ProcessTagVarsComplete tv: tagVars ){
+  						tv.stalledSeeders++;
+					}
+	  				
 	  				increasedStalledSeeders = true;
 	  			}
 	  		}
@@ -2846,8 +3022,28 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 				
 				cvars.numWaitingOrSeeding++;
 				
+				for ( ProcessTagVarsComplete tv: tagVars ){
+					tv.numWaitingOrSeeding++;
+				}
+				
 				if (bDebugLog)
 					sDebugLine += "\n  Torrent is waiting or seeding";
+			}else{
+					// for tag limits we need to ensure we either increment stalled or waiting/seeding for all
+					// downloads regardless as we use this to apply strict per-tag limits
+				
+				if ( !increasedStalledSeeders && tagVars.length > 0 ){
+					
+					if ( 	state == Download.ST_READY || 
+							state == Download.ST_WAITING ||
+							state == Download.ST_PREPARING ||
+							state == Download.ST_SEEDING ){
+						
+						for ( ProcessTagVarsComplete tv: tagVars ){
+							tv.numWaitingOrSeeding++;
+						}
+					}
+				}
 			}
 			
 			if ( bDebugLog && dlData.getReservedSlot() != null ){
@@ -2876,18 +3072,35 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 			//
 			//   3) It hasn't been force started and is controllable
   		
-			boolean underCurrentLimit 	= totals.maxActive != 0 && cvars.numWaitingOrSeeding + cvars.stalledSeeders < totals.maxSeeders + maxStalledSeeding ;
-			boolean	underGlobalLimit	= totals.maxActive != 0 && totals.activelyCDing + totals.waitingToSeed + totals.stalledSeeders <  totals.maxSeeders + maxStalledSeeding + maxOverLimitSeeding;
+			boolean underCurrentLimit 	= totals.maxActive == 0 || cvars.numWaitingOrSeeding + cvars.stalledSeeders < totals.maxSeeders + maxStalledSeeding ;
+			
+			ProcessTagVarsComplete tagLimitExceeded = null;
+			
+			if ( tagVars.length > 0 ){
+				for ( ProcessTagVarsComplete tv: tagVars ){
+					if ( tv.numWaitingOrSeeding + tv.stalledSeeders < tv.maxCDs + (tv.isStrictLimit?0:maxStalledSeeding )){
+						
+					}else{
+						underCurrentLimit = false;
+						tagLimitExceeded = tv;
+						break;
+					}
+				}
+			}
+			
+			boolean	underGlobalLimit	= totals.maxActive == 0 || totals.activelyCDing + totals.waitingToSeed + totals.stalledSeeders <  totals.maxSeeders + maxStalledSeeding + maxOverLimitSeeding;
 			
 			boolean atLimit = !( underCurrentLimit && underGlobalLimit );
 			
 			boolean controllable = dlData.isControllable();
 			
+			boolean forceStart = dlData.isForceStart();
+			
 			boolean okToQueue = 
 					controllable &&
 					stateReadyOrSeeding &&
 					(!isFP || (isFP && atLimit )) && 
-					(!dlData.isForceStart());
+					!forceStart;
 
 				// XXX do we want changes to take effect immediately  ?
 			
@@ -2905,7 +3118,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 
 			boolean	up_limit_prohibits = false;
 
-			if ( !okToQueue ){
+			if ( controllable && !okToQueue && !forceStart ){
 
 				if ( totals.upLimitProhibitsNewSeeds ){
 
@@ -2921,6 +3134,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 			boolean okToStart =
 					controllable &&
 					!okToQueue &&
+					tagLimitExceeded == null &&  
 					(state == Download.ST_QUEUED) &&
 					(rank >= DefaultRankCalculator.SR_IGNORED_LESS_THAN ); 
 					//&& (cvars.stalledSeeders < maxStalledSeeding)	// This test is bad as it stops all new seeds from starting once stalled max is hit. 
@@ -3000,6 +3214,10 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 							
 							totals.waitingToSeed++;
 							cvars.numWaitingOrSeeding++;
+							
+							for ( ProcessTagVarsComplete tv: tagVars ){
+								tv.numWaitingOrSeeding++;
+							}
 						}
 						
 						if (iRankType == RANK_TIMED)
@@ -3023,8 +3241,14 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						if (okToQueue)
 							sDebugLine += " no starting of okToQueue'd;";
 	
-						if ( cvars.numWaitingOrSeeding + cvars.stalledSeeders >= totals.maxSeeders + maxStalledSeeding ){
+						if ( tagLimitExceeded != null ){
 							
+							sDebugLine += " at tag limit, numWaitingOrSeeding + stalledSeeders("
+									+ ( tagLimitExceeded.numWaitingOrSeeding + "+" + tagLimitExceeded.stalledSeeders ) + ") >= maxSeeders("
+									+ ( tagLimitExceeded.maxCDs ) + ")";
+
+						}else if ( cvars.numWaitingOrSeeding + cvars.stalledSeeders >= totals.maxSeeders + maxStalledSeeding ){
+														
 							sDebugLine += " at current limit, numWaitingOrSeeding + stalledSeeders("
 									+ ( cvars.numWaitingOrSeeding + "+" + cvars.stalledSeeders ) + ") >= maxSeeders + maxStalledSeeding("
 									+ ( totals.maxSeeders + "+" + maxStalledSeeding ) + ")";
@@ -3085,6 +3309,10 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					totals.activelyCDing++;
 					globalRateAdjustedActivelySeeding = bActivelySeeding = true;
 					cvars.numWaitingOrSeeding++;
+					
+					for ( ProcessTagVarsComplete tv: tagVars ){
+						tv.numWaitingOrSeeding++;
+					}
 				} else if (okToQueue) {
 					// In between switching from STATE_WAITING and STATE_READY,
 					// and ignore rule was met, so move it back to Queued
@@ -3105,6 +3333,16 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 
 					
 					boolean overCurrentLimit 	= totals.maxActive != 0 && cvars.numWaitingOrSeeding + cvars.stalledSeeders > totals.maxSeeders + maxStalledSeeding ;
+					
+					if ( !overCurrentLimit && tagVars.length > 0 ){
+						for ( ProcessTagVarsComplete tv: tagVars ){
+							if ( tv.numWaitingOrSeeding + tv.stalledSeeders > tv.maxCDs ){ //  + maxStalledSeeding ){
+								overCurrentLimit = true;
+								break;
+							}
+						}
+					}
+					
 					boolean overGlobalLimit		= totals.maxActive != 0 && totals.activelyCDing + totals.waitingToSeed + totals.stalledSeeders >  totals.maxSeeders + maxStalledSeeding + maxOverLimitSeeding;
 					
 					boolean overLimit = overCurrentLimit || overGlobalLimit;
@@ -3184,10 +3422,16 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						if(globalRateAdjustedActivelySeeding)
 						{
 							cvars.numWaitingOrSeeding--;
+							for ( ProcessTagVarsComplete tv: tagVars ){
+								tv.numWaitingOrSeeding--;
+							}
 							globalRateAdjustedActivelySeeding = false;
 							
 						}else if ( increasedStalledSeeders ){
 							cvars.stalledSeeders--;
+			  				for ( ProcessTagVarsComplete tv: tagVars ){
+		  						tv.stalledSeeders--;
+							}
 						}
 
 						// force stop allows READY states in here, so adjust counts
@@ -3224,7 +3468,16 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						"nSeeds=" + dlData.getLastModifiedScrapeResultSeeds(),
 						"nPeers=" + dlData.getLastModifiedScrapeResultPeers()
 					};
-					printDebugChanges("", debugEntries, debugEntries2, sDebugLine, "  ", true, dlData);
+					
+					String lastDebug = (String)dlData.getUserData( DEBUG_LINE_KEY );
+					
+					if ( lastDebug == null || !sDebugLine.equals( lastDebug )){
+						
+						dlData.setUserData( DEBUG_LINE_KEY, sDebugLine );
+						
+						debugNoChange = true;
+					}
+					printDebugChanges("", debugEntries, debugEntries2, sDebugLine, "  ", debugNoChange, dlData);
 				}
 			}
 		}

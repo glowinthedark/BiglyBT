@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import com.biglybt.ui.common.table.TableColumnCore;
 import com.biglybt.ui.common.table.TableColumnSortObject;
@@ -40,6 +41,8 @@ import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
 import com.biglybt.core.util.*;
+import com.biglybt.core.util.StringInterner.StringSupplier;
+import com.biglybt.core.util.StringInterner.StringSupplierBasic;
 import com.biglybt.pif.ui.Graphic;
 import com.biglybt.pif.ui.tables.*;
 import com.biglybt.ui.swt.Utils;
@@ -105,9 +108,10 @@ public abstract class TableCellSWTBase
 
 	private int flags;
 
-	protected TableRowCore tableRow;
+	protected TableRowSWTBase tableRowSWT;
 
-	protected TableColumnCore tableColumn;
+	protected TableColumnSWTBase 	tableColumnSWT;
+	protected TableColumnCore 		tableColumnCore;
 
 	private byte tooltipErrLoopCount;
 
@@ -120,6 +124,8 @@ public abstract class TableCellSWTBase
 	private ArrayList<TableCellToolTipListener> tooltipListeners;
 
 	private ArrayList<TableCellMouseListener> cellMouseListeners;
+	
+	private ArrayList<TableCellMenuListener> cellMenuListeners;
 
 	private ArrayList<TableCellMouseMoveListener> cellMouseMoveListeners;
 
@@ -131,6 +137,9 @@ public abstract class TableCellSWTBase
 
 	protected Comparable sortValue;
 
+	private String textEquiv;
+	private double numericValue = Double.NaN;
+	
 	private byte restartRefresh = 0;
 
 	private boolean bInRefreshAsync = false;
@@ -169,10 +178,13 @@ public abstract class TableCellSWTBase
 
 	private Map<Object,Object>	userData;
 
-	public TableCellSWTBase(TableRowCore row, TableColumnCore column) {
+	public TableCellSWTBase(TableRowSWTBase row, TableColumnSWTBase column) {
 		flags = FLAG_SORTVALUEISTEXT;
-		tableRow = row;
-		tableColumn = column;
+		tableRowSWT = row;
+		tableColumnSWT = column;
+		
+		tableColumnCore = column.getColumnCore();
+		
 		tooltipErrLoopCount = 0;
 		refreshErrLoopCount = 0;
 		loopFactor = 0;
@@ -183,7 +195,7 @@ public abstract class TableCellSWTBase
 	{
 			// this needs to be done after the subclass has had time to initialise itself
 
-		if (tableColumn != null && tableColumn.getType() == TableColumnCore.TYPE_GRAPHIC) {
+		if (tableColumnCore != null && tableColumnCore.getType() == TableColumnCore.TYPE_GRAPHIC) {
 			setMarginHeight(1);
 			setMarginWidth(1);
 		}
@@ -316,6 +328,36 @@ public abstract class TableCellSWTBase
 		}
 	}
 
+	@Override
+	public void addMenuListener(TableCellMenuListener listener) {
+		try {
+			this_mon.enter();
+
+			if (cellMenuListeners == null)
+				cellMenuListeners = new ArrayList(1);
+
+			cellMenuListeners.add(listener);
+
+		} finally {
+			this_mon.exit();
+		}
+	}
+
+	@Override
+	public void removeMenuListener(TableCellMenuListener listener) {
+		try {
+			this_mon.enter();
+
+			if (cellMenuListeners == null)
+				return;
+
+			cellMenuListeners.remove(listener);
+
+		} finally {
+			this_mon.exit();
+		}
+	}
+	
 	public void addMouseMoveListener(TableCellMouseMoveListener listener) {
 		try {
 			this_mon.enter();
@@ -392,8 +434,8 @@ public abstract class TableCellSWTBase
 	}
 
 	public void invokeSWTPaintListeners(GC gc) {
-		if (tableColumn != null) {
-			Object[] swtPaintListeners = tableColumn.getCellOtherListeners("SWTPaint");
+		if (tableColumnCore != null) {
+			Object[] swtPaintListeners = tableColumnCore.getCellOtherListeners("SWTPaint");
 			if (swtPaintListeners != null) {
 				for (int i = 0; i < swtPaintListeners.length; i++) {
 					try {
@@ -443,7 +485,7 @@ public abstract class TableCellSWTBase
 		if (isDisposed()) {
 			return "";
 		}
-		String text = tableColumn.getClipboardText(this);
+		String text = tableColumnCore.getClipboardText(this);
 		if (text != null) {
 			return text;
 		}
@@ -492,6 +534,10 @@ public abstract class TableCellSWTBase
 			addMouseListener((TableCellMouseListener) listenerObject);
 		}
 
+		if (listenerObject instanceof TableCellMenuListener) {
+			addMenuListener((TableCellMenuListener) listenerObject);
+		}
+		
 		if (listenerObject instanceof TableCellVisibilityListener)
 			addVisibilityListener((TableCellVisibilityListener) listenerObject);
 
@@ -504,15 +550,15 @@ public abstract class TableCellSWTBase
 
 	@Override
 	public void invokeToolTipListeners(int type) {
-		if (tableColumn == null)
+		if (tableColumnCore == null)
 			return;
 
-		tableColumn.invokeCellToolTipListeners(this, type);
+		tableColumnCore.invokeCellToolTipListeners(this, type);
 
 		if (tooltipListeners == null || tooltipErrLoopCount > 2)
 			return;
 
-		int iErrCount = tableColumn.getConsecutiveErrCount();
+		int iErrCount = tableColumnCore.getConsecutiveErrCount();
 		if (iErrCount > 10)
 			return;
 
@@ -527,7 +573,7 @@ public abstract class TableCellSWTBase
 			tooltipErrLoopCount = 0;
 		} catch (Throwable e) {
 			tooltipErrLoopCount++;
-			tableColumn.setConsecutiveErrCount(++iErrCount);
+			tableColumnCore.setConsecutiveErrCount(++iErrCount);
 			pluginError(e);
 			if (tooltipErrLoopCount > 2)
 				Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR,
@@ -559,9 +605,40 @@ public abstract class TableCellSWTBase
 	}
 
 	@Override
+	public void 
+	invokeMenuListeners(
+		TableCellMenuEvent event ) 
+	{
+		
+		ArrayList<TableCellMenuListener> listeners = cellMenuListeners;
+		
+		if ( listeners == null ){
+			
+			return;
+		}
+		
+		for ( TableCellMenuListener listener: listeners ){
+			
+			if ( event.skipCoreFunctionality ){
+				
+				break;
+			}
+			
+			try{
+				listener.menuEventOccurred(event);
+
+			}catch ( Throwable e ){
+				
+				Debug.printStackTrace(e);
+			}
+		}
+	}
+
+	
+	@Override
 	public void invokeVisibilityListeners(int visibility,
 	                                      boolean invokeColumnListeners) {
-		TableColumnCore tc = tableColumn;
+		TableColumnCore tc = tableColumnCore;
 
 		if (invokeColumnListeners && tc != null) {
 			tc.invokeCellVisibilityListeners(this, visibility);
@@ -592,7 +669,7 @@ public abstract class TableCellSWTBase
 		}
 		setFlag(FLAG_DISPOSED);
 
-		TableColumnCore tc = tableColumn;
+		TableColumnCore tc = tableColumnCore;
 
 		if (tc != null) {
 			tc.invokeCellDisposeListeners(this);
@@ -611,28 +688,29 @@ public abstract class TableCellSWTBase
 		}
 
 		refreshListeners = null;
-		tableColumn = null;
-		tableRow = null;
+		tableColumnCore = null;
+		tableColumnSWT = null;
+		tableRowSWT = null;
 		sortValue = null;
 	}
 
 	public void debug(final String s) {
-		if (DEBUGONLYZERO && tableColumn.getPosition() != 0) {
+		if (DEBUGONLYZERO && tableColumnCore.getPosition() != 0) {
 			return;
 		}
 		Utils.execSWTThread(new AERunnable() {
 			@Override
 			public void runSupport() {
-				if (tableRow == null) {
+				if (tableRowSWT == null) {
 					System.out.println(SystemTime.getCurrentTime() + ": c"
-							+ (tableColumn == null ? null : tableColumn.getPosition()) + ";F=" + flagToText(flags, false)
+							+ (tableColumnCore == null ? null : tableColumnCore.getPosition()) + ";F=" + flagToText(flags, false)
 							+ ";" + s);
 
 				} else {
 					System.out.println(SystemTime.getCurrentTime() + ": r"
-							+ tableRow.getIndex() + "c"
-							+ (tableColumn == null ? null : tableColumn.getPosition())
-							+ ";r.v?" + ((tableRow.isVisible() ? "Y" : "N")) + "F="
+							+ tableRowSWT.getIndex() + "c"
+							+ (tableColumnCore == null ? null : tableColumnCore.getPosition())
+							+ ";r.v?" + ((tableRowSWT.isVisible() ? "Y" : "N")) + "F="
 							+ flagToText(flags, false) + ";" + s);
 				}
 			}
@@ -640,10 +718,10 @@ public abstract class TableCellSWTBase
 	}
 
 	protected void pluginError(Throwable e) {
-		if (tableColumn != null) {
-  		String sTitleLanguageKey = tableColumn.getTitleLanguageKey();
+		if (tableColumnCore != null) {
+  		String sTitleLanguageKey = tableColumnCore.getTitleLanguageKey();
 
-  		String sPosition = tableColumn.getPosition() + " ("
+  		String sPosition = tableColumnCore.getPosition() + " ("
   				+ MessageText.getString(sTitleLanguageKey) + ")";
   		Logger.log(new LogEvent(LOGID, "Table Cell Plugin for Column #" + sPosition
   				+ " generated an exception ", e));
@@ -653,8 +731,8 @@ public abstract class TableCellSWTBase
 	}
 
 	protected void pluginError(String s) {
-		String sPosition = "r" + tableRow.getIndex() + "c"
-				+ tableColumn.getPosition();
+		String sPosition = "r" + tableRowSWT.getIndex() + "c"
+				+ tableColumnCore.getPosition();
 		Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR,
 				"Table Cell Plugin for Column #" + sPosition + ":" + s + "\n  "
 						+ Debug.getStackTrace(true, true)));
@@ -669,9 +747,9 @@ public abstract class TableCellSWTBase
 	@Override
 	public boolean refresh(boolean bDoGraphics) {
 		boolean isRowShown;
-		if (tableRow != null) {
-			TableView view = tableRow.getView();
-			isRowShown = view.isRowVisible(tableRow);
+		if (tableRowSWT != null) {
+			TableView view = tableRowSWT.getView();
+			isRowShown = view.isRowVisible(tableRowSWT);
 		} else {
 			isRowShown = true;
 		}
@@ -693,7 +771,7 @@ public abstract class TableCellSWTBase
 		//  	if (Utils.isThisThreadSWT()) {
 		//  		System.out.println("ONSWT: " + Debug.getCompressedStackTrace());
 		//  	}
-		TableColumnCore	tc = tableColumn;
+		TableColumnCore	tc = tableColumnCore;
 
 		if (tc == null) {
 			return false;
@@ -757,7 +835,7 @@ public abstract class TableCellSWTBase
 
 			if (bDebug) {
 				debug("Cell Valid?" + hasFlag(FLAG_VALID) + "; Visible?"
-						+ tableRow.isVisible() + "/" + isShown());
+						+ tableRowSWT.isVisible() + "/" + isShown());
 			}
 			int iInterval = tc.getRefreshInterval();
 			if (iInterval == TableColumnCore.INTERVAL_INVALID_ONLY
@@ -767,7 +845,11 @@ public abstract class TableCellSWTBase
 				if (bCellVisible) {
 					if (bDebug)
 						debug("fast refresh: setText");
-					ret = setText((String) sortValue);
+					if ( sortValue instanceof String ){
+						ret = setText((String)sortValue);
+					}else{
+						ret = setText((StringSupplier)sortValue);
+					}
 					setFlag(FLAG_VALID);
 				}
 			} else if ((iInterval == TableColumnCore.INTERVAL_LIVE
@@ -840,14 +922,14 @@ public abstract class TableCellSWTBase
 
 	@Override
 	public boolean setSortValue(Comparable valueToSort) {
-		if ( tableColumn == null ){
+		if ( tableColumnCore == null ){
 			return( false );
 		}
-		if (!tableColumn.isSortValueLive()) {
+		if (!tableColumnCore.isSortValueLive()) {
 			// objects that can't change aren't live
 			if (!(valueToSort instanceof Number) && !(valueToSort instanceof String)
 					&& !(valueToSort instanceof TableColumnSortObject)) {
-				tableColumn.setSortValueLive(true);
+				tableColumnCore.setSortValueLive(true);
 			}
 		}
 		return _setSortValue(valueToSort);
@@ -863,10 +945,13 @@ public abstract class TableCellSWTBase
 
 		if (hasFlag(FLAG_SORTVALUEISTEXT)) {
 			clearFlag(FLAG_SORTVALUEISTEXT);
-			if (sortValue instanceof String)
+			if (sortValue instanceof String){
 				// Make sure text is actually in the cell (it may not have been if
 				// cell wasn't created at the time of setting)
 				setText((String) sortValue);
+			}else if ( sortValue instanceof StringSupplier ){
+				setText((StringSupplier) sortValue);
+			}
 		}
 
 		if ((valueToSort instanceof String) && (sortValue instanceof String)
@@ -874,6 +959,11 @@ public abstract class TableCellSWTBase
 			return false;
 		}
 
+		if ((valueToSort instanceof StringSupplier) && (sortValue instanceof StringSupplier)
+				&& sortValue.equals(valueToSort)) {
+			return false;
+		}
+		
 		if ((valueToSort instanceof Number) && (sortValue instanceof Number)
 				&& sortValue.equals(valueToSort)) {
 			return false;
@@ -883,13 +973,13 @@ public abstract class TableCellSWTBase
 			debug("Setting SortValue to "
 					+ ((valueToSort == null) ? "null" : valueToSort.getClass().getName()));
 
-		tableColumn.setLastSortValueChange(SystemTime.getCurrentTime());
+		tableColumnCore.setLastSortValueChange(SystemTime.getCurrentTime());
 		sortValue = valueToSort;
 
 		// Columns with SWT Paint Listeners usually rely on a repaint whenever the
 		// sort value changes
 		if (cellSWTPaintListeners != null
-				|| tableColumn.hasCellOtherListeners("SWTPaint")) {
+				|| tableColumnCore.hasCellOtherListeners("SWTPaint")) {
     	setFlag(FLAG_VISUALLY_CHANGED_SINCE_REFRESH);
 			//redraw();
 		}
@@ -928,6 +1018,36 @@ public abstract class TableCellSWTBase
 		return sortValue;
 	}
 
+	@Override
+	public String 
+	getTextEquivalent()
+	{
+		return( textEquiv );
+	}
+
+	@Override
+	public void 
+	setTextEquivalent( 
+		String str )
+	{
+		textEquiv = str;
+	}
+	
+	@Override
+	public double 
+	getNumeric()
+	{
+		return( numericValue );
+	}
+	
+	@Override
+	public void 
+	setNumeric(
+		double d)
+	{
+		numericValue = d;
+	}
+	
 	@Override
 	public boolean isValid() {
 		// Called often.. inline faster
@@ -1074,13 +1194,21 @@ public abstract class TableCellSWTBase
 				Collator collator = Collator.getInstance(Locale.getDefault());
 				return collator.compare(ourSortValue, otherSortValue);
 			}
+			if (ourSortValue instanceof StringSupplier && otherSortValue instanceof StringSupplier) {
+				// Collator.getInstance cache's Collator object, so this is relatively
+				// fast.  However, storing it as static somewhere might give a small
+				// performance boost.  If such an approach is take, ensure that the static
+				// variable is updated the user chooses an different language.
+				Collator collator = Collator.getInstance(Locale.getDefault());
+				return collator.compare(((StringSupplier)ourSortValue).get(), ((StringSupplier)otherSortValue).get());
+			}
 			try {
 				return ourSortValue.compareTo(otherSortValue);
 			} catch (ClassCastException e) {
 				// It's possible that a row was created, but not refreshed yet.
 				// In that case, one sortValue will be String, and the other will be
 				// a comparable object that the plugin defined.  Those two sortValues
-				// may not be compatable (for good reason!), so just skip it.
+				// may not be compatible (for good reason!), so just skip it.
 			}
 		} catch (Exception e) {
 			System.out.println("Could not compare cells");
@@ -1096,7 +1224,7 @@ public abstract class TableCellSWTBase
 		}
 
 		if (cellSWTPaintListeners != null
-				|| tableColumn.hasCellOtherListeners("SWTPaint")) {
+				|| tableColumnCore.hasCellOtherListeners("SWTPaint")) {
 			return true;
 		}
 
@@ -1104,19 +1232,25 @@ public abstract class TableCellSWTBase
 	}
 
 	@Override
-	public boolean setText(String text) {
+	public boolean 
+	setText(
+		StringSupplier textSupplier) 
+	{
 		if (isDisposed()) {
 			return false;
 		}
 
-		if (text == null)
-			text = "";
+		if ( textSupplier == null ){
+			
+			textSupplier = StringSupplierBasic.EMPTY_STRING;
+		}
+		
 		boolean bChanged = false;
 
-		if (hasFlag(FLAG_SORTVALUEISTEXT) && !text.equals(sortValue)) {
+		if (hasFlag(FLAG_SORTVALUEISTEXT) && !textSupplier.equals(sortValue)) {
 			bChanged = true;
-			sortValue = text;
-			tableColumn.setLastSortValueChange(SystemTime.getCurrentTime());
+			sortValue = textSupplier;
+			tableColumnCore.setLastSortValueChange(SystemTime.getCurrentTime());
 			if (bDebug)
 				debug("Setting SortValue to text;");
 		}
@@ -1129,18 +1263,18 @@ public abstract class TableCellSWTBase
 		//  		return false;
 		//  	}
 
-		if (uiSetText(text) && !hasFlag(FLAG_SORTVALUEISTEXT))
+		if (uiSetText(textSupplier) && !hasFlag(FLAG_SORTVALUEISTEXT))
 			bChanged = true;
 
 		if (bDebug) {
-			debug("setText (" + bChanged + ") : " + text);
+			debug("setText (" + bChanged + ") : " + textSupplier.get());
 		}
 
 		if (bChanged) {
 			setFlag(FLAG_VISUALLY_CHANGED_SINCE_REFRESH);
 		}
 
-		boolean do_auto = tableColumn == null ? false : tableColumn.doesAutoTooltip();
+		boolean do_auto = tableColumnCore == null ? false : tableColumnCore.doesAutoTooltip();
 
 		// If we were using auto tooltips (and we aren't any more), then
 		// clear up previously set tooltips.
@@ -1152,13 +1286,21 @@ public abstract class TableCellSWTBase
 		}
 
 		else {
-			this.oToolTip = text;
+			this.oToolTip = textSupplier;
 			setFlag(FLAG_TOOLTIPISAUTO);
 		}
 
 		return bChanged;
 	}
 
+	@Override
+	public boolean 
+	setText(
+		String text)
+	{
+		return( setText( new StringSupplierBasic( text )));
+	}
+	
 	@Override
 	public void setToolTip(Object tooltip) {
 		oToolTip = tooltip;
@@ -1172,12 +1314,38 @@ public abstract class TableCellSWTBase
 
 	@Override
 	public Object getToolTip() {
-		return ( TableTooltips.tooltips_disabled && !tableColumn.doesAutoTooltip())?null:oToolTip;
+		if ( TableTooltips.tooltips_disabled && !tableColumnCore.doesAutoTooltip()){
+			
+			return( null );
+		}
+		
+		if ( oToolTip instanceof StringSupplier ){
+			
+			return(((StringSupplier)oToolTip).get());
+			
+		}else{
+			
+			return( oToolTip );
+		}
 	}
 
 	@Override
-	public Object getDefaultToolTip() {
-		return ( TableTooltips.tooltips_disabled && !tableColumn.doesAutoTooltip())?null:defaultToolTip;
+	public Object 
+	getDefaultToolTip() 
+	{
+		if ( TableTooltips.tooltips_disabled && !tableColumnCore.doesAutoTooltip()){
+			
+			return( null );
+		}
+		
+		if ( defaultToolTip instanceof StringSupplier ){
+			
+			return(((StringSupplier)defaultToolTip).get());
+			
+		}else{
+			
+			return( defaultToolTip );
+		}
 	}
 
 	@Override
@@ -1185,7 +1353,7 @@ public abstract class TableCellSWTBase
 		defaultToolTip = tt;
 	}
 
-	public abstract boolean uiSetText(String text);
+	public abstract boolean uiSetText(StringSupplier text);
 
   @Override
   public void doPaint(GC gc) {
@@ -1220,17 +1388,23 @@ public abstract class TableCellSWTBase
 	// @see com.biglybt.ui.swt.views.table.TableCellSWT#getTableRowSWT()
 	@Override
 	public TableRowSWT getTableRowSWT() {
-		if (tableRow instanceof TableRowSWT) {
-			return (TableRowSWT)tableRow;
+		if (tableRowSWT instanceof TableRowSWT) {
+			return (TableRowSWT)tableRowSWT;
 		}
 		return null;
 	}
 
   @Override
   public TableRowCore getTableRowCore() {
-    return tableRow;
+    return tableRowSWT;
   }
 
+  public TableColumnSWT
+  getTableColumnSWT()
+  {
+	  return( tableColumnSWT );
+  }
+  
   private String flagToText(int flag, boolean onlySet) {
   	StringBuilder sb = new StringBuilder();
   	sb.append((flag & FLAG_DISPOSED) > 0 ? 'D' : onlySet ? ' ' : 'd');
@@ -1261,7 +1435,7 @@ public abstract class TableCellSWTBase
 
 	@Override
 	public TableColumnCore getTableColumnCore() {
-		return tableColumn;
+		return tableColumnCore;
 	}
 
 	@Override
@@ -1286,7 +1460,7 @@ public abstract class TableCellSWTBase
 
 	@Override
 	public boolean isMouseOver() {
-		if (tableRow != null && !tableRow.isVisible()) {
+		if (tableRowSWT != null && !tableRowSWT.isVisible()) {
 			// XXX: Should trigger event and set mouseOver false?
 			return false;
 		}
@@ -1298,6 +1472,9 @@ public abstract class TableCellSWTBase
   	if (isInvisibleAndCanRefresh())
   		return false;
 
+  	if ( icon == img && graphic == null ){
+  		return( true );
+  	}
   	icon = img;
 
     graphic = null;
@@ -1323,8 +1500,8 @@ public abstract class TableCellSWTBase
 			return false;
   	}
 
-		if (tableColumn == null
-				|| tableColumn.getType() != TableColumnCore.TYPE_GRAPHIC) {
+		if (tableColumnCore == null
+				|| tableColumnCore.getType() != TableColumnCore.TYPE_GRAPHIC) {
       return false;
     }
 
@@ -1339,8 +1516,10 @@ public abstract class TableCellSWTBase
 
     if (changed) {
     	setFlag(FLAG_VISUALLY_CHANGED_SINCE_REFRESH);
-    	if (tableRow == null || tableRow.isVisible()) {
-		    redraw();
+    	if (tableRowSWT == null || tableRowSWT.isVisible()) {
+    		if ( !tableRowSWT.isInPaintItem()){
+    			redraw();
+    		}
 	    }
     }
 
@@ -1360,7 +1539,7 @@ public abstract class TableCellSWTBase
 
 	public boolean isInvisibleAndCanRefresh() {
   	return !isDisposed() && !isShown()
-				&& (refreshListeners != null || tableColumn.hasCellRefreshListener());
+				&& (refreshListeners != null || tableColumnCore.hasCellRefreshListener());
 	}
 
   @Override
@@ -1438,7 +1617,7 @@ public abstract class TableCellSWTBase
 
 	@Override
 	public int[] getMouseOffset() {
-		Point ofs = ((TableViewSWT) tableRow.getView()).getTableCellMouseOffset(this);
+		Point ofs = ((TableViewSWT) tableRowSWT.getView()).getTableCellMouseOffset(this);
 		return ofs == null ? null : new int[] { ofs.x, ofs.y };
 	}
 
@@ -1447,9 +1626,9 @@ public abstract class TableCellSWTBase
 		if (isDisposed()) {
 			return null;
 		}
-		if (tableColumn.isObfuscated()) {
-			if (tableColumn instanceof ObfuscateCellText) {
-				return ((ObfuscateCellText)tableColumn).getObfuscatedText(this);
+		if (tableColumnCore.isObfuscated()) {
+			if (tableColumnCore instanceof ObfuscateCellText) {
+				return ((ObfuscateCellText)tableColumnCore).getObfuscatedText(this);
 			}
 
 			return "";
@@ -1459,14 +1638,19 @@ public abstract class TableCellSWTBase
 
 	@Override
 	public boolean useSimpleSortValue() {
-		if (tableRow == null) {
+		if (tableRowSWT == null) {
 			return false;
 		}
-		TableView view = tableRow.getView();
+		TableView view = tableRowSWT.getView();
 		if (view == null) {
 			return false;
 		}
-		return view.getSortColumnCount() > 0;
+		// Since cells often use sort value to determine if they need to update
+		// their text, using simple sort value can prevent changes from being
+		// displayed
+		// Cells of sort columns are always invalid (afaik), so they always update properly
+		// Cells not in sort must not be simple to trigger new text
+		return view.getSortColumnCount() > 1 && view.hasSortColumn(tableColumnCore);
 	}
 	
 	@Override

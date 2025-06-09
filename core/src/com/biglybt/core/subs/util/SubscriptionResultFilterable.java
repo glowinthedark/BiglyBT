@@ -1,24 +1,20 @@
 /*
- * Created on Dec 2, 2016
- * Created by Paul Gardner
+ * Copyright (C) Bigly Software.  All Rights Reserved.
  *
- * Copyright 2016 Azureus Software, Inc.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
-
 
 package com.biglybt.core.subs.util;
 
@@ -44,15 +40,20 @@ SubscriptionResultFilterable
 	private final String			torrent_link;
 	private final String			details_link;
 	private final String			category;
+	private final String			desc;
 
 	private long				time;
+	private boolean				read;
 	private long				seeds_peers_sort;
 	private String				seeds_peers;
 	private int					seed_count;
+	private int					peer_count;
+	private int					completed_count;
 	private long				votes_comments_sort;
 	private String				votes_comments;
 	private int					rank;
 	private long				asset_date;
+	private String[]			tags;
 
 	private LightHashMap<Object,Object>	user_data;
 
@@ -63,7 +64,7 @@ SubscriptionResultFilterable
 	{
 		subs		= _subs;
 		result_id	= _result.getID();
-
+		
 		Map<Integer,Object>	properties = _result.toPropertyMap();
 
 		name = (String)properties.get( SearchResult.PR_NAME );
@@ -88,8 +89,10 @@ SubscriptionResultFilterable
 			}
 		}
 
-		size = (Long)properties.get( SearchResult.PR_SIZE );
+		Long l_size = (Long)properties.get( SearchResult.PR_SIZE );
 
+		size = l_size==null?0:l_size;
+		
 		String tl = (String)properties.get( SearchResult.PR_TORRENT_LINK );
 
 		if ( tl == null ){
@@ -102,13 +105,15 @@ SubscriptionResultFilterable
 		details_link = (String)properties.get( SearchResult.PR_DETAILS_LINK );
 
 		category = (String)properties.get( SearchResult.PR_CATEGORY );
-
+		
 		Date	ad = (Date)properties.get( SearchResult.PR_ASSET_DATE );
 		
 		if ( ad != null ){
 			
 			asset_date = ad.getTime();
 		}
+		
+		desc = (String)(String)properties.get( SearchResult.PR_DESCRIPTION );
 		
 		updateMutables( _result, properties );
 	}
@@ -118,6 +123,8 @@ SubscriptionResultFilterable
 		SubscriptionResult		_result,
 		Map<Integer,Object>		properties	)
 	{
+		read = _result.getRead();
+
 		Date pub_date = (Date)properties.get( SearchResult.PR_PUB_DATE );
 
 		if ( pub_date == null ){
@@ -138,10 +145,17 @@ SubscriptionResultFilterable
 			}
 		}
 
+		tags = (String[])properties.get( SearchResult.PR_TAGS );
+
 		long seeds 		= (Long)properties.get( SearchResult.PR_SEED_COUNT );
 		long leechers 	= (Long)properties.get( SearchResult.PR_LEECHER_COUNT );
 
+		long cc = (Long)properties.get( SearchResult.PR_COMPLETED_COUNT );
+		
+		completed_count 	= cc<0?-1:(int)cc;
+
 		seed_count = (int)(seeds<0?0:seeds);
+		peer_count = (int)(leechers<0?0:leechers);
 		
 		seeds_peers = (seeds<0?"--":String.valueOf(seeds)) + "/" + (leechers<0?"--":String.valueOf(leechers));
 
@@ -243,6 +257,13 @@ SubscriptionResultFilterable
 	}
 
 	@Override
+	public int 
+	getNbPeers()
+	{
+		return( peer_count );
+	}
+
+	@Override
 	public String
 	getSeedsPeers()
 	{
@@ -256,6 +277,13 @@ SubscriptionResultFilterable
 		return( seeds_peers_sort );
 	}
 
+	@Override
+	public int 
+	getNbCompleted()
+	{
+		return( completed_count );
+	}
+	
 	@Override
 	public String
 	getVotesComments()
@@ -299,6 +327,20 @@ SubscriptionResultFilterable
 	}
 
 	@Override
+	public String 
+	getDescription()
+	{
+		return( desc );
+	}
+	
+	@Override
+	public String[] 
+	getTags()
+	{
+		return( tags );
+	}
+	
+	@Override
 	public long
 	getTime()
 	{
@@ -316,26 +358,19 @@ SubscriptionResultFilterable
 	public boolean
 	getRead()
 	{
-		SubscriptionResult result = subs.getHistory().getResult( result_id );
-
-		if ( result != null ){
-
-			return( result.getRead());
-		}
-
-		return( true );
+		return( read );
 	}
 
 	@Override
 	public void
 	setRead(
-		boolean		read )
+		boolean		_read )
 	{
 		SubscriptionResult result = subs.getHistory().getResult( result_id );
 
 		if ( result != null ){
 
-			result.setRead( read );
+			result.setRead( _read );
 		}
 	}
 

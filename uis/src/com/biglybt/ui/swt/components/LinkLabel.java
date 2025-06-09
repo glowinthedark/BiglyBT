@@ -24,6 +24,7 @@ import org.eclipse.swt.events.MouseAdapter;
 import org.eclipse.swt.events.MouseEvent;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
@@ -101,9 +102,12 @@ LinkLabel
 		if (tooltip == null && !hyperlink.equals(label.getText())) {
 			Utils.setTT(label,hyperlink.replaceAll("&", "&&"));
 		}
-	    label.setCursor(label.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
+		
+		Display display = label.getDisplay();
+		
+	    label.setCursor(display.getSystemCursor(SWT.CURSOR_HAND));
 	    
-	    label.setForeground(Colors.blue);
+	    Utils.setLinkForeground( label );
 	    
 	    MouseAdapter ml = (MouseAdapter)label.getData( MOUSE_LISTENER_KEY );
 	    
@@ -162,7 +166,7 @@ LinkLabel
 	public static void makeLinkedLabel(Label label, Runnable runnable) {
 		
 	    label.setCursor(label.getDisplay().getSystemCursor(SWT.CURSOR_HAND));
-	    label.setForeground(Colors.blue);
+	    Utils.setLinkForeground(label);
 	    label.addMouseListener(new MouseAdapter() {
 	      @Override
 	      public void mouseDoubleClick(MouseEvent e) {

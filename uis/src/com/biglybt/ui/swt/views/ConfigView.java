@@ -18,6 +18,9 @@
 package com.biglybt.ui.swt.views;
 
 import java.util.List;
+
+import static com.biglybt.core.config.ConfigKeys.ICFG_USER_MODE;
+
 import java.util.*;
 
 import org.eclipse.swt.SWT;
@@ -65,17 +68,60 @@ import com.biglybt.pif.ui.config.ConfigSection;
 import com.biglybt.pif.ui.config.IntListParameter;
 import com.biglybt.pif.ui.config.Parameter;
 
-public class ConfigView implements UISWTViewCoreEventListener {
+public class ConfigView implements UISWTViewCoreEventListener, ConfigSectionRepository.ConfigSectionRepositoryListener {
 	private static final LogIDs LOGID = LogIDs.GUI;
 
-	// For highligting via showSeection.  option map contains "select" key with "value".
+	// For highlighting via showSeection.  option map contains "select" key with "value".
 	// (multiple) config widgets can setData(SELECT_KEY, "value"), which means they will be
 	// highlighted
 	public static final String SELECT_KEY	= "ConfigView.select_key";
 	public static final String TREEITEMDATA_CONFIGSECTION = "ConfigSectionSWT";
 	public static final String TREEITEMDATA_PANEL = "Panel";
+	public static final String TREEITEMDATA_ITEM = "ConfigView.TreeItem";
+	
 	private static Font groupFont = null;
 
+	
+	public static String
+	getSectionContext(
+			Control	c )
+	{
+		String groups = "";
+		
+		while( c != null ){
+
+			if ( c instanceof Group ){
+				
+				String text = ((Group)c).getText().trim();
+				
+				if ( !text.isEmpty()){
+					
+					groups = " [" + text + groups +  "]";
+				}
+			}
+			TreeItem item = (TreeItem)c.getData( TREEITEMDATA_ITEM );
+
+			if ( item != null ){
+
+				String	str = groups;
+				
+				while( item != null ){
+					
+					str = "->" + item.getText() + str;
+					
+					item = item.getParentItem();
+				}
+				
+				return( MessageText.getString( "ConfigView.title.full" ) + str );
+			}
+
+			c = c.getParent();
+		}
+
+		return( null );
+	}
+	  
+	  
 	final Map<TreeItem, BaseConfigSection> sections = new HashMap<>();
   // Only access on SWT Thread
 	final List<BaseConfigSection> sectionsCreated = new ArrayList<>(1);
@@ -95,11 +141,16 @@ public class ConfigView implements UISWTViewCoreEventListener {
 	private String startSection;
 	private UISWTView swtView;
 
+	ConfigSectionRebuildRunner rebuildSectionRunnable = configSection -> Utils.execSWTThread(
+			() -> ensureSectionBuilt(
+					findTreeItem(configSection.getConfigSectionID()), true));
+
+	
 	public ConfigView() {
   }
 
   private void initialize(final Composite composite) {
-  	// need to initalize composite now, since getComposite can
+  	// need to initialize composite now, since getComposite can
   	// be called at any time
     cConfig = new Composite(composite, SWT.NONE);
 
@@ -119,13 +170,13 @@ public class ConfigView implements UISWTViewCoreEventListener {
     // all config sections are loaded (ie. plugin ones).
     // TODO: Maybe add them on the fly?
     CoreFactory.addCoreRunningListener(core -> Utils.execSWTThread(() -> {
-	    _initialize(composite);
+	    _initialize(composite instanceof Shell);
 	    label.dispose();
 	    composite.layout(true, true);
     }));
   }
 
-  private void _initialize(final Composite composite) {
+  private void _initialize( boolean applyClose ) {
 
     GridData gridData;
     /*
@@ -147,27 +198,24 @@ public class ConfigView implements UISWTViewCoreEventListener {
     \--------------------------------------------------------------------/
     */
     try {
-      Display d = composite.getDisplay();
+      Display d = cConfig.getDisplay();
       GridLayout configLayout;
 
-	    assert cConfig != null;
-	    SashForm form = new SashForm(cConfig,SWT.HORIZONTAL);
+	  SashForm form = new SashForm(cConfig,SWT.HORIZONTAL);
       gridData = new GridData(GridData.FILL_BOTH);
 	    form.setLayoutData(gridData);
 
-      Composite cLeftSide = new Composite(form, SWT.BORDER);
-      gridData = new GridData(GridData.FILL_BOTH);
-	    cLeftSide.setLayoutData(gridData);
+      Composite cLeftSide = Utils.createSkinnedComposite( form, SWT.BORDER, new GridData(GridData.FILL_BOTH));
 
       FormLayout layout = new FormLayout();
       cLeftSide.setLayout(layout);
 
-			BubbleTextBox bubbleTextBox = new BubbleTextBox(cLeftSide, SWT.BORDER
-					| SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL | SWT.SINGLE);
-			final Text txtFilter = bubbleTextBox.getTextWidget();
-			Composite cFilterArea = bubbleTextBox.getMainWidget();
+      BubbleTextBox bubbleTextBox = new BubbleTextBox(cLeftSide, SWT.BORDER
+    		  | SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL | SWT.SINGLE);
+      final Text txtFilter = bubbleTextBox.getTextWidget();
+      
+      Composite cFilterArea = bubbleTextBox.getMainWidget();
 
-      txtFilter.setMessage(MessageText.getString("ConfigView.filter"));
       txtFilter.addModifyListener(e -> filterTree(txtFilter.getText()));
 
       tree = new Tree(cLeftSide, SWT.NONE);
@@ -179,16 +227,17 @@ public class ConfigView implements UISWTViewCoreEventListener {
 
       formData = new FormData();
       formData.bottom = new FormAttachment(100, -5);
-			formData.left = new FormAttachment(0, 2);
-			formData.right = new FormAttachment(100, -2);
-	    cFilterArea.setLayoutData(formData);
-
+      formData.left = new FormAttachment(0, 2);
+      formData.right = new FormAttachment(100, -2);
+      
+      bubbleTextBox.setMessageAndLayout( MessageText.getString("ConfigView.filter"), formData );
+ 
       formData = new FormData();
       formData.top = new FormAttachment(0, 0);
       formData.left = new FormAttachment(0,0);
       formData.right = new FormAttachment(100,0);
-			formData.bottom = new FormAttachment(cFilterArea, -5);
-	    tree.setLayoutData(formData);
+      formData.bottom = new FormAttachment(cFilterArea, -5);
+      tree.setLayoutData(formData);
 
       Composite cRightSide = new Composite(form, SWT.NULL);
       configLayout = new GridLayout();
@@ -198,7 +247,7 @@ public class ConfigView implements UISWTViewCoreEventListener {
 
       	// Header
 
-      Composite cHeader = new Composite(cRightSide, SWT.BORDER);
+      Composite cHeader = Utils.createSkinnedComposite(cRightSide, SWT.BORDER, new GridData(GridData.FILL_HORIZONTAL | GridData.VERTICAL_ALIGN_CENTER));
 
       configLayout = new GridLayout();
       configLayout.marginHeight = 3;
@@ -206,8 +255,6 @@ public class ConfigView implements UISWTViewCoreEventListener {
       configLayout.numColumns = 2;
       configLayout.marginRight = 5;
       cHeader.setLayout(configLayout);
-      gridData = new GridData(GridData.FILL_HORIZONTAL | GridData.VERTICAL_ALIGN_CENTER);
-	    cHeader.setLayoutData(gridData);
 
       cHeader.setBackground(Colors.getSystemColor(d, SWT.COLOR_LIST_SELECTION));
       cHeader.setForeground(Colors.getSystemColor(d, SWT.COLOR_LIST_SELECTION_TEXT));
@@ -324,6 +371,8 @@ public class ConfigView implements UISWTViewCoreEventListener {
      */
     pluginSections = ConfigSectionRepository.getInstance().getList();
 
+    ConfigSectionRepository.getInstance().addListener( this );
+    
 		BaseConfigSection[] internalSections = {
                                          new ConfigSectionMode(),
                                          new ConfigSectionStartShutdown(),
@@ -340,7 +389,7 @@ public class ConfigView implements UISWTViewCoreEventListener {
                                          new ConfigSectionTransferLAN(),
                                          new ConfigSectionFile(),
                                          new ConfigSectionFileMove(),
-                                         new ConfigSectionFileTorrents(),
+                                         new ConfigSectionFileTorrentsSWT(),
                                          new ConfigSectionFileTorrentsDecoding(),
                                          new ConfigSectionFilePerformance(),
                                          new ConfigSectionInterfaceSWT(),
@@ -366,73 +415,13 @@ public class ConfigView implements UISWTViewCoreEventListener {
 
     pluginSections.addAll(0, Arrays.asList(internalSections));
 
-		ConfigSectionRebuildRunner rebuildSectionRunnable = configSection -> Utils.execSWTThread(
-				() -> ensureSectionBuilt(
-						findTreeItem(configSection.getConfigSectionID()), true));
 
-		for (BaseConfigSection section : pluginSections) {
+    for (BaseConfigSection section : pluginSections){
 
-			section.setRebuildRunner(rebuildSectionRunnable);
+    	buildSection( section );
+    }
 
-			String section_key = section.getSectionNameKey();
-			String section_name = MessageText.getString(section_key);
-
-			try {
-				TreeItem treeItem;
-				String location = section.getParentSectionID();
-
-				if (location == null || location.length() == 0
-						|| location.equalsIgnoreCase(ConfigSection.SECTION_ROOT)) {
-					//int position = findInsertPointFor(section_name, tree);
-					//if ( position == -1 ){
-					treeItem = new TreeItem(tree, SWT.NULL);
-					// }else{
-					//	  treeItem = new TreeItem(tree, SWT.NULL, position);
-					//}
-				} else {
-					TreeItem treeItemFound = findTreeItem(tree, location);
-					if (treeItemFound != null) {
-						if (location.equalsIgnoreCase(ConfigSection.SECTION_PLUGINS)) {
-							// Force ordering by name here.
-							int position = findInsertPointFor(section_name, treeItemFound);
-							if (position == -1) {
-								treeItem = new TreeItem(treeItemFound, SWT.NULL);
-							} else {
-								treeItem = new TreeItem(treeItemFound, SWT.NULL, position);
-							}
-						} else {
-							treeItem = new TreeItem(treeItemFound, SWT.NULL);
-						}
-					} else {
-						treeItem = new TreeItem(tree, SWT.NULL);
-					}
-				}
-
-				ScrolledComposite sc = new ScrolledComposite(cConfigSection, SWT.H_SCROLL | SWT.V_SCROLL);
-				sc.setExpandHorizontal(true);
-				sc.setExpandVertical(true);
-				sc.setLayoutData(new GridData(GridData.FILL_BOTH));
-				ScrollBar verticalBar = sc.getVerticalBar();
-				if (verticalBar != null) {
-					verticalBar.setIncrement(16);
-				}
-				sc.addListener(SWT.Resize,
-						(event) -> setupSC((ScrolledComposite) event.widget));
-
-				Messages.setLanguageText(treeItem, section_key);
-				treeItem.setData(TREEITEMDATA_PANEL, sc);
-				treeItem.setData("ID", section.getConfigSectionID());
-				treeItem.setData(TREEITEMDATA_CONFIGSECTION, section);
-
-				sections.put(treeItem, section);
-
-			} catch (Exception e) {
-				Logger.log(new LogEvent(LOGID, "ConfigSection plugin '"
-						+ section.getConfigSectionID() + "' caused an error", e));
-			}
-	  }
-
-    final Display d = composite.getDisplay();
+    final Display d = cConfig.getDisplay();
 
 		final Listener shortcut_listener = e -> {
 			if ((e.stateMask & (SWT.MOD1 | SWT.CONTROL)) == 0 && e.keyCode != SWT.COMMAND) {
@@ -482,7 +471,7 @@ public class ConfigView implements UISWTViewCoreEventListener {
 		cConfigSection.addDisposeListener(
 				e -> d.removeFilter(SWT.KeyDown, shortcut_listener));
 
-    if (composite instanceof Shell) {
+    if ( applyClose ) {
     	initApplyCloseButton();
     } else {
     	initSaveButton();
@@ -519,6 +508,109 @@ public class ConfigView implements UISWTViewCoreEventListener {
     }
   }
 
+  private void
+  buildSection(
+	BaseConfigSection	section )
+  {
+		section.setRebuildRunner(rebuildSectionRunnable);
+
+		String section_key = section.getSectionNameKey();
+		String section_name = MessageText.getString(section_key);
+
+		try {
+			TreeItem treeItem;
+			String location = section.getParentSectionID();
+
+			if (location == null || location.length() == 0
+					|| location.equalsIgnoreCase(ConfigSection.SECTION_ROOT)) {
+				//int position = findInsertPointFor(section_name, tree);
+				//if ( position == -1 ){
+				treeItem = new TreeItem(tree, SWT.NULL);
+				// }else{
+				//	  treeItem = new TreeItem(tree, SWT.NULL, position);
+				//}
+			} else {
+				TreeItem treeItemFound = findTreeItem(tree, location);
+				if (treeItemFound != null) {
+					if (location.equalsIgnoreCase(ConfigSection.SECTION_PLUGINS)) {
+						// Force ordering by name here.
+						int position = findInsertPointFor(section_name, treeItemFound);
+						if (position == -1) {
+							treeItem = new TreeItem(treeItemFound, SWT.NULL);
+						} else {
+							treeItem = new TreeItem(treeItemFound, SWT.NULL, position);
+						}
+					} else {
+						treeItem = new TreeItem(treeItemFound, SWT.NULL);
+					}
+				} else {
+					treeItem = new TreeItem(tree, SWT.NULL);
+				}
+			}
+
+			ScrolledComposite sc = new ScrolledComposite(cConfigSection, SWT.H_SCROLL | SWT.V_SCROLL);
+			sc.setExpandHorizontal(true);
+			sc.setExpandVertical(true);
+			sc.setLayoutData(new GridData(GridData.FILL_BOTH));
+			ScrollBar verticalBar = sc.getVerticalBar();
+			if (verticalBar != null) {
+				verticalBar.setIncrement(16);
+			}
+			sc.addListener(SWT.Resize,
+					(event) -> setupSC((ScrolledComposite) event.widget));
+
+			Messages.setLanguageText(treeItem, section_key);
+			treeItem.setData(TREEITEMDATA_PANEL, sc);
+			treeItem.setData("ID", section.getConfigSectionID());
+			treeItem.setData(TREEITEMDATA_CONFIGSECTION, section);
+			sc.setData(TREEITEMDATA_ITEM, treeItem);
+
+			sections.put(treeItem, section);
+
+		} catch (Exception e) {
+			Logger.log(new LogEvent(LOGID, "ConfigSection plugin '"
+					+ section.getConfigSectionID() + "' caused an error", e));
+		}
+  }
+  public void
+  sectionAdded(
+		 BaseConfigSection section)
+  {
+	  Utils.execSWTThread(()->{
+		  buildSection( section );
+	  });
+  }
+  
+  public void
+  sectionRemoved(
+		 BaseConfigSection section)
+  {
+	  Utils.execSWTThread(()->{
+		  for (Map.Entry<TreeItem, BaseConfigSection> entry: sections.entrySet()){
+			  
+			  if ( entry.getValue() == section ){
+				  
+				  TreeItem treeItem = entry.getKey();
+				  
+				  sections.remove( treeItem );
+				  
+				  ScrolledComposite composite = (ScrolledComposite)treeItem.getData(TREEITEMDATA_PANEL);
+				  
+				  if ( composite != null && !composite.isDisposed()){
+					
+					  composite.dispose();
+				  }
+				  
+				  if ( !treeItem.isDisposed()){
+					  
+					  treeItem.dispose();
+				  }
+				  
+				  break;
+			  }
+		  }
+	  }); 
+  }
 
 	private static void setupSC(ScrolledComposite sc) {
 		if (sc == null) {
@@ -563,15 +655,20 @@ public class ConfigView implements UISWTViewCoreEventListener {
 				try {
 					ArrayList<TreeItem> foundItems = new ArrayList<>();
 					TreeItem[] items = tree.getItems();
-					try {
-						tree.setRedraw(false);
-						for (TreeItem item : items) {
-							item.setExpanded(false);
+					try{
+						cConfig.setLayoutDeferred( true );
+						try {
+							tree.setRedraw(false);
+							for (TreeItem item : items) {
+								item.setExpanded(false);
+							}
+	
+							filterTree(items, filterText, foundItems);
+						} finally {
+							tree.setRedraw(true);
 						}
-
-						filterTree(items, filterText, foundItems);
-					} finally {
-						tree.setRedraw(true);
+					}finally{
+						cConfig.setLayoutDeferred(false);
 					}
 				} finally {
 					if (shell != null) {
@@ -738,13 +835,38 @@ public class ConfigView implements UISWTViewCoreEventListener {
 
 		return( result );
 	}
-
+	
 	private void
 	showSection(
 		TreeItem 	section,
 		boolean		focus,
 		Map			options )
 	{
+		int userMode = COConfigurationManager.getIntParameter(ICFG_USER_MODE);
+				
+		if ( showSectionSupport( section, focus, options )){
+				
+			return;
+		}
+		
+		if ( userMode < 2 ){
+					
+			userMode++;
+			
+			COConfigurationManager.setParameter(ICFG_USER_MODE, userMode );
+			
+			Utils.execSWTThreadLater( 250, ()->showSection( section, focus, options ));
+		}
+	}
+
+	private boolean
+	showSectionSupport(
+		TreeItem 	section,
+		boolean		focus,
+		Map			options )
+	{
+		boolean result = true;
+		
 		saveLatestSelection( section );
 
 		ScrolledComposite item = (ScrolledComposite)section.getData(TREEITEMDATA_PANEL);
@@ -767,10 +889,12 @@ public class ConfigView implements UISWTViewCoreEventListener {
 				
 				if ( select != null ){
 					
-					Control hit = hilightText2( item, select );
-					
+					Control hit = highlightText2( item, select );
+										
 					if ( hit != null ){
-						
+					
+						item.layout( true, true );
+
 						Utils.execSWTThreadLater(
 							1,
 								() -> {
@@ -782,39 +906,47 @@ public class ConfigView implements UISWTViewCoreEventListener {
 
 									item.setOrigin(origin);
 								});
+						
+					}else{
+						
+						result = false;
 					}
 				}
 			}
+			
 			if ( focus ){
+				
 				layoutConfigSection.topControl.traverse( SWT.TRAVERSE_TAB_NEXT);
 			}
 		}
+		
+		return( result );
 	}
 
-	private void hilightText(Composite c, String text) {
+	private void highlightText(Composite c, String text) {
 		Control[] children = c.getChildren();
 		for (Control child : children) {
 			if (child instanceof Composite) {
-				hilightText((Composite) child, text);
+				highlightText((Composite) child, text);
 			}
 
 			if (child instanceof Label) {
 				if (((Label) child).getText().toLowerCase().contains(text)) {
-					hilightControl(child,text,true);
+					highlightControl(child,text,true);
 				}
 			} else if (child instanceof Group) {
 				if (((Group) child).getText().toLowerCase().contains(text)) {
-					hilightControl(child,text,true);
+					highlightControl(child,text,true);
 				}
 			} else if (child instanceof Button) {
 				if (((Button) child).getText().toLowerCase().contains(text)) {
-					hilightControl(child,text,true);
+					highlightControl(child,text,true);
 				}
 			} else if (child instanceof org.eclipse.swt.widgets.List) {
 				String[] items = ((org.eclipse.swt.widgets.List)child).getItems();
 				for (String item : items) {
 					if (item.toLowerCase().contains(text)) {
-						hilightControl(child,text,true);
+						highlightControl(child,text,true);
 						break;
 					}
 				}
@@ -822,26 +954,26 @@ public class ConfigView implements UISWTViewCoreEventListener {
 				String[] items = ((Combo)child).getItems();
 				for (String item : items) {
 					if (item.toLowerCase().contains(text)) {
-						hilightControl(child,text,true);
+						highlightControl(child,text,true);
 						break;
 					}
 				}
 			}else if (child instanceof Text) {
 				if (((Text) child).getText().toLowerCase().contains(text)) {
-					hilightControl(child,text,true);
+					highlightControl(child,text,true);
 				}
 			}else if (child instanceof Spinner) {
 				if (((Spinner) child).getText().toLowerCase().contains(text)) {
-					hilightControl(child,text,true);
+					highlightControl(child,text,true);
 				}
 			}
 		}
 	}
 	
-	private Control hilightText2(Composite c, String select) {
+	private Control highlightText2(Composite c, String select) {
 		String cSelectKey = (String)c.getData( SELECT_KEY );
 		if (select.equals(cSelectKey)){
-			hilightControl(c, "", false);
+			highlightControl(c, "", false);
 			return null;
 		}
 
@@ -850,7 +982,7 @@ public class ConfigView implements UISWTViewCoreEventListener {
 		Control[] children = c.getChildren();
 		for (Control child : children) {
 			if (child instanceof Composite) {
-				Control x = hilightText2((Composite) child, select);
+				Control x = highlightText2((Composite) child, select);
 				if ( x != null ){
 					if ( first_control == null ){
 						first_control = x;
@@ -867,7 +999,7 @@ public class ConfigView implements UISWTViewCoreEventListener {
 					first_control = child;
 				}
 								
-				hilightControl( child, select, false);
+				highlightControl( child, select, false);
 			}
 		}
 		
@@ -879,73 +1011,47 @@ public class ConfigView implements UISWTViewCoreEventListener {
 	 *
 	 * @since 4.5.1.1
 	 */
-	private void hilightControl(Control child, String text, boolean type1 ) {
-		child.setFont(headerFont);
+	private void highlightControl(Control control, String text, boolean type1 ) {
+		control.setFont(headerFont);
 		
-		if ( Utils.isGTK3 ){
-
-				// problem with checkbox/radio controls not supporting setting foreground text color
-				// so use alternative 
+		if ( Constants.isWindows ){
 			
-			Composite parent = child.getParent();
-			if (parent == null) {
-				return;
-			}
+			control.setBackground(Colors.getSystemColor(control.getDisplay(), SWT.COLOR_INFO_BACKGROUND));
 			
-			parent.addPaintListener(e -> {
-				GC gc = e.gc;
-
-				assert gc != null;
-				gc.setAdvanced(true);
-				gc.setAntialias(SWT.ON);
-
-				Point pp = parent.toDisplay(0, 0);
-				Point cp = child.toDisplay(0, 0 );
-
-				Rectangle bounds = child.getBounds();
-
-
-				int	width 	= bounds.width;
-				int height	= bounds.height;
-
-				gc.setForeground(Colors.fadedRed );
-
-				gc.drawRectangle( cp.x-pp.x-1, cp.y-pp.y-1, width+2, height+2 );
-			});
-					
-			Object ld = child.getLayoutData();
+			control.setForeground(Colors.getSystemColor(control.getDisplay(), SWT.COLOR_INFO_FOREGROUND));
 			
-			if ( ld instanceof GridData || ld == null ){
-				
-				Point size = child.computeSize( SWT.DEFAULT,  SWT.DEFAULT );
-
-				GridData gd = ld == null?new GridData():(GridData)ld;
-				
-				gd.minimumHeight = gd.heightHint = size.y + 2;
-				gd.minimumWidth = gd.widthHint = size.x + 2;
-				
-				child.setLayoutData( gd );
-			}
 		}else{
-			child.setBackground(Colors.getSystemColor(child.getDisplay(), SWT.COLOR_INFO_BACKGROUND));
-			child.setForeground(Colors.getSystemColor(child.getDisplay(), SWT.COLOR_INFO_FOREGROUND));
+			
+			control.setBackground(Utils.isDarkAppearanceNative()?Colors.dark_grey:Colors.fadedYellow );
 		}
 		
-		if ( child instanceof Composite ){
+		if ( control instanceof Composite ){
+			
+			Composite comp = (Composite)control;
+			
+			for ( Control kid: comp.getChildren()) {
+				
+				highlightControl( kid, text, type1 );
+			}
 			
 			if ( type1 ){
-				hilightText((Composite)child, text );
+				highlightText( comp, text );
 			}else{
-				hilightText2((Composite)child, text );
+				highlightText2( comp, text );
 			}
 		}
 	}
 
-	private void ensureSectionBuilt(TreeItem treeSection, boolean recreateIfAlreadyThere) {
+	private void 
+	ensureSectionBuilt(
+		TreeItem treeSection, 
+		boolean recreateIfAlreadyThere) 
+	{
 		if (treeSection == null) {
 			return;
 		}
-    ScrolledComposite item = (ScrolledComposite)treeSection.getData(TREEITEMDATA_PANEL);
+    
+		ScrolledComposite item = (ScrolledComposite)treeSection.getData(TREEITEMDATA_PANEL);
 
 		if (item == null) {
 			return;
@@ -1007,13 +1113,19 @@ public class ConfigView implements UISWTViewCoreEventListener {
 			// to layout correctly after their font is changed
 
 		if (filterText.length() > 0) {
-			hilightText(c, filterText);
+			highlightText(c, filterText);
 
 		}
 
 		sectionsCreated.add(configSection);
 
 		item.setContent(c);
+		
+		c.addListener( SWT.Move, (ev)->{
+			
+				// for use in SWTThread when hacking scroll behaviour on Linux
+			item.setData("LastScrollTime", SystemTime.getMonotonousTime());
+		});
 	}
 
 	private static void buildUnavailableSection(Composite parent,
@@ -1292,33 +1404,36 @@ public class ConfigView implements UISWTViewCoreEventListener {
     }
   }
 
-  private void delete() {
-  	save();
-		for (BaseConfigSection section : sectionsCreated) {
-    	try {
-    		section.deleteConfigSection();
-    	} catch (Exception e) {
-    		Debug.out("Error while deleting config section", e);
-    	}
-    }
-  	sectionsCreated.clear();
-  	if ( pluginSections != null ){
-  		pluginSections.clear();
-  	}
-	  if (tree != null && !tree.isDisposed()) {
-		  TreeItem[] items = tree.getItems();
-			for (TreeItem item : items) {
-				Composite c = (Composite) item.getData(TREEITEMDATA_PANEL);
-				Utils.disposeComposite(c);
-				item.setData(TREEITEMDATA_PANEL, null);
-				item.setData(TREEITEMDATA_CONFIGSECTION, null);
+  private void delete( boolean forRebuild ) {
+	  save();
+	  for (BaseConfigSection section : sectionsCreated) {
+		  try {
+			  section.deleteConfigSection();
+		  } catch (Exception e) {
+			  Debug.out("Error while deleting config section", e);
 		  }
 	  }
-    Utils.disposeComposite(cConfig);
+	  sectionsCreated.clear();
+	  if ( pluginSections != null ){
+		  pluginSections.clear();
+	  }
 
-  	Utils.disposeSWTObjects(headerFont, filterFoundFont);
-		headerFont = null;
-		filterFoundFont = null;
+	  ConfigSectionRepository.getInstance().removeListener( this );
+
+	  if (tree != null && !tree.isDisposed()) {
+		  TreeItem[] items = tree.getItems();
+		  for (TreeItem item : items) {
+			  Composite c = (Composite) item.getData(TREEITEMDATA_PANEL);
+			  Utils.disposeComposite(c);
+			  item.setData(TREEITEMDATA_PANEL, null);
+			  item.setData(TREEITEMDATA_CONFIGSECTION, null);
+		  }
+	  }
+	  Utils.disposeComposite(cConfig, !forRebuild);
+
+	  Utils.disposeSWTObjects(headerFont, filterFoundFont);
+	  headerFont = null;
+	  filterFoundFont = null;
   }
 
 	private static String getFullTitle() {
@@ -1375,6 +1490,12 @@ public class ConfigView implements UISWTViewCoreEventListener {
 		}
   }
 
+  @Override
+  public boolean informOfDuplicates(int type){
+	  	// need this so we are informed of multiple config section selection events for same section
+	 return( type == UISWTViewEvent.TYPE_DATASOURCE_CHANGED );
+  }
+  
 	@Override
 	public boolean eventOccurred(UISWTViewEvent event) {
     switch (event.getType()) {
@@ -1384,7 +1505,7 @@ public class ConfigView implements UISWTViewCoreEventListener {
         break;
 
       case UISWTViewEvent.TYPE_DESTROY:
-        delete();
+        delete(false);
         break;
 
       case UISWTViewEvent.TYPE_INITIALIZE:
@@ -1485,7 +1606,7 @@ public class ConfigView implements UISWTViewCoreEventListener {
 					boolean use_composite = resource_name == null || tab_folder != null;
 
 					curComposite = use_composite ? new Composite(group_parent, SWT.NONE)
-							: new Group(group_parent, SWT.NULL);
+							: Utils.createSkinnedGroup(group_parent, SWT.NULL);
 
 					Control relatedControl = null;
 					if (!use_composite) {
@@ -1681,6 +1802,11 @@ public class ConfigView implements UISWTViewCoreEventListener {
 				swt_param = new DirectorySwtParameter(curComposite,
 						(DirectoryParameterImpl) param);
 
+			} else if (param instanceof DateTimeParameterImpl) {
+
+				swt_param = new DateTimeSwtParameter(curComposite,
+						(DateTimeParameterImpl) param);
+
 			} else if (param instanceof ActionParameterImpl) {
 
 				ActionParameterImpl _param = (ActionParameterImpl) param;
@@ -1839,7 +1965,7 @@ public class ConfigView implements UISWTViewCoreEventListener {
 
 					if ( tab_parent == null ){
 
-						tab_parent = new Group( current_composite, SWT.NULL);
+						tab_parent = Utils.createSkinnedGroup( current_composite, SWT.NULL);
 
 						Messages.setLanguageText(tab_parent, tg_resource );
 

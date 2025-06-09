@@ -139,12 +139,14 @@ public class LoggerImpl {
 	private class RedirectorStream
 		extends ByteArrayOutputStream
 	{
-		protected final PrintStream ps;
+		private final PrintStream ps;
 
-		protected final LogIDs logID;
+		private final LogIDs logID;
 
-		protected final int logType;
+		private final int logType;
 
+		private boolean flushing = false;
+		
 		protected RedirectorStream(PrintStream _ps, LogIDs _logID, int _logType) {
 			super(80);
 			ps = _ps;
@@ -174,25 +176,42 @@ public class LoggerImpl {
 		}
 
 		@Override
-		public synchronized void flush()
-				throws IOException {
-			super.flush();
-
-			if (count == 0) {
+		public synchronized void 
+		flush()
+			throws IOException 
+		{
+				// protect against recursion...
+			
+			if ( flushing ){
+				
 				return;
 			}
-			if (buf[count - 1] != '\n' && count < 2048) {
-				return;
+			
+			try{
+				flushing = true;
+				
+				super.flush();
+	
+				if (count == 0) {
+					return;
+				}
+				if (buf[count - 1] != '\n' && count < 2048) {
+					return;
+				}
+	
+				String s = toString("utf-8");
+				if (s.endsWith("\r\n")) {
+					s = s.substring(0, s.length() - 2);
+				} else if (s.endsWith("\n")) {
+					s = s.substring(0, s.length() - 1);
+				}
+				log(new LogEvent(logID, logType, s));
+				super.reset();
+			}finally{
+				
+				flushing = false;
+				
 			}
-
-			String s = toString("utf-8");
-			if (s.endsWith("\r\n")) {
-				s = s.substring(0, s.length() - 2);
-			} else if (s.endsWith("\n")) {
-				s = s.substring(0, s.length() - 1);
-			}
-			log(new LogEvent(logID, logType, s));
-			super.reset();
 		}
 
 	}
@@ -307,11 +326,16 @@ public class LoggerImpl {
 
 		alertLogger.log(logText);
 
-		alertHistory.add(alert);
-
-		if (alertHistory.size() > MAXHISTORY)
-			alertHistory.remove(0);
-
+		synchronized( alertHistory ){
+			
+			alertHistory.add(alert);
+	
+			if (alertHistory.size() > MAXHISTORY){
+				
+				alertHistory.remove(0);
+			}
+		}
+		
 		for (int i = 0; i < alertListeners.size(); i++) {
 			try {
 				Object listener = alertListeners.get(i);

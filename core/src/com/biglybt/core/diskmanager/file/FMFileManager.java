@@ -25,35 +25,25 @@ package com.biglybt.core.diskmanager.file;
  *
  */
 
-import java.io.File;
 
 import com.biglybt.core.torrent.TOTorrent;
-import com.biglybt.core.util.LinkFileMap;
+import com.biglybt.core.util.IndentWriter;
+import com.biglybt.core.util.StringInterner;
 
 public interface
 FMFileManager
 {
 	public FMFile
 	createFile(
-		FMFileOwner	owner,
-		File		file,
-		int			type,
-		boolean		force )
+		FMFileOwner				owner,
+		StringInterner.FileKey	file,
+		int						type,
+		boolean					force )
 
 		throws FMFileManagerException;
-
+	
 	public void
-	setFileLinks(
-		TOTorrent			torrent,
-		LinkFileMap			links );
-
-	public File
-	getFileLink(
-		TOTorrent			torrent,
-		int					from_index,
-		File				from_file );
-
-	public boolean
-	hasLinks(
-		TOTorrent			torrent	);
+	generateEvidence(
+		IndentWriter		writer,
+		TOTorrent			torrent );
 }

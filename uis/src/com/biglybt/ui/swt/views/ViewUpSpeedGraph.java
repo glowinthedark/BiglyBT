@@ -22,7 +22,6 @@ import com.biglybt.core.CoreFactory;
 import com.biglybt.core.CoreRunningListener;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
-import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import com.biglybt.core.config.COConfigurationManager;
@@ -78,7 +77,7 @@ public class ViewUpSpeedGraph
 	private void initialize(Composite composite) {
 		GridData gridData;
 
-		composite.setLayout( new GridLayout());
+		composite.setLayout(Utils.getSimpleGridLayout(1));
 		upSpeedCanvas = new Canvas(composite, SWT.DOUBLE_BUFFERED);
 		gridData = new GridData(GridData.FILL_BOTH);
 		upSpeedCanvas.setLayoutData(gridData);
@@ -104,7 +103,9 @@ public class ViewUpSpeedGraph
 
 	private void delete() {
 		Utils.disposeComposite(upSpeedCanvas);
-		upSpeedGraphic.dispose();
+		if ( upSpeedGraphic != null ){
+			upSpeedGraphic.dispose();
+		}
 	}
 
 	private String getFullTitle() {
@@ -116,6 +117,10 @@ public class ViewUpSpeedGraph
 	}
 
 	private void refresh() {
+		if ( upSpeedGraphic == null ){
+			return;
+		}
+		
 		if (!everRefreshed) {
 			everRefreshed = true;
 			timerEvent = SimpleTimer.addPeriodicEvent("TopBarSpeedGraphicView", 1000, new TimerEventPerformer() {
@@ -124,7 +129,9 @@ public class ViewUpSpeedGraph
 					if ( upSpeedCanvas.isDisposed()){
 						timerEvent.cancel();
 					}else{
-						periodicUpdate();
+						if ( Utils.isUIUpdateEnabled()){
+							periodicUpdate();
+						}
 					}
 				}
 			});

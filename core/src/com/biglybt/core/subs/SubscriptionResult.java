@@ -22,12 +22,16 @@ package com.biglybt.core.subs;
 
 import java.util.Map;
 
+import com.biglybt.core.metasearch.FilterableResult;
 import com.biglybt.pifimpl.local.utils.UtilitiesImpl;
 
 public interface
 SubscriptionResult
 	extends UtilitiesImpl.PluginSubscriptionResult
 {
+	public Subscription
+	getSubscription();
+	
 	public String
 	getID();
 
@@ -43,6 +47,9 @@ SubscriptionResult
 	public Map<Integer,Object>
 	toPropertyMap();
 
+	public String
+	getAssetHash();
+	
 	public String
 	getDownloadLink();
 
@@ -66,4 +73,7 @@ SubscriptionResult
 
 	public boolean
 	isDeleted();
+	
+	public FilterableResult
+	getFilterableResult();
 }

@@ -257,8 +257,18 @@ public class RemotePairingWindow
 					printArea.y = (fullHeight - boxSizeAndPadding - sizeAccess.y + textPadding) / 2;
 
 					sp.printString(e.gc, printArea, SWT.CENTER | SWT.TOP);
-					e.gc.setBackground(Colors.white);
-					e.gc.setForeground(Colors.blue);
+					
+					if ( Utils.isDarkAppearanceNative()) {
+						e.gc.setBackground(Colors.getSystemColor(control.getDisplay(), SWT.COLOR_WIDGET_BACKGROUND));
+						e.gc.setForeground(Colors.getSystemColor(control.getDisplay(), SWT.COLOR_WIDGET_FOREGROUND));
+						
+						if ( Utils.isDarkAppearanceNativeWindows()){
+							oldColor = Colors.getSystemColor(control.getDisplay(), SWT.COLOR_WIDGET_FOREGROUND);
+						}
+					}else {
+						e.gc.setBackground(Colors.white);
+						e.gc.setForeground(Colors.blue);
+					}
 
 					int xStart = (fullWidth - allBoxesWidth) / 2;
 					int yStart = printArea.y + sizeAccess.y + textPadding;
@@ -455,9 +465,11 @@ public class RemotePairingWindow
 				}
 			});
 
+			String defColorID = Utils.isDarkAppearanceNative()?"#c0c0c0":"#000000";
+			
 			soStatusText.setTextID("remote.pairing.test.running");
-			soStatusText.setTextColor(ColorCache.getColor(control.getDisplay(),
-					"#000000"));
+			
+			soStatusText.setTextColor(ColorCache.getColor(control.getDisplay(), defColorID ));
 			soToClipboard.setText(" ");
 
 			final PairingTestListener testListener = new PairingTestListener() {
@@ -473,7 +485,7 @@ public class RemotePairingWindow
 
 					int outcome = test.getOutcome();
 					String iconID = null;
-					String colorID = "#000000";
+					String colorID = defColorID;
 					switch (outcome) {
 						case PairingTest.OT_SUCCESS:
 							fallBackStatusText = MessageText.getString("remote.pairing.test.success");

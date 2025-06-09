@@ -133,7 +133,7 @@ public class BrowserWindow
 				+ Math.random(), browser, null, true);
 		context.addMessageListener(new TorrentListener());
 		context.addMessageListener(new VuzeListener());
-		context.addMessageListener(new DisplayListener());
+		context.addMessageListener(new DisplayListener(browser));
 		context.addMessageListener(new ConfigListener(browser));
 		context.addMessageListener(
 				new MetaSearchListener(new OpenCloseSearchDetailsListener() {
@@ -246,12 +246,7 @@ public class BrowserWindow
 	}
 
 	public void waitUntilClosed() {
-		Display display = shell.getDisplay();
-		while (!shell.isDisposed()) {
-			if (!display.readAndDispatch()) {
-				display.sleep();
-			}
-		}
+		Utils.readAndDispatchLoop( shell );
 	}
 
 	public ClientMessageContext

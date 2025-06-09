@@ -19,6 +19,7 @@
 
 package com.biglybt.core.tracker.client.impl;
 
+import java.net.InetAddress;
 import java.net.URL;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -28,6 +29,7 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
+import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.tracker.TrackerPeerSource;
 import com.biglybt.core.tracker.TrackerPeerSourceAdapter;
@@ -107,7 +109,8 @@ TRTrackerAnnouncerImpl
 				}
 			});
 
-	final Map	tracker_peer_cache		= new LinkedHashMap();	// insertion order - most recent at end
+	final Map<String,TRTrackerAnnouncerResponsePeer>	tracker_peer_cache		= new LinkedHashMap<>();	// insertion order - most recent at end
+	
 	private final AEMonitor tracker_peer_cache_mon 	= new AEMonitor( "TRTrackerClientClassic:PC" );
 	private int	cache_peers_used;
 
@@ -231,6 +234,13 @@ TRTrackerAnnouncerImpl
 
 				@Override
 				public void
+				clearTrackerResponseCache()
+				{
+					TRTrackerAnnouncerImpl.this.clearTrackerResponseCache();
+				}
+				
+				@Override
+				public void
 				informResponse(
 					TRTrackerAnnouncerHelper		helper,
 					TRTrackerAnnouncerRequest		request,
@@ -292,7 +302,21 @@ TRTrackerAnnouncerImpl
 	{
 		return( exportTrackerCache());
 	}
+	
+	@Override
+	public void
+	clearTrackerResponseCache()
+	{
+		try{
+			tracker_peer_cache_mon.enter();
+			
+			tracker_peer_cache.clear();
+			
+		}finally{
 
+			tracker_peer_cache_mon.exit();
+		}
+	}
 
 	@Override
 	public void
@@ -307,55 +331,58 @@ TRTrackerAnnouncerImpl
 	}
 
 	protected Map
-	exportTrackerCache()
+	exportTrackerCache() 
 	{
 		Map	res = new LightHashMap(1);
-
-		List	peers = new ArrayList();
-
-		res.put( "tracker_peers", peers );
 
 		try{
 			tracker_peer_cache_mon.enter();
 
-			Iterator it = tracker_peer_cache.values().iterator();
+			if ( !tracker_peer_cache.isEmpty()){
+				
+				List	peers = new ArrayList();
 
-			while( it.hasNext()){
+				res.put( "tracker_peers", peers );
 
-				TRTrackerAnnouncerResponsePeer	peer = (TRTrackerAnnouncerResponsePeer)it.next();
-
-				LightHashMap entry = new LightHashMap();
-
-				entry.put( "ip", peer.getAddress().getBytes());
-				entry.put( "src", peer.getSource().getBytes());
-				entry.put( "port", new Long(peer.getPort()));
-
-				int	udp_port = peer.getUDPPort();
-				if ( udp_port != 0 ){
-					entry.put( "udpport", new Long( udp_port));
+				Iterator it = tracker_peer_cache.values().iterator();
+	
+				while( it.hasNext()){
+	
+					TRTrackerAnnouncerResponsePeer	peer = (TRTrackerAnnouncerResponsePeer)it.next();
+	
+					LightHashMap entry = new LightHashMap();
+	
+					entry.put( "ip", peer.getAddress().getBytes());
+					entry.put( "src", peer.getSource().getBytes());
+					entry.put( "port", new Long(peer.getPort()));
+	
+					int	udp_port = peer.getUDPPort();
+					if ( udp_port != 0 ){
+						entry.put( "udpport", new Long( udp_port));
+					}
+					int	http_port = peer.getHTTPPort();
+					if ( http_port != 0 ){
+						entry.put( "httpport", new Long( http_port));
+					}
+	
+					entry.put( "prot", new Long(peer.getProtocol()));
+	
+					byte	az_ver = peer.getAZVersion();
+	
+					if ( az_ver != TRTrackerAnnouncer.AZ_TRACKER_VERSION_1 ){
+						entry.put( "azver", new Long( az_ver ));
+					}
+	
+					entry.compactify(0.9f);
+	
+					peers.add( entry );
 				}
-				int	http_port = peer.getHTTPPort();
-				if ( http_port != 0 ){
-					entry.put( "httpport", new Long( http_port));
-				}
-
-				entry.put( "prot", new Long(peer.getProtocol()));
-
-				byte	az_ver = peer.getAZVersion();
-
-				if ( az_ver != TRTrackerAnnouncer.AZ_TRACKER_VERSION_1 ){
-					entry.put( "azver", new Long( az_ver ));
-				}
-
-				entry.compactify(0.9f);
-
-				peers.add( entry );
-			}
 
 			if (Logger.isEnabled())
 				Logger.log(new LogEvent(getTorrent(), LOGID,
 						"TRTrackerClient: exported " + tracker_peer_cache.size()
 								+ " cached peers"));
+			}
 		}finally{
 
 			tracker_peer_cache_mon.exit();
@@ -379,12 +406,36 @@ TRTrackerAnnouncerImpl
 				return( 0 );
 			}
 
+			NetworkAdmin admin = NetworkAdmin.getSingleton();
+
 			try{
 				tracker_peer_cache_mon.enter();
 
 				List<TRTrackerAnnouncerResponsePeer>	peers = TRTrackerAnnouncerFactoryImpl.getCachedPeers( map );
 
-				for ( TRTrackerAnnouncerResponsePeer peer: peers ){
+				for ( TRTrackerAnnouncerResponsePeer peer: peers ){				
+
+					String address = peer.getAddress();
+					
+					String network = AENetworkClassifier.categoriseAddress( address );
+				   
+					if ( network == AENetworkClassifier.AT_PUBLIC ){
+					
+							// don't add ourselves to the cache, likely not useful
+							// ignore port in case our port has changed and this is stale
+							// info
+						
+						try{
+							InetAddress ip = InetAddress.getByName( address );
+							
+							if ( admin.isRecentPublicIPAddress( ip )){
+								
+								continue;
+							}
+						}catch( Throwable e ){
+							
+						}
+					}
 					
 					tracker_peer_cache.put( peer.getKey(), peer );
 				}
@@ -416,6 +467,8 @@ TRTrackerAnnouncerImpl
 
 		// System.out.println( "max peers= " + max );
 
+		NetworkAdmin admin = NetworkAdmin.getSingleton();
+				
 		try{
 			tracker_peer_cache_mon.enter();
 
@@ -423,6 +476,32 @@ TRTrackerAnnouncerImpl
 
 				TRTrackerAnnouncerResponsePeerImpl	peer = peers[i];
 
+				String address = peer.getAddress();
+				
+				String network = AENetworkClassifier.categoriseAddress( address );
+			   
+				if ( network == AENetworkClassifier.AT_PUBLIC ){
+				
+						// don't add ourselves to the cache, likely not useful
+						// ignore port in case our port has changed and this is stale
+						// info
+					
+					try{
+						InetAddress ip = InetAddress.getByName( address );
+						
+						if ( admin.isRecentPublicIPAddress( ip )){
+							
+							continue;
+						}
+					}catch( Throwable e ){
+						
+					}
+				}
+				
+				peer = peer.getClone();
+				
+				peer.setCached( true );
+					
 					// remove and reinsert to maintain most recent last
 
 				tracker_peer_cache.remove( peer.getKey());
@@ -668,6 +747,9 @@ TRTrackerAnnouncerImpl
 		setTrackerResponseCache(
 			Map map	);
 
+		public void
+		clearTrackerResponseCache();
+		
 		public void
 		removeFromTrackerResponseCache(
 			String ip, int tcpPort );

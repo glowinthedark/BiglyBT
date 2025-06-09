@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.dnd.Clipboard;
@@ -36,6 +37,8 @@ import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPiece;
 import com.biglybt.core.tracker.host.TRHostTorrent;
 import com.biglybt.core.util.*;
+import com.biglybt.core.util.StringInterner.StringSupplier;
+import com.biglybt.core.util.StringInterner.StringSupplierBasic;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.pif.UISWTGraphic;
@@ -106,7 +109,9 @@ public class FakeTableCell
 	private Graphic graphic;
 
 	private String text;
-
+	private String textEquiv;
+	private double numericValue = Double.NaN;
+	
 	private Object pluginDataSource;
 
 	private Object tooltip;
@@ -126,17 +131,6 @@ public class FakeTableCell
 
 	private Map<Object,Object>	userData;
 	
-	/**
-	 * @param columnRateUpDown
-	 */
-	public FakeTableCell(TableColumn column, Object ds) {
-		valid = false;
-		coreDataSource = ds;
-		this.tableColumn = (TableColumnCore) column;
-		setOrientationViaColumn();
-		tableColumn.invokeCellAddedListeners(this);
-	}
-
 	public FakeTableCell(TableColumnCore column, Object ds) {
 		valid = false;
 		coreDataSource = ds;
@@ -266,6 +260,20 @@ public class FakeTableCell
 		}
 	}
 
+	@Override
+	public void 
+	addMenuListener(
+		TableCellMenuListener listener)
+	{
+	}
+	
+	@Override
+	public void
+	removeMenuListener(
+		TableCellMenuListener listener)
+	{
+	}
+	
 	public void addMouseMoveListener(TableCellMouseMoveListener listener) {
 		try {
 			this_mon.enter();
@@ -439,6 +447,10 @@ public class FakeTableCell
 			addMouseListener((TableCellMouseListener) listenerObject);
 		}
 
+		if (listenerObject instanceof TableCellMenuListener) {
+			addMenuListener((TableCellMenuListener) listenerObject);
+		}
+
 		if (listenerObject instanceof TableCellVisibilityListener)
 			addVisibilityListener((TableCellVisibilityListener) listenerObject);
 
@@ -480,6 +492,13 @@ public class FakeTableCell
 				Debug.printStackTrace(e);
 			}
 		}
+	}
+	
+	@Override
+	public void 
+	invokeMenuListeners(
+		TableCellMenuEvent event )
+	{
 	}
 
 	// @see com.biglybt.pif.ui.tables.TableCell#getDataSource()
@@ -695,18 +714,6 @@ public class FakeTableCell
 				Map<String, Object> data = new LightHashMap<>(1);
 
 				@Override
-				public void setForegroundToErrorColor() {
-				}
-
-				@Override
-				public void setForeground(int[] rgb) {
-				}
-
-				@Override
-				public void setForeground(int red, int green, int blue) {
-				}
-
-				@Override
 				public void removeMouseListener(TableRowMouseListener listener) {
 				}
 
@@ -732,7 +739,6 @@ public class FakeTableCell
 
 				@Override
 				public TableView<?> getView() {
-					// TODO Auto-generated method stub
 					return null;
 				}
 				@Override
@@ -740,6 +746,10 @@ public class FakeTableCell
 					return null;
 				}
 
+				@Override
+				public TableCell getTableCell(TableColumn column){
+					return null;
+				}
 				@Override
 				public Object getDataSource() {
 					return FakeTableCell.this.getDataSource();
@@ -771,6 +781,11 @@ public class FakeTableCell
 	@Override
 	public String getText() {
 		return text;
+	}
+	
+	@Override
+	public StringSupplier getTextSupplier() {
+		return new StringSupplierBasic( text );
 	}
 
 	// @see com.biglybt.pif.ui.tables.TableCell#getToolTip()
@@ -938,6 +953,44 @@ public class FakeTableCell
 		return true;
 	}
 
+	@Override
+	public boolean 
+	setText(
+		StringSupplier supplier)
+	{
+		return( setText( supplier.get()));
+	}
+	
+	@Override
+	public String 
+	getTextEquivalent()
+	{
+		return( textEquiv );
+	}
+
+	@Override
+	public void 
+	setTextEquivalent( 
+		String str )
+	{
+		textEquiv = str;
+	}
+	  
+	@Override
+	public double 
+	getNumeric()
+	{
+		return( numericValue );
+	}
+	
+	@Override
+	public void 
+	setNumeric(
+		double d)
+	{
+		numericValue = d;
+	}
+	
 	// @see com.biglybt.pif.ui.tables.TableCell#setToolTip(java.lang.Object)
 	@Override
 	public void setToolTip(Object tooltip) {
@@ -1106,22 +1159,26 @@ public class FakeTableCell
 		this.cellArea = cellArea;
 
 		if (addListeners) {
-  		composite.addPaintListener(this);
-  		composite.addMouseListener(this);
-  		composite.addMouseMoveListener(this);
-  		composite.addMouseTrackListener(this);
+	  		composite.addPaintListener(this);
+	  		composite.addMouseListener(this);
+	  		composite.addMouseMoveListener(this);
+	  		composite.addMouseTrackListener(this);
 		}
-
-		setForeground(-1, -1, -1);
-		setText(null);
+		
+		setText((String)null);
 		setToolTip(null);
 
-		composite.addDisposeListener(new DisposeListener() {
-			@Override
-			public void widgetDisposed(DisposeEvent e) {
-				dispose();
-			}
+		Utils.execSWTThread(()->{
+			setForeground(-1, -1, -1);
+	
+			composite.addDisposeListener(new DisposeListener() {
+				@Override
+				public void widgetDisposed(DisposeEvent e) {
+					dispose();
+				}
+			});
 		});
+		
 		if (coreDataSource != null && !isDisposed()) {
 			invokeVisibilityListeners(TableCellVisibilityListener.VISIBILITY_SHOWN,
 					true);
@@ -1236,7 +1293,7 @@ public class FakeTableCell
 		if (isDisposed()) {
 			return null;
 		}
-		TableCellMouseEvent event = new TableCellMouseEvent();
+		TableCellMouseEvent event = new TableCellMouseEvent( e );
 		event.cell = this;
 		event.button = e.button;
 		event.keyboardState = e.stateMask;
@@ -1286,7 +1343,7 @@ public class FakeTableCell
 			disposeListeners = null;
 		}
 		tableColumn.invokeCellDisposeListeners(this);
-		tableColumn.invalidateCells();
+		//tableColumn.invalidateCells();
 	}
 
 	// @see TableCellCore#getCursorID()

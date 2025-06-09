@@ -27,6 +27,7 @@ import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.AEDiagnostics;
 import com.biglybt.core.util.DirectByteBuffer;
+import com.biglybt.core.util.StringInterner;
 
 /**
  * @author parg
@@ -41,11 +42,11 @@ FMFileTestImpl
 
 	protected
 	FMFileTestImpl(
-		FMFileOwner			_owner,
-		FMFileManagerImpl	_manager,
-		File				_file,
-		int					_type,
-		boolean				_force )
+		FMFileOwner					_owner,
+		FMFileManagerImpl			_manager,
+		StringInterner.FileKey		_file,
+		int							_type,
+		boolean						_force )
 
 		throws FMFileManagerException
 	{
@@ -53,19 +54,7 @@ FMFileTestImpl
 
 		TOTorrentFile	torrent_file = getOwner().getTorrentFile();
 
-		TOTorrent	torrent = torrent_file.getTorrent();
-
-		for (int i=0;i<torrent.getFiles().length;i++){
-
-			TOTorrentFile	f = torrent.getFiles()[i];
-
-			if ( f == torrent_file ){
-
-				break;
-			}
-
-			file_offset_in_torrent	+= f.getLength();
-		}
+		file_offset_in_torrent = torrent_file.getOffsetInTorrent();
 	}
 
 	@Override

@@ -21,7 +21,6 @@ import com.biglybt.core.download.DownloadManagerStateAttributeListener;
 import com.biglybt.core.tag.TagFeatureRateLimit;
 import com.biglybt.pif.download.DownloadException;
 import com.biglybt.pif.download.DownloadScrapeResult;
-import com.biglybt.pif.torrent.Torrent;
 
 public interface 
 DefaultRankCalculator 
@@ -40,6 +39,8 @@ DefaultRankCalculator
 	public static final int	DOWNLOAD_ORDER_SIZE					= 4;
 	public static final int	DOWNLOAD_ORDER_REVERSE_SIZE			= 5;
 	public static final int	DOWNLOAD_ORDER_ETA					= 6;
+	public static final int	DOWNLOAD_ORDER_FILE_PRIORITIES		= 7;
+	public static final int	DOWNLOAD_ORDER_REMAINING			= 8;
 
 	//
 	// Seeding Rank (SR) Limits and Values
@@ -47,7 +48,7 @@ DefaultRankCalculator
 	/** Rank that complete starts at (and incomplete ends at + 1) */
 	public static final int SR_COMPLETE_STARTS_AT = 1000000000; // billion
 
-	/** Maximimum ranking for time queue mode. 1 unit is a second */
+	/** Maximum ranking for time queue mode. 1 unit is a second */
 	public static final int SR_TIMED_QUEUED_ENDS_AT =199999999;
 
 	/** Ranks below this value are for torrents to be ignored (moved to bottom & queued) */
@@ -187,6 +188,12 @@ DefaultRankCalculator
 	public long
 	getSizeExcludingDND();
 	
+	public long
+	getRemainingExcludingDND();
+	
+	public int[]
+	getFilePriorityStats();
+	
 	public DownloadScrapeResult
 	getAggregatedScrapeResult(
 		boolean 		b );
@@ -226,10 +233,14 @@ DefaultRankCalculator
 		RankCalculatorSlotReserver	slot );
 	
 	public boolean
-	activationRequest();
+	activationRequest(
+		Runnable to_do );
 	
 	public TagFeatureRateLimit[]
 	getTagsWithDLLimits();
+	
+	public TagFeatureRateLimit[]
+	getTagsWithCDLimits();
 	
 	public boolean
 	getLastScrapeResultOk();
@@ -296,6 +307,18 @@ DefaultRankCalculator
 	public Object
 	getRelatedTo();
 
+	public int
+	compareToIgnoreStopped(
+		DefaultRankCalculator	other );
+	
+	public Object
+	getUserData(
+		Object		key );
+	
+	public void
+	setUserData(
+		Object		key, 
+		Object		value );
 	public void
 	destroy();	
 }

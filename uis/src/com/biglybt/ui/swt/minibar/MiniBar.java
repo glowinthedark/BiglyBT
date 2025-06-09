@@ -279,7 +279,6 @@ public abstract class MiniBar implements MenuBuildUtils.MenuBuilder {
 		this.stucked = null;
 		this.splash = com.biglybt.ui.swt.components.shell.ShellFactory
 				.createShell(SWT.ON_TOP);
-		((AEShell) splash).setAdjustPXforDPI(false);
 
 		int	trans = COConfigurationManager.getIntParameter( "Bar Transparency" );
 
@@ -323,7 +322,7 @@ public abstract class MiniBar implements MenuBuildUtils.MenuBuilder {
 	    try{
 	    	GC gc = new GC(lDrag);
 	    	gc.setFont(splash.getDisplay().getSystemFont());
-	    	Point textSize = gc.textExtent( "Vuze Rocks innit: 100 MB/sec");
+	    	Point textSize = gc.textExtent( "BiglyBT Rocks innit: 100 MB/sec");
 	    	int textWidth 	= textSize.x;
 	    	testTextHeight 	= textSize.y;
 

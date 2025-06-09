@@ -81,8 +81,11 @@ TagBase
 	protected static final String	AT_RATELIMIT_MAX_AGGREGATE_SR_ACTION	= "rl.maxaggsr.a";
 	protected static final String	AT_RATELIMIT_MAX_AGGREGATE_SR_PRIORITY	= "rl.maxaggsr.p";
 	protected static final String	AT_RATELIMIT_FP_SEEDING					= "rl.fps";
+	protected static final String	AT_RATELIMIT_NOT_FP_SEEDING				= "rl.nfps";
 	protected static final String	AT_RATELIMIT_BOOST						= "rl.bst";
 	protected static final String	AT_RATELIMIT_MAX_ACTIVE_DL				= "rl.maxadl";
+	protected static final String	AT_RATELIMIT_MAX_ACTIVE_CD				= "rl.maxacd";
+	protected static final String	AT_RATELIMIT_ACTIVE_LIMITS_STRICT		= "rl.als";
 	
 	protected static final String	AT_PROPERTY_PREFIX				= "pp.";
 	//protected static final String	AT_EOA_PREFIX					= "eoa.";	// meh, should be used but copy/paste error resulted in AT_PROPERTY_PREFIX being used instead 
@@ -98,6 +101,10 @@ TagBase
 	protected static final String	AT_NOTIFICATION_PUBLISH			= "noti.pub";
 	protected static final String	AT_LIMIT_ORDERING				= "max.t.o";
 	protected static final String	AT_EOS_ASSIGN_TAGS				= "eos.at";
+	protected static final String	AT_EOS_REMOVE_TAGS				= "eos.rt";
+	
+	protected static final String	AT_AUTO_APPLY_SORT_INTERVAL		= "dl.auto.sort";
+	protected static final String	AT_WEIGHT						= "dl.weight";
 
 	private static final String[] EMPTY_STRING_LIST = {};
 
@@ -155,6 +162,8 @@ TagBase
 	private TagFeatureLimits		tag_limits;
 
 	private HashMap<String,Object>		transient_properties;
+	
+	private boolean is_removed;
 	
 	protected
 	TagBase(
@@ -433,7 +442,19 @@ TagBase
 	public boolean
 	canBePublic()
 	{
-		return( readBooleanAttribute( AT_CAN_BE_PUBLIC, getCanBePublicDefault()));
+		boolean result = readBooleanAttribute( AT_CAN_BE_PUBLIC, getCanBePublicDefault());
+		
+		if ( result ){
+			
+			boolean[] autos = isTagAuto();
+
+			if ( autos[0] || autos[1] ){
+
+				result = false;
+			}
+		}
+		
+		return( result );
 	}
 
 	protected boolean
@@ -686,7 +707,19 @@ TagBase
 	setColor(
 		int[]		rgb )
 	{
-
+		if ( rgb == null ){
+			
+			if ( group != null ){
+			
+				TagGroup tg = getGroupContainer();
+				
+				if ( tg != null ){
+					
+					rgb = tg.getColor();
+				}
+			}
+		}
+		
 		boolean changed = writeStringAttribute( AT_COLOR_ID, encodeRGB( rgb ));
 
 		colour = null;
@@ -850,6 +883,58 @@ TagBase
 				tag_type.fireMetadataChanged( this );
 			}
 		}
+	}
+	
+	public int
+	getMaxActiveSeeds()
+	{
+		if ( tag_rl != null ){
+			
+			return( readLongAttribute( AT_RATELIMIT_MAX_ACTIVE_CD, 0L ).intValue());
+		}
+		
+		return( 0 );
+	}
+
+	public void
+	setMaxActiveSeeds(
+		int			max )
+	{
+		if ( tag_rl != null ){
+			
+			if ( getMaxActiveSeeds() != max ){
+			
+				writeLongAttribute( AT_RATELIMIT_MAX_ACTIVE_CD, max );
+		
+				tag_type.fireMetadataChanged( this );
+			}
+		}
+	}
+	
+	public boolean
+	getStrictActivityLimits()
+	{
+		if ( tag_rl != null ){
+			
+			return( readBooleanAttribute( AT_RATELIMIT_ACTIVE_LIMITS_STRICT, true ));
+		}
+		
+		return( false );		
+	}
+	
+	public void
+	setStrictActivityLimits(
+		boolean		b )
+	{
+		if ( tag_rl != null ){
+			
+			if ( getStrictActivityLimits() != b ){
+			
+				writeBooleanAttribute( AT_RATELIMIT_ACTIVE_LIMITS_STRICT, b );
+		
+				tag_type.fireMetadataChanged( this );
+			}
+		}		
 	}
 	
 		// initial save location
@@ -1348,7 +1433,7 @@ TagBase
 	public boolean
 	getFirstPrioritySeeding()
 	{
-		return( true );
+		return( false );
 	}
 
 	public void
@@ -1358,6 +1443,19 @@ TagBase
 		Debug.out( "not supported" );
 	}
 
+	public boolean
+	getNotFirstPrioritySeeding()
+	{
+		return( false );
+	}
+
+	public void
+	setNotFirstPrioritySeeding(
+		boolean		priority )
+	{
+		Debug.out( "not supported" );
+	}
+	
 	
 		// limits
 
@@ -1838,6 +1936,38 @@ TagBase
 			});
 	}
 	
+	public int
+	getAutoApplySortInterval()
+	{
+		return( readLongAttribute( AT_AUTO_APPLY_SORT_INTERVAL, 0L ).intValue());
+	}
+	
+	public void
+	setAutoApplySortInterval(
+		int		secs )
+	{
+		writeLongAttribute( AT_AUTO_APPLY_SORT_INTERVAL, secs );
+	}
+	
+	public void 
+	applySort()
+	{
+	}
+	
+	public int
+	getWeight()
+	{
+		return( readLongAttribute( AT_WEIGHT, 0L ).intValue());
+
+	}
+	
+	public void
+	setWeight(
+		int		weight )
+	{
+		writeLongAttribute( AT_WEIGHT, weight );
+	}
+	
 		// notifications
 
 	public int
@@ -1939,19 +2069,210 @@ TagBase
 		
 		tag_type.fireMetadataChanged( this );
 	}
+	
+		// remove tags
+		
+	public List<Tag>
+	getTagRemoves()
+	{
+		String[] tag_uids = readStringListAttribute( AT_EOS_REMOVE_TAGS, new String[0] );
+	
+		if ( tag_uids == null || tag_uids.length == 0 ){
+	
+			return( Collections.emptyList());
+		}
+		
+		List<Tag> result = new ArrayList<>();
+	
+		for ( String uid: tag_uids ){
+			
+			try{
+				Tag tag = tag_type.getTagManager().lookupTagByUID( Long.parseLong( uid ));
+				
+				if ( tag != null ){
+					
+					result.add( tag );
+				}
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
+		
+		return( result );
+	}
+	
+	public void
+	setTagRemoves(
+		List<Tag>	tags )
+	{
+		if ( tags == null ){
+	
+			tags = new ArrayList<>();
+		}
+	
+		String[] tag_uids = new String[tags.size()];
+		
+		for ( int i=0;i<tag_uids.length;i++ ){
+			
+			tag_uids[i] = String.valueOf( tags.get(i).getTagUID());
+		}
+		
+		writeStringListAttribute( AT_EOS_REMOVE_TAGS, tag_uids);
+	
+		setActionEnabled( TagFeatureExecOnAssign.ACTION_REMOVE_TAGS, !tags.isEmpty());
+		
+		tag_type.fireMetadataChanged( this );
+	}
 
+	public String
+	getPropertiesString()
+	{
+		TagFeatureProperties.TagProperty[] props = getSupportedProperties();
+
+		String text = "";
+		
+		if ( props.length > 0 ){
+
+			for ( TagFeatureProperties.TagProperty prop: props ){
+
+				String prop_str = prop.getString();
+
+				if ( prop_str.length() > 0 ){
+
+					text += (text.length()==0?"":"; ") + prop_str;
+				}
+			}
+		}
+		
+		return( text );
+	}
+	
+	public String
+	getEOAString()
+	{
+		String text = "";
+		
+		int	actions = getSupportedActions();
+
+		if ( actions != TagFeatureExecOnAssign.ACTION_NONE ){
+
+			String actions_str = "";
+
+			boolean is_peer_set = getTagType().getTagType() == TagType.TT_PEER_IPSET;
+			
+			int[]	action_ids =
+				{	TagFeatureExecOnAssign.ACTION_APPLY_OPTIONS_TEMPLATE,
+				 	TagFeatureExecOnAssign.ACTION_DESTROY,
+					TagFeatureExecOnAssign.ACTION_START,
+					TagFeatureExecOnAssign.ACTION_FORCE_START,
+					TagFeatureExecOnAssign.ACTION_NOT_FORCE_START,
+					TagFeatureExecOnAssign.ACTION_STOP,
+					TagFeatureExecOnAssign.ACTION_QUEUE,
+					TagFeatureExecOnAssign.ACTION_SCRIPT,
+					TagFeatureExecOnAssign.ACTION_PAUSE,
+					TagFeatureExecOnAssign.ACTION_RESUME,
+					TagFeatureExecOnAssign.ACTION_POST_MAGNET_URI,
+					TagFeatureExecOnAssign.ACTION_MOVE_INIT_SAVE_LOC,
+					TagFeatureExecOnAssign.ACTION_ASSIGN_TAGS,
+					TagFeatureExecOnAssign.ACTION_REMOVE_TAGS,
+					TagFeatureExecOnAssign.ACTION_HOST,
+					TagFeatureExecOnAssign.ACTION_PUBLISH,
+					TagFeatureExecOnAssign.ACTION_BAN 
+				};
+
+			String[] action_keys =
+				{ 	"label.apply.options.template",
+					is_peer_set?"azbuddy.ui.menu.disconnect":"v3.MainWindow.button.delete",
+					"v3.MainWindow.button.start",
+					"v3.MainWindow.button.forcestart",
+					"v3.MainWindow.button.notforcestart",
+					"v3.MainWindow.button.stop",
+					"ConfigView.section.queue",
+					"label.script",
+					"v3.MainWindow.button.pause",
+					"v3.MainWindow.button.resume",
+					"label.post.magnet.to.chat",
+					"label.init.save.loc.move",
+					"label.assign.tags",
+					"label.remove.tags",
+					"menu.host.on.tracker",
+					"menu.publish.on.tracker",
+					"label.ban" 
+				};
+
+			for ( int i=0; i<action_ids.length;i++ ){
+
+				int	action_id = action_ids[i];
+
+				if ( supportsAction( action_id)){
+
+					boolean enabled = isActionEnabled( action_id );
+
+					if ( enabled ){
+
+						if ( action_id == TagFeatureExecOnAssign.ACTION_SCRIPT ){
+
+							String script = getActionScript();
+
+							if ( script.length() > 63 ){
+								script = script.substring( 0, 60 ) + "...";
+							}
+
+							actions_str += (actions_str.length()==0?"":",") +
+									MessageText.getString( action_keys[i]) + "=" + script;
+							
+						}else if ( 	action_id == TagFeatureExecOnAssign.ACTION_ASSIGN_TAGS ||
+									action_id == TagFeatureExecOnAssign.ACTION_REMOVE_TAGS ){
+							
+							List<Tag> tags = action_id == TagFeatureExecOnAssign.ACTION_ASSIGN_TAGS?getTagAssigns():getTagRemoves();
+							
+							String tag_str = "";
+							
+							for ( Tag t: tags ){
+								
+								tag_str += (tag_str==""?"":";") + t.getTagName( true );
+							}
+							
+							actions_str += (actions_str.length()==0?"":",") +
+									MessageText.getString( action_keys[i]) + "=" + tag_str ;
+							
+						}else{
+
+							actions_str += (actions_str.length()==0?"":",") +
+											MessageText.getString( action_keys[i]) + "=Y";
+						}
+					}
+				}
+			}
+
+			if ( actions_str.length() > 0 ){
+
+				text += actions_str;
+			}
+		}
+		
+		return( text );
+	}
 		// others
 
+	@Override
+	public void
+	addTaggableBatch(
+		boolean		starts )
+	{
+	}
+	
 	@Override
 	public void
 	addTaggable(
 		Taggable	t )
 	{
+		tag_type.tagsOrMembershipChanged();
+		
 		t_listeners.dispatch( TL_ADD, t );
 
 		tag_type.taggableAdded( this, t );
-
-		tag_type.fireMembershipChanged( this );
 
 		if ( tag_limits != null ){
 
@@ -1964,12 +2285,11 @@ TagBase
 	removeTaggable(
 		Taggable	t )
 	{
+		tag_type.tagsOrMembershipChanged();
+		
 		t_listeners.dispatch( TL_REMOVE, t );
 
 		tag_type.taggableRemoved( this, t );
-
-		tag_type.fireMembershipChanged( this );
-
 	}
 
 	protected void
@@ -1991,17 +2311,39 @@ TagBase
 	@Override
 	public void
 	removeTag()
-	{
+	{	
+		synchronized( this ){
+			
+			if ( is_removed ){
+				
+				return;
+			}
+			
+			is_removed = true;
+		}
+		
 		boolean was_rss = isTagRSSFeedEnabled();
 
 		tag_type.removeTag( this );
 
+		setGroup( null );
+		
 		if ( was_rss ){
 
 			tag_type.getTagManager().checkRSSFeeds( this, false );
 		}
 
 		saveTransientStuff();
+	}
+	
+	@Override
+	public boolean 
+	isTagRemoved()
+	{
+		synchronized( this ){
+			
+			return( is_removed );
+		}
 	}
 
 	@Override
@@ -2109,6 +2451,8 @@ TagBase
 
 		for( Taggable t: taggables ){
 
+			tag_type.tagsOrMembershipChanged();
+			
 			t_listeners.dispatch( TL_REMOVE, t );
 
 			tag_type.taggableRemoved( this, t );
@@ -2698,7 +3042,7 @@ TagBase
 
 
  	@Override
-  public void
+ 	public void
  	tick(
  		long	mono_now,
  		int 	count )
@@ -2974,41 +3318,50 @@ TagBase
 
 							value += vals[0];
 
-							if ( vals.length > 1 ){
-
-								String options = vals[1];
-
-								boolean new_dls = options.contains( "am=3;" );
-
-								if ( new_dls ){
+							if ( value.trim().isEmpty()){
 								
-									value += "," + MessageText.getString( "label.scope" );
-									
-									value += "=";
-									
-									value += MessageText.getString( "label.new.downloads" );
-									
-								}else{
-									
-									boolean auto_add 	= !options.contains( "am=2;" );
-									boolean auto_remove = !options.contains( "am=1;" );
+									// no constraint set
+								
+								value = null;
+								
+							}else{
+								
+								if ( vals.length > 1 ){
 	
+									String options = vals[1];
 	
-									if ( auto_add && auto_remove ){
+									boolean new_dls = options.contains( "am=3;" );
 	
-									}else if ( auto_add || auto_remove ){
-	
+									if ( new_dls ){
+									
 										value += "," + MessageText.getString( "label.scope" );
-	
+										
 										value += "=";
-	
-										if ( auto_add ){
-	
-											value += MessageText.getString( "label.addition.only" );
-	
-										}else{
-	
-											value += MessageText.getString( "label.removal.only" );
+										
+										value += MessageText.getString( "label.new.downloads" );
+										
+									}else{
+										
+										boolean auto_add 	= !options.contains( "am=2;" );
+										boolean auto_remove = !options.contains( "am=1;" );
+		
+		
+										if ( auto_add && auto_remove ){
+		
+										}else if ( auto_add || auto_remove ){
+		
+											value += "," + MessageText.getString( "label.scope" );
+		
+											value += "=";
+		
+											if ( auto_add ){
+		
+												value += MessageText.getString( "label.addition.only" );
+		
+											}else{
+		
+												value += MessageText.getString( "label.removal.only" );
+											}
 										}
 									}
 								}
@@ -3083,7 +3436,7 @@ TagBase
 		}
 		
 		@Override
-		public String 
+		public String[]
 		explainTaggable(
 			Taggable taggable)
 		{

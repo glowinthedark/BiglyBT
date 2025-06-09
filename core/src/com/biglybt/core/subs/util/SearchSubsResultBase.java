@@ -27,6 +27,9 @@ public interface
 SearchSubsResultBase
 {
 	public String
+	getID();
+
+	public String
 	getName();
 
 	public byte[]
@@ -41,12 +44,18 @@ SearchSubsResultBase
 	public int
 	getNbSeeds();
 	
+	public int
+	getNbPeers();
+	
 	public String
 	getSeedsPeers();
 
 	public long
 	getSeedsPeersSortValue();
 
+	public int
+	getNbCompleted();
+	
 	public String
 	getVotesComments();
 
@@ -64,7 +73,13 @@ SearchSubsResultBase
 
 	public String
 	getCategory();
+	
+	public String[]
+	getTags();
 
+	public String
+	getDescription();
+	
 	public long
 	getTime();
 

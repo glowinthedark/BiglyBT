@@ -82,6 +82,8 @@ public interface UISWTInstance extends UIInstance {
 	 */
 	public static final String VIEW_TOPBAR = "TopBar";
 
+	public static final String VIEW_RIGHTBAR = "RightBar";
+
 	/**
 	 * Statistics View, usually invoked from Tools->Statistics
 	 */
@@ -92,6 +94,17 @@ public interface UISWTInstance extends UIInstance {
 	 */
 	public static final String VIEW_SIDEBAR_AREA = "SideBarArea";
 
+	/**
+	 * ID for adding views to the rightbar
+	 */
+	
+	public static final String VIEW_RIGHTBAR_AREA = "RightBarArea";
+
+	/**
+	 * Various other views not covered by the above categories
+	 */
+	
+	public static final String VIEW_INTERNAL = "Internal";
 
 	/** Retrieve the SWT Display object that Azureus uses (when in SWT mode).
 	 * If you have a thread that does some periodic/asynchronous stuff, Azureus

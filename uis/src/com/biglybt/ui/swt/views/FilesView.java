@@ -23,7 +23,6 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.*;
-import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.dnd.*;
@@ -51,7 +50,6 @@ import com.biglybt.pifimpl.local.utils.FormattersImpl;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.common.table.*;
-import com.biglybt.ui.common.table.TableViewFilterCheck.TableViewFilterCheckEx;
 import com.biglybt.ui.common.table.impl.TableColumnManager;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfoManager;
@@ -65,17 +63,20 @@ import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.components.BufferedLabel;
 import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.pifimpl.UISWTViewCoreEventListener;
+import com.biglybt.ui.swt.shells.PopOutManager;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.views.file.FileInfoView;
 import com.biglybt.ui.swt.views.table.*;
 import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
 import com.biglybt.ui.swt.views.table.impl.TableViewTab;
+import com.biglybt.ui.swt.views.table.utils.TableColumnFilterHelper;
 import com.biglybt.ui.swt.views.table.utils.TableColumnSWTUtils;
 import com.biglybt.ui.swt.views.tableitems.files.*;
 import com.biglybt.ui.swt.views.tableitems.mytorrents.AlertsItem;
 import com.biglybt.ui.swt.views.utils.ManagerUtils;
 import com.biglybt.util.DLReferals;
 import com.biglybt.util.DataSourceUtils;
+import com.biglybt.util.MapUtils;
 import com.biglybt.util.PlayUtils;
 
 import com.biglybt.pif.ui.tables.TableManager;
@@ -91,11 +92,17 @@ import com.biglybt.pif.ui.tables.TableRowRefreshListener;
 public class FilesView
 	extends TableViewTab<DiskManagerFileInfo>
 	implements TableDataSourceChangedListener, TableSelectionListener,
-	TableViewSWTMenuFillListener, TableRefreshListener,
-	DownloadManagerStateAttributeListener, DownloadManagerListener,
-	TableLifeCycleListener, TableViewFilterCheckEx<DiskManagerFileInfo>, KeyListener, ParameterListener,
+	TableViewSWTMenuFillListener, TableRefreshListener, TableExpansionChangeListener,
+	DownloadManagerListener,
+	TableLifeCycleListener, TableViewFilterCheck<DiskManagerFileInfo>, KeyListener, ParameterListener,
 	UISWTViewCoreEventListener, ViewTitleInfo
 {
+	private static final Object	KEY_DM_TREE_STATE 		= new Object();
+	private static final Object	KEY_DM_SELECTION_STATE	= new Object();
+	
+	private static final int	ACTION_EXPAND 	= 0;
+	private static final int	ACTION_COLLAPSE = 1;
+	
 	public static final Class<com.biglybt.pif.disk.DiskManagerFileInfo> PLUGIN_DS_TYPE = com.biglybt.pif.disk.DiskManagerFileInfo.class;
 	boolean refreshing = false;
 
@@ -108,6 +115,7 @@ public class FilesView
     new DoneItem(),
     new PercentItem(),
     new FirstPieceItem(),
+    new LastPieceItem(),
     new PieceCountItem(),
     new RemainingPiecesItem(),
     new PiecesDoneAndCountItem(),
@@ -117,6 +125,7 @@ public class FilesView
     new StorageTypeItem(),
     new FileExtensionItem(),
     new FileIndexItem(),
+    new FileIndexPlus1Item(),
     new TorrentRelativePathItem(),
     new FileCRC32Item(),
     new FileMD5Item(),
@@ -128,7 +137,8 @@ public class FilesView
     new FileWriteSpeedItem(),
     new FileETAItem(),
     new RelocatedItem(),
-    new FileModifiedItem(),
+	  new FileModifiedItem(),
+	  new FileCreationItem(),
     new DownloadNameItem(),
   };
 
@@ -145,6 +155,8 @@ public class FilesView
   public boolean hide_dnd_files;
   public boolean tree_view;
 
+  private boolean viewActive;
+  
   private volatile long selection_size;
   private volatile long selection_size_with_dnd;
   private volatile long selection_done;
@@ -152,10 +164,14 @@ public class FilesView
   MenuItem path_item;
 
   TableViewSWT<DiskManagerFileInfo> tv;
+  TableColumnFilterHelper<DiskManagerFileInfo>	col_filter_helper;
+  
 	Button btnShowDND;
 	Button btnTreeView;
 	BufferedLabel lblHeader;
 
+	BubbleTextBox bubbleTextBox;
+	
 	private boolean	disableTableWhenEmpty	= true;
 	private Object datasource;
 	private Tag[] tags;
@@ -174,7 +190,7 @@ public class FilesView
 		registerPluginViews();
 
 		tv = TableViewFactory.createTableViewSWT(PLUGIN_DS_TYPE,
-				TableManager.TABLE_TORRENT_FILES, getPropertiesPrefix(), basicItems,
+				TableManager.TABLE_TORRENT_FILES, getTextPrefixID(), basicItems,
 				"firstpiece", SWT.MULTI | SWT.FULL_SELECTION | SWT.VIRTUAL);
 		
 		tv.setExpandEnabled( true );
@@ -187,6 +203,7 @@ public class FilesView
 		tv.addMenuFillListener(this);
 		tv.addLifeCycleListener(this);
 		tv.addKeyListener(this);
+		tv.addExpansionChangeListener(this);
 
 		tv.addRefreshListener( 
 			new TableRowRefreshListener(){
@@ -207,6 +224,8 @@ public class FilesView
 			});
 		
 		
+		col_filter_helper = new TableColumnFilterHelper<DiskManagerFileInfo>( tv, "fv:search" );
+
 		return tv;
 	}
 
@@ -275,10 +294,8 @@ public class FilesView
 				
 				COConfigurationManager.setParameter("FilesView.use.tree", tree_view);
 				
-					// grab before column visibility as this resets the selection :(
+				prepareSelectionState();
 				
-				selection_outstanding	= tv.getSelectedDataSources();
-
 				if ( tree_view ){
 					
 					TableColumnSWTUtils.changeColumnVisiblity( tv, tv.getTableColumn( "name" ), true );
@@ -302,14 +319,22 @@ public class FilesView
 		
 		lblHeader = new BufferedLabel(cTop, SWT.CENTER | ( Constants.isLinux?0: SWT.DOUBLE_BUFFERED));
 
-		BubbleTextBox bubbleTextBox = new BubbleTextBox(cTop, SWT.BORDER | SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL | SWT.SINGLE);
+		bubbleTextBox = new BubbleTextBox(cTop, SWT.BORDER | SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL | SWT.SINGLE);
 		Composite mainBubbleWidget = bubbleTextBox.getMainWidget();
-		bubbleTextBox.setMessage(MessageText.getString("TorrentDetailsView.filter"));
 
-		FormData fd = Utils.getFilledFormData();
-		fd.left = null;
-		mainBubbleWidget.setLayoutData(fd);
+		FormData fd = new FormData();
+		fd.right = new FormAttachment(100, 0);
+		fd.width = 140;
+		
+		bubbleTextBox.setMessageAndLayout(MessageText.getString("TorrentDetailsView.filter") , fd);
 
+		String tooltip = MessageText.getString("filter.tt.start");
+		tooltip += MessageText.getString("filesview.filter.tt.line1");
+		tooltip += MessageText.getString("column.filter.tt.line1");
+		tooltip += MessageText.getString("column.filter.tt.line2");
+
+		bubbleTextBox.setTooltip( tooltip );
+		
 		fd = new FormData();
 		fd.top = new FormAttachment(mainBubbleWidget, 10, SWT.CENTER);
 		fd.left = new FormAttachment(0, 0);
@@ -338,6 +363,15 @@ public class FilesView
 
 		parent.setTabList(new Control[] {tableParent, cTop});
 
+		parent.addListener(SWT.Activate, (ev)->{
+				viewActive = true;
+				updateSelectedContent();
+			});
+		
+		parent.addListener(SWT.Deactivate, (ev)->{
+				viewActive = false;
+			});
+		
 		return tableParent;
 	}
 
@@ -350,9 +384,6 @@ public class FilesView
 		}
 		
 		for (DownloadManager manager: managers ){
-			manager.getDownloadState().addListener(this,
-					DownloadManagerState.AT_FILE_LINKS2,
-					DownloadManagerStateAttributeListener.WRITTEN);
 
 			manager.addListener(this);
 		}
@@ -367,17 +398,19 @@ public class FilesView
 		}
 
 		for (DownloadManager manager: managers ){
-			manager.getDownloadState().removeListener(this,
-					DownloadManagerState.AT_FILE_LINKS2,
-					DownloadManagerStateAttributeListener.WRITTEN);
+			
 			manager.removeListener(this);
 		}
 	}
 
   // @see TableDataSourceChangedListener#tableDataSourceChanged(java.lang.Object)
 	@Override
-	public void tableDataSourceChanged(Object newDataSource) {
+	public void 
+	tableDataSourceChanged(
+		Object newDataSource) 
+	{
 		Tag[] newTags = DataSourceUtils.getTags(newDataSource);
+		
 		DownloadManager[] newManagers = DataSourceUtils.getDMs(newDataSource);
 		
 		if ( Arrays.deepEquals( newTags, tags ) && Arrays.equals( newManagers, managers )){
@@ -399,9 +432,13 @@ public class FilesView
 		}
 
 		DownloadManager[] oldManagers = managers;
+		
 		managers = newManagers;
+		
 		tags = newTags;
+		
 		datasource = newDataSource;
+		
 		ViewTitleInfoManager.refreshTitleInfo(this);
 		
 		if (tags != null && tags.length > 0) {
@@ -441,10 +478,84 @@ public class FilesView
 			return;
 		}
 
+		prepareSelectionState();
+		
 		addManagerListeners( managers );
 
-		if (!tv.isDisposed()) {
+		if (!tv.isDisposed()){
+			
+			String	overall_filter	= null;
+			boolean	overall_regex	= false;
+			boolean has_clash		= false;
+			
+			for ( DownloadManager manager: managers ){
+				
+				DownloadManagerState state = manager.getDownloadState();
+				
+				Map<String,Map<String,Object>> map = (Map<String,Map<String,Object>>)state.getMapAttribute( DownloadManagerState.AT_VIEW_FILTERS );
 
+				String	filter	= null;
+				boolean	regex	= false;
+				
+				if ( map != null ){
+					
+					Map<String,Object> view = map.get( "FilesView" );
+					
+					if ( view != null ){
+						
+						filter	= MapUtils.getMapString( view, "filter", null );
+						regex	= MapUtils.getMapBoolean( view, "regex", false );
+					}
+				}
+				
+				if ( filter == null ){
+					
+					if ( overall_filter != null ){
+						
+						has_clash = true;
+						
+						break;
+					}
+					
+					overall_filter = null;
+										
+				}else if ( overall_filter == null ){
+					
+					if ( !has_clash ){
+					
+						overall_filter	= filter;
+						overall_regex	= regex;
+					}
+					
+				}else{
+					
+					if ( !overall_filter.equals( filter ) || overall_regex != regex ){
+						
+						overall_filter = null;
+						
+						has_clash = true;
+						
+						break;
+					}
+				}
+			}
+			
+			if ( has_clash ){
+			
+				bubbleTextBox.setState( "", false );
+				
+			}else  if ( overall_filter != null ){
+				
+				bubbleTextBox.setState( overall_filter, overall_regex );
+				
+					// we need this here to force the filter changes to be current otherwise
+					// you get an annoying table update without the filter applied first 
+					// this is caused by the various async crap in place to rate-limit
+					// filter changes
+				
+				tv.refilter();
+			}
+						
 			if (tree_view) {
 				tv.removeAllTableRows();
 				current_root = null;
@@ -461,23 +572,118 @@ public class FilesView
 		}
 	}
 
-	// @see TableSelectionListener#deselected(TableRowCore[])
 	@Override
 	public void deselected(TableRowCore[] rows) {
-		updateSelectedContent();
+		
 	}
 
-	// @see TableSelectionListener#focusChanged(TableRowCore)
 	@Override
 	public void focusChanged(TableRowCore focus) {
 	}
 
-	// @see TableSelectionListener#selected(TableRowCore[])
 	@Override
 	public void selected(TableRowCore[] rows) {
-		updateSelectedContent();
 	}
 
+	private void
+	prepareSelectionState()
+	{
+		if ( managers == null ){
+			return;
+		}
+		
+		Map<DownloadManager,Set<Integer>> pending = null;
+		
+		synchronized( KEY_DM_SELECTION_STATE ){
+			
+			for ( DownloadManager dm: managers ){
+	
+				Set<Integer> sel = (Set<Integer>)dm.getUserData( KEY_DM_SELECTION_STATE );
+				
+				if ( sel != null ){
+					
+					if ( pending == null ){
+						
+						pending = new IdentityHashMap<>();
+					}
+					
+					pending.put( dm, sel );
+				}
+			}
+		}
+		
+		selection_outstanding = pending;
+	}
+	
+	@Override
+	public void
+	selectionChanged(
+		TableRowCore[] 		selected_rows,
+		TableRowCore[] 		deselected_rows )
+	{	
+		Map<DownloadManager,Set<Integer>>	sel_map = new HashMap<>();
+		
+		IdentityHashSet<DownloadManager>	unselected_dms = new IdentityHashSet<>();
+		
+		if ( managers != null ){
+			
+			unselected_dms.addAll( Arrays.asList( managers ));
+		}
+		
+		List<Object> selected_objects = tv.getSelectedDataSources();
+		
+		for ( Object selected: selected_objects ){
+			
+			DiskManagerFileInfo file = (DiskManagerFileInfo)selected;
+			
+			DownloadManager dm = file.getDownloadManager();
+					
+			if ( dm == null ){
+				
+				continue;	// root of multi-download view, for example
+			}
+			
+			Set<Integer> sel = sel_map.get( dm );
+			
+			if ( sel == null ){
+				
+				sel = new HashSet<>();
+				
+				sel_map.put( dm, sel );
+			}
+			
+			if ( file instanceof FilesViewNodeInner ){
+				
+				int	uid = ((FilesViewNodeInner)file).getUID();
+				
+				sel.add( uid + 1000000000 );
+				
+			}else{
+				
+				sel.add( file.getIndex());
+			}
+		}
+		
+		synchronized( KEY_DM_SELECTION_STATE ){
+			
+			for ( Map.Entry<DownloadManager,Set<Integer>> entry: sel_map.entrySet()){
+			
+				DownloadManager dm = entry.getKey();
+				
+				dm.setUserData( KEY_DM_SELECTION_STATE, entry.getValue());
+				
+				unselected_dms.remove( dm );
+			}
+		
+			for ( DownloadManager dm: unselected_dms ){
+								
+				dm.setUserData( KEY_DM_SELECTION_STATE, null );
+			}
+		}
+		
+		updateSelectedContent();
+	}
+	
 	@Override
 	public void
 	stateChanged(
@@ -515,7 +721,10 @@ public class FilesView
 		
 		if ( tree_view ){
 			
-			file = tree_file_map.get( file.getTorrentFile());
+			synchronized( tree_file_map ){
+			
+				file = tree_file_map.get( file.getTorrentFile());
+			}
 		}
 		
 		if ( file != null ){
@@ -524,7 +733,7 @@ public class FilesView
 			
 			if ( tree_view ){
 				
-					// have to get all rows, not just visible ones, as changed file might be collasped
+					// have to get all rows, not just visible ones, as changed file might be collapsed
 					// but we still want to update parent state
 				
 				rows = tv.getRowsAndSubRows( true );	
@@ -568,7 +777,7 @@ public class FilesView
 			
 		}else{
 			
-			TableRowCore row = tv.getRow( file );
+			TableRowCore row = getRowForFile( file );
 			
 			if ( row != null ){
 				
@@ -579,11 +788,100 @@ public class FilesView
 		}
 	}
 
+	private TableRowCore
+	getRowForFile(
+		DiskManagerFileInfo		file )
+	{
+		if ( tree_view ){
+			
+			synchronized( tree_file_map ){
+			
+				file = tree_file_map.get( file.getTorrentFile());
+			}
+		}
+		
+		if ( file != null ){
+			
+			TableRowCore[] rows;
+			
+			if ( tree_view ){
+								
+				rows = tv.getRowsAndSubRows( false );	
+				
+			}else{
+				
+				rows = tv.getVisibleRows();
+			}
+			
+			for ( TableRowCore row: rows ){
+				
+				DiskManagerFileInfo row_file = (DiskManagerFileInfo)row.getDataSource( true );
+				
+				if ( 	row_file == file || 
+						( 	row_file.getIndex() == file.getIndex() && 
+							row_file.getDownloadManager() == file.getDownloadManager())){
+				
+					return( row );
+				}
+			}
+		}
+		
+		return( null );
+	}
+		
+	private Map<Object,Object>	filter_cache;
+	
+	public void 
+	setRefilterCache( 
+		Map<Object,Object> cache )
+	{
+		filter_cache = cache;
+	}
+	
 	@Override
 	public boolean
 	filterCheck(
-		DiskManagerFileInfo ds, String filter, boolean regex )
-	{
+		DiskManagerFileInfo ds, String filter, boolean regex, boolean confusable )
+	{	
+		Map<Object,Object> cache = filter_cache;
+		
+		if ( cache != null ){
+			
+			Boolean[] entry = (Boolean[])cache.get( ds );
+			
+			if ( entry != null ){
+				
+				Boolean r = entry[confusable?0:1];
+				
+				if ( r != null ){
+					
+					return( r );
+				}
+			}
+		}
+		
+		boolean result = filterCheckSupport( ds, filter, regex, confusable );
+		
+		if ( cache != null ){
+			
+			Boolean[] entry = (Boolean[])cache.get( ds );
+
+			if ( entry == null ){
+				
+				entry = new Boolean[2];
+				
+				cache.put( ds, entry );
+			}
+			
+			entry[confusable?0:1] = result;
+		}
+		
+		return( result );
+	}
+	private boolean
+	filterCheckSupport(
+		DiskManagerFileInfo ds, String filter, boolean regex, boolean confusable )
+	{	
 		if ( hide_dnd_files ){
 			
 			if ( ds.isSkipped()){
@@ -623,56 +921,63 @@ public class FilesView
 		}
 
 		if ( tree_view && ds instanceof FilesViewNodeInner ){
-			
-				// don't filter intermediate tree nodes
-			
-			return( true );
-		}
-		
-		boolean filterOnPath = filter.startsWith("p:");
-		if (filterOnPath) {
-			filter = filter.substring(2);
-		}
-		
-		try {			
-			File file = ds.getFile(true);
-
-			String name;
-			
-			if (filterOnPath) {
-				name = file.getAbsolutePath();
-			} else {
-				if ( filter.startsWith( File.separator )){
-					
-					filter = filter.substring( 1 );
-					
-					if ( filter.isEmpty()){
 						
-						return( true );
+			List<FilesViewTreeNode> kids = ((FilesViewNodeInner)ds).getKids();
+			
+			boolean visible = false;
+			
+			for ( FilesViewTreeNode kid: kids ){
+				
+				if ( kid instanceof DiskManagerFileInfo ){
+				
+					if ( filterCheck((DiskManagerFileInfo)kid, filter, regex, confusable )){
+						
+						visible = true;
+						
+						break;
 					}
-					
-					name = file.getAbsolutePath();
-					
 				}else{
 					
-					name = file.getName();
+					visible = true;
+					
+					break;
 				}
 			}
-
-			String s = regex ? filter : "\\Q" + filter.replaceAll("[|;]", "\\\\E|\\\\Q") + "\\E";
-
-			boolean	match_result = true;
-
-			if ( regex && s.startsWith( "!" )){
-
-				s = s.substring(1);
-
-				match_result = false;
+			
+			return( visible );
+		}
+		
+		if ( confusable ){
+			
+			filter = GeneralUtils.getConfusableEquivalent(filter,true);
+		}
+				
+		try {			
+			File file = ds.getFile(true);
+			
+			boolean filter_on_path = false;
+			
+			if ( filter.startsWith( "p:" )){
+			
+				filter_on_path = true;
+				
+				filter = filter.substring(2);
+				
+			}else if ( filter.startsWith( File.separator )){
+				
+				filter_on_path = true;
+				
+				filter = filter.substring(1);
 			}
-
-			Pattern pattern = RegExUtil.getCachedPattern( "fv:search", s, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
-
-			return( pattern.matcher(name).find() == match_result );
+						
+			String name = filter_on_path?file.getAbsolutePath():file.getName();
+			
+			if ( confusable ){
+				
+				name = GeneralUtils.getConfusableEquivalent( name, false );
+			}
+			
+			return( col_filter_helper.filterCheck( ds, filter, regex, name, filter_on_path ));
 
 		} catch (Exception e) {
 
@@ -680,17 +985,63 @@ public class FilesView
 		}
 	}
 
-	@Override
-	public void filterSet(String filter)
-	{
-		// System.out.println( filter );
-	}
+	private String	last_filter_str = "";
+	private boolean	last_filter_regex;
 
-	/* (non-Javadoc)
-	 * @see TableViewFilterCheck.TableViewFilterCheckEx#viewChanged(TableView)
-	 */
+	@Override
+	public void 
+	filterSet(
+		String 		filter,
+		boolean		regex )
+	{
+		if ( !filter.equals( last_filter_str ) || regex != last_filter_regex ){
+			
+			for ( DownloadManager manager: managers ){
+				
+				DownloadManagerState state = manager.getDownloadState();
+				
+				Map<String,Map<String,Object>> map = (Map<String,Map<String,Object>>)state.getMapAttribute( DownloadManagerState.AT_VIEW_FILTERS );
+				
+				if ( map == null ){
+					
+					map = new HashMap<>();
+					
+				}else{
+					
+					map = new HashMap<>( map );
+				}
+				
+				Map<String,Object> view = map.get( "FilesView" );
+				
+				if ( view == null ){
+					
+					view = new HashMap<>();
+					
+					map.put( "FilesView", view );
+				}
+				
+				MapUtils.setMapString( view, "filter", filter);
+				
+				MapUtils.setMapBoolean( view,"regex", regex );
+				
+				state.setMapAttribute( DownloadManagerState.AT_VIEW_FILTERS, map );
+			}
+			
+			last_filter_str		= filter;
+			last_filter_regex	= regex;
+		}
+		
+		col_filter_helper.filterSet(filter);
+	}
+	
+
+	private boolean update_header_pending;
+
 	@Override
 	public void viewChanged(TableView<DiskManagerFileInfo> view) {
+		if ( update_header_pending ){
+			return;
+		}
 		updateHeader();
 	}
 
@@ -699,6 +1050,10 @@ public class FilesView
 		long	total_dnd 			= 0;
 		long	total_done			= 0;
 
+		if ( tv == null ){
+			return;
+		}
+		
 		Object[] dataSources = tv.getSelectedDataSources(true);
 		List<SelectedContent> listSelected = new ArrayList<>(dataSources.length);
 		for (Object ds : dataSources) {
@@ -723,9 +1078,12 @@ public class FilesView
 
 		updateHeader();
 
-		SelectedContent[] sc = listSelected.toArray(new SelectedContent[0]);
-		SelectedContentManager.changeCurrentlySelectedContent(tv.getTableID(),
-				sc, tv);
+		if ( viewActive ){
+			
+			SelectedContent[] sc = listSelected.toArray(new SelectedContent[0]);
+			SelectedContentManager.changeCurrentlySelectedContent(tv.getTableID(),
+					sc, tv);
+		}
 	}
 
 
@@ -750,11 +1108,11 @@ public class FilesView
 				
 				if ( node.isExpanded()){
 									
-					doTreeAction(nodes, 1, false );
+					doTreeAction(nodes, ACTION_COLLAPSE, false );
 					
 				}else{
 										
-					doTreeAction(nodes, 0, false );
+					doTreeAction(nodes, ACTION_EXPAND, false );
 				}
 			}finally{
 				
@@ -808,6 +1166,7 @@ public class FilesView
 
 			case "3":
 			case "4":
+			case "7":
 				if (fileInfo.getAccessMode() == DiskManagerFileInfo.READ) {
 
 					if (mode.equals("4") &&
@@ -827,7 +1186,18 @@ public class FilesView
 				ManagerUtils.browse(fileInfo);
 
 				break;
+				
+			case "6":{
 
+				DownloadManager dm = fileInfo.getDownloadManager();
+				
+				if ( dm != null ){
+				
+					UIFunctionsManager.getUIFunctions().getMDI().popoutEntryByID( MultipleDocumentInterface.SIDEBAR_SECTION_TORRENT_DETAILS, dm, PopOutManager.OPT_MAP_ON_TOP );
+				}
+				
+				break;
+			}
 			default:
 
 				int file_index = fileInfo.getIndex();
@@ -855,29 +1225,41 @@ public class FilesView
 		int								action,
 		boolean							test_only )
 	{
-		TableRowCore[] tv_rows = tv.getRowsAndSubRows(true);
-		
-		Map<FilesViewNodeInner,TableRowCore>	node_to_row_map = new HashMap<>();
-		
-		for ( TableRowCore tv_row: tv_rows ){
-			
-			DiskManagerFileInfo ds_file = (DiskManagerFileInfo)tv_row.getDataSource(true);
-			
-			if ( ds_file instanceof FilesViewNodeInner ){
-								
-				node_to_row_map.put((FilesViewNodeInner)ds_file, tv_row );	
-			}
+		if ( !Utils.isSWTThread()){
+			Debug.out("eh?");
 		}
-		
-		for ( FilesViewNodeInner node: nodes ){
+		try{
+			update_header_pending = true;
 			
-			if ( doTreeAction( node_to_row_map, node, action, true, test_only )){
+			TableRowCore[] tv_rows = tv.getRowsAndSubRows(true);
+			
+			Map<FilesViewNodeInner,TableRowCore>	node_to_row_map = new HashMap<>();
+			
+			for ( TableRowCore tv_row: tv_rows ){
 				
-				if ( test_only ){
-					
-					return( true );
+				DiskManagerFileInfo ds_file = (DiskManagerFileInfo)tv_row.getDataSource(true);
+				
+				if ( ds_file instanceof FilesViewNodeInner ){
+									
+					node_to_row_map.put((FilesViewNodeInner)ds_file, tv_row );	
 				}
 			}
+			
+			for ( FilesViewNodeInner node: nodes ){
+				
+				if ( doTreeAction( node_to_row_map, node, action, true, test_only )){
+					
+					if ( test_only ){
+						
+						return( true );
+					}
+				}
+			}
+		}finally{
+			
+			update_header_pending = false;
+			
+			updateHeader();
 		}
 		
 		return( false );
@@ -891,11 +1273,9 @@ public class FilesView
 		boolean									recursive,
 		boolean									test_only )
 	{
-		TableRowCore row = node_to_row_map.get( node );
-		
 		if ( !node.isExpanded()){
 			
-			if ( action == 0 ){
+			if ( action == ACTION_EXPAND ){
 								
 				if ( test_only ){
 				
@@ -903,7 +1283,12 @@ public class FilesView
 					
 				}else{
 					
-					row.setExpanded( true );
+					TableRowCore row = node_to_row_map.get( node );
+					
+					if ( row != null ){
+					
+						row.setExpanded( true );
+					}
 				}
 			}
 		}
@@ -931,7 +1316,7 @@ public class FilesView
 		
 		if ( node.isExpanded()){
 			
-			if ( action == 1 ){
+			if ( action == ACTION_COLLAPSE ){
 								
 				if ( test_only ){
 				
@@ -964,7 +1349,12 @@ public class FilesView
 						}
 					}
 					
-					row.setExpanded( false );
+					TableRowCore row = node_to_row_map.get( node );
+					
+					if ( row != null ){
+					
+						row.setExpanded( false );
+					}
 				}
 			}
 		}
@@ -988,17 +1378,33 @@ public class FilesView
 			
 			List<DiskManagerFileInfo> inner_files = new ArrayList<>();
 			
+				// structure map is used when renaming (moving) an inner node so that
+				// the rename code knows where in the hierarchy to apply the actual rename to
+				// For example, if we rename a/b/c/d/e.gif at inner node "c" we pass in "a/b/c"
+			
+			Map<DiskManagerFileInfo,String>	structure_map = new HashMap<>();
+			
 			for ( int i=0;i<data_sources.length;i++ ){
+				
 				DiskManagerFileInfo file = (DiskManagerFileInfo)data_sources[i];
 				
 				if ( file instanceof FilesView.FilesViewNodeInner ){
 
 					FilesView.FilesViewNodeInner inner = (FilesView.FilesViewNodeInner )file;
+				
+					List<DiskManagerFileInfo> temp = inner.getFiles( true );
+										
+					String path = inner.getNodePath();
 					
-					inner_files.addAll( inner.getFiles( true ));
+					for ( DiskManagerFileInfo f: temp ){
+						
+						structure_map.put( f, path );
+					}
+					
+					inner_files.addAll( temp );
 					
 					inners.add( inner );
-					
+									
 				}else{
 				
 					files.add( file );
@@ -1013,6 +1419,7 @@ public class FilesView
 					menu,
 					new DownloadManager[]{ managers[0] },
 					new DiskManagerFileInfo[][]{ files.toArray(new DiskManagerFileInfo[files.size()]) },
+					null,
 					false,
 					false );
 				
@@ -1025,10 +1432,10 @@ public class FilesView
 				mi.addListener(
 					SWT.Selection,
 					e->{
-						doTreeAction( inners, 0, false );
+						doTreeAction( inners, ACTION_EXPAND, false );
 					});
 				
-				mi.setEnabled( doTreeAction( inners, 0, true ));
+				mi.setEnabled( doTreeAction( inners, ACTION_EXPAND, true ));
 				
 				mi = new MenuItem( menu, SWT.PUSH );
 				
@@ -1037,10 +1444,10 @@ public class FilesView
 				mi.addListener(
 					SWT.Selection,
 					e->{
-						doTreeAction( inners, 1, false );
+						doTreeAction( inners, ACTION_COLLAPSE, false );
 					});
 				
-				mi.setEnabled( doTreeAction( inners, 1, true ));
+				mi.setEnabled( doTreeAction( inners, ACTION_COLLAPSE, true ));
 				
 				new MenuItem( menu, SWT.SEPARATOR );
 				
@@ -1052,10 +1459,11 @@ public class FilesView
 							menu,
 							new DownloadManager[]{ managers[0] },
 							new DiskManagerFileInfo[][]{ inner_files.toArray(new DiskManagerFileInfo[inner_files.size()]) },
+							structure_map,
 							false,
 							true );
 									
-					MenuBuildUtils.addSeparater( menu );
+					MenuBuildUtils.addSeparator( menu );
 				}
 			}
 		}else{
@@ -1104,15 +1512,15 @@ public class FilesView
 
 			if ( files_list.length > 0 ){
 				
-				FilesViewMenuUtil.fillMenu(tv, sColumnName, menu, manager_list, files_list, true, false );
+				FilesViewMenuUtil.fillMenu(tv, sColumnName, menu, manager_list, files_list, null, true, false );
 			}
 		}
 	}
 
 
  
-  private boolean 		force_refresh = false;
-  private List<Object> 	selection_outstanding = null;
+  private boolean 								force_refresh 			= false;
+  private Map<DownloadManager,Set<Integer>> 	selection_outstanding 	= null;
   
   @Override
   public void tableRefresh() {
@@ -1193,18 +1601,6 @@ public class FilesView
 		}
 	}
 
-
-  // Used to notify us of when we need to refresh - normally for external changes to the
-  // file links.
-  @Override
-  public void attributeEventOccurred(DownloadManager dm, String attribute_name, int event_type) {
-  	Object oIsChangingLinks = dm.getUserData("is_changing_links");
-  	if ((oIsChangingLinks instanceof Boolean) && (Boolean) oIsChangingLinks) {
-  		return;
-  	}
-	  this.force_refresh = true;
-  }
-
 	@Override
 	public void tableLifeCycleEventOccurred(TableView tv, int eventType,
 			Map<String, Object> data) {
@@ -1226,6 +1622,8 @@ public class FilesView
 						this);
 
 				removeManagerListeners( managers );
+				
+				tree_file_map.clear();
 				
 				break;
 			}
@@ -1318,62 +1716,100 @@ public class FilesView
 	@Override
 	public boolean eventOccurred(UISWTViewEvent event) {
 		boolean b = super.eventOccurred(event);
-		if (event.getType() == UISWTViewEvent.TYPE_FOCUSGAINED) {
-	    updateSelectedContent();
-		} else if (event.getType() == UISWTViewEvent.TYPE_FOCUSLOST) {
+		
+		int type = event.getType();
+		
+		if ( type == UISWTViewEvent.TYPE_SHOWN) {
+	    
+			updateSelectedContent();
+			
+		} else if ( type == UISWTViewEvent.TYPE_HIDDEN) {
+			
 			SelectedContentManager.clearCurrentlySelectedContent();
+			
+		}else if ( type == UISWTViewEvent.TYPE_DESTROY ){
+			
+			col_filter_helper = null;
 		}
+		
 		return b;
 	}
 
 	// @see org.eclipse.swt.events.KeyListener#keyPressed(org.eclipse.swt.events.KeyEvent)
 	@Override
-	public void keyPressed(KeyEvent e) {
-		if (e.keyCode == SWT.F2 && (e.stateMask & SWT.MODIFIER_MASK) == 0) {
-			FilesViewMenuUtil.rename(tv, tv.getSelectedDataSources(true), true, false,false);
-			e.doit = false;
-		}else if ( e.character == ' ' ){
-		
-			Object[] data_sources = tv.getSelectedDataSources().toArray();
-						
-			List<DiskManagerFileInfo>	files = new ArrayList<>();
+	public void 
+	keyPressed(
+		KeyEvent e) 
+	{
+		if ( e.keyCode == SWT.F2 && (e.stateMask & SWT.MODIFIER_MASK) == 0 ){
 			
-			boolean all_skipped = true;
-
-			for ( int i=0;i<data_sources.length;i++ ){
-				
-				DiskManagerFileInfo file = (DiskManagerFileInfo)data_sources[i];
-												
-				if ( file instanceof FilesViewNodeInner ){
-					
-					FilesViewNodeInner inner = (FilesViewNodeInner)file;
-					
-					inner.getFiles( files, true );
-					
-					if ( all_skipped ){
-						
-						int state = inner.getSkippedState();
-												
-						if ( state != 0 ){
+			FilesViewMenuUtil.rename(tv, tv.getSelectedDataSources(true), null, true, false, false, false);
+			
+			e.doit = false;
+			
+		}else{
+			
+			Composite table_composite = tv.getComposite();
+			
+			char character = e.character;
+			
+			if ( 	e.widget == table_composite &&
+					( character == ' ' || character == '+' || character == '-' )){
+		
+				Object[] data_sources = tv.getSelectedDataSources().toArray();
 							
-							all_skipped = false;
+				List<DiskManagerFileInfo>	files = new ArrayList<>();
+				
+				boolean all_skipped = true;
+	
+				for ( int i=0;i<data_sources.length;i++ ){
+					
+					DiskManagerFileInfo file = (DiskManagerFileInfo)data_sources[i];
+													
+					if ( file instanceof FilesViewNodeInner ){
+						
+						FilesViewNodeInner inner = (FilesViewNodeInner)file;
+						
+						inner.getFiles( files, true );
+						
+						if ( all_skipped ){
+							
+							int state = inner.getSkippedState();
+													
+							if ( state != 0 ){
+								
+								all_skipped = false;
+							}
 						}
-					}
-				}else{
-				
-					files.add( file );
-
-					if ( all_skipped ){
-						
-						if ( !file.isSkipped()){
+					}else{
+					
+						files.add( file );
+	
+						if ( all_skipped ){
 							
-							all_skipped = false;
+							if ( !file.isSkipped()){
+								
+								all_skipped = false;
+							}
 						}
 					}
 				}
-			}
+				
+				if ( character == ' ' ){
+					
+					FilesViewMenuUtil.setSkipped( files, !all_skipped, 2, true );
+				}else{
+					
+					for ( DiskManagerFileInfo file: files ){
+						
+						int pri = file.getPriority();
+						
+						file.setPriority( character=='+'?pri+1:pri-1);
+					}
+				}
 			
-			FilesViewMenuUtil.setSkipped( files, !all_skipped, 2, true );
+				e.doit = false;
+			}  
 		}
 	}
 
@@ -1510,12 +1946,67 @@ public class FilesView
 		disableTableWhenEmpty	= b;
 	}
 	
+	public void 
+	rowExpanded(
+		TableRowCore row )
+	{
+		updateTreeExpansionState( row, true );
+	}
+
+	public void 
+	rowCollapsed(
+		TableRowCore row )
+	{
+		updateTreeExpansionState( row, false );
+	}
+	
+	private void
+	updateTreeExpansionState(
+		TableRowCore	row,
+		boolean			expanded )
+	{
+		Object ds = row.getDataSource( true );
+		
+		if ( ds instanceof FilesViewNodeInner ){
+			
+			FilesViewNodeInner node = (FilesViewNodeInner)ds;
+			
+			DownloadManager dm = node.getDownloadManager();
+			
+			if ( dm != null ){
+				
+				int uid = node.getUID();
+				
+				synchronized( KEY_DM_TREE_STATE ){
+				
+					Map<Integer,Boolean> map = (Map<Integer,Boolean>)dm.getUserData( KEY_DM_TREE_STATE );
+					
+					if ( map == null ){
+						
+						map = new HashMap<>();
+						
+						dm.setUserData( KEY_DM_TREE_STATE, map );
+					}
+					
+					if ( expanded ){
+						
+						map.remove( uid );
+						
+					}else{
+						
+						map.put( uid, Boolean.TRUE );
+					}
+				}
+			}
+		}
+	}
+	
 	private void
 	updateTable()
 	{
 		boolean	sync = false;
 		
-		List<Object>	to_select;
+		Map<DownloadManager,Set<Integer>>	to_select;
 		
 		if ( selection_outstanding != null  ){
 						
@@ -1567,50 +2058,33 @@ public class FilesView
 							List<TableRowCore>	selected_rows = new ArrayList<>();
 							
 							TableRowCore[] tv_rows = tv.getRowsAndSubRows(false);
-							
-							Map<DiskManagerFileInfo,TableRowCore>	file_to_row_map = new HashMap<>();
-							
+														
 							for ( TableRowCore tv_row: tv_rows ){
 								
 								DiskManagerFileInfo ds_file = (DiskManagerFileInfo)tv_row.getDataSource(true);
 								
-								if ( ds_file instanceof FilesViewNodeLeaf ){
+								Set<Integer> sel = to_select.get( ds_file.getDownloadManager());
+								
+								if ( sel != null ){
 									
-									DiskManagerFileInfo target = ((FilesViewNodeLeaf)ds_file).getTarget();
-									
-									file_to_row_map.put( target, tv_row );
-									
-								}else if ( ds_file instanceof FilesViewNodeInner ){
+									if ( ds_file instanceof FilesViewNodeInner ){
 											
-								}else{
-									
-									file_to_row_map.put( ds_file, tv_row );
-								}
-							}
-							
-							for ( Object o: to_select ){
-								
-								TableRowCore row = null;
-								
-								if ( o instanceof FilesViewTreeNode ){
-									
-									if ( o instanceof FilesViewNodeLeaf ){
+										FilesViewNodeInner node = (FilesViewNodeInner)ds_file;
 										
-										row = file_to_row_map.get( ((FilesViewNodeLeaf)o).getTarget());
+										if ( sel.contains( node.getUID() + 1000000000 )){
+											
+											selected_rows.add( tv_row );
+										}
+									}else{
+										
+										if ( sel.contains( ds_file.getIndex())){
+											
+											selected_rows.add( tv_row );
+										}
 									}
-								}else if ( o instanceof FilesViewNodeInner ){
-									
-								}else{
-									
-									row = file_to_row_map.get( o );
-								}
-								
-								if ( row != null ){
-							
-									selected_rows.add( row );
 								}
 							}
-							
+														
 							if ( !selected_rows.isEmpty()){
 								
 								tv.setSelectedRows( selected_rows.toArray( new TableRowCore[0]));
@@ -1664,58 +2138,103 @@ public class FilesView
 
 				char file_separator = File.separatorChar;
 
-				FilesViewNodeInner root = current_root = new FilesViewNodeInner( dm, dm.getDisplayName(), null );
-
-				tree_file_map.clear();
+				int uid = 0;
 				
-				DiskManagerFileInfo files[] = dm.getDiskManagerFileInfoSet().getFiles();
+				FilesViewNodeInner root = current_root = new FilesViewNodeInner( dm, uid, dm.getDisplayName(), new StringInterner.FileKey( "" ), null );
 
-				for ( DiskManagerFileInfo file: files ){
-
-					FilesViewNodeInner node = root;
-
-					TOTorrentFile t_file = file.getTorrentFile();
-
-					String path = t_file.getRelativePath();
-
-					int	pos = 0;
-				
-
-					while( true ){
-
-						int p = path.indexOf( file_separator, pos );
-
-						String	bit;
-
-						if ( p == -1 ){
-
-							FilesViewNodeLeaf leaf = new FilesViewNodeLeaf( path, file, node );
+				synchronized( tree_file_map ){
+					
+					tree_file_map.clear();
+					
+					Map<Integer,Boolean>	expansion_state;
+					
+					synchronized( KEY_DM_TREE_STATE ){
+						
+						expansion_state = (Map<Integer,Boolean>)dm.getUserData( KEY_DM_TREE_STATE );
+						
+						if ( expansion_state == null ){
 							
-							node.addFile( leaf );
-
-							tree_file_map.put( t_file, leaf );
-							
-							break;
+							expansion_state = new HashMap<>();
 							
 						}else{
-
-							bit = path.substring( pos, p );
-
-							pos = p+1;
-						
-							FilesViewNodeInner n = (FilesViewNodeInner)node.getChild( bit );
-
-							if ( n == null ){
-	
-								n = new FilesViewNodeInner( dm, bit, node );
-	
-								node.addChild( n );
-							}
-							node = n;
+							
+							expansion_state = new HashMap<>( expansion_state );
 						}
 					}
-				}			
-
+					
+					if ( expansion_state.containsKey( uid )){
+						
+						root.setExpanded( false );
+					}
+					
+					uid++;
+					
+					DiskManagerFileInfo files[] = dm.getDiskManagerFileInfoSet().getFiles();
+	
+					for ( DiskManagerFileInfo file: files ){
+	
+						FilesViewNodeInner node = root;
+	
+						TOTorrentFile t_file = file.getTorrentFile();
+	
+						String path = t_file.getRelativePath();
+	
+						int	pos = 0;
+					
+						StringInterner.DirKey subfolder = new StringInterner.DirKey( "" );
+						
+						while( true ){
+	
+							int p = path.indexOf( file_separator, pos );
+	
+							String	bit;
+	
+							if ( p == -1 ){
+	
+								FilesViewNodeLeaf leaf = new FilesViewNodeLeaf( path, file, node );
+								
+								node.addFile( leaf );
+	
+								tree_file_map.put( t_file, leaf );
+								
+								break;
+								
+							}else{
+										
+								bit = path.substring( pos, p );
+	
+								pos = p+1;
+							
+								FilesViewNodeInner n = (FilesViewNodeInner)node.getChild( bit );
+	
+								if ( n == null ){
+		
+									n = new FilesViewNodeInner( dm, uid, bit, subfolder, node );
+		
+									if ( expansion_state.containsKey( uid )){
+										
+										n.setExpanded( false );
+									}
+									
+									uid++;
+									
+									node.addChild( n );
+								}
+								
+								if ( subfolder.isEmpty()){
+																		
+									subfolder = new StringInterner.DirKey( bit );
+								}else{
+									
+									subfolder = new StringInterner.DirKey( subfolder, bit );
+								}
+								
+								node = n;
+							}
+						}
+					}			
+				}
+				
 				tv.addDataSource( root );
 
 				tv.processDataSourceQueueSync();
@@ -1752,74 +2271,120 @@ public class FilesView
 			if ( force_refresh || current_root == null || tv.getRowCount() == 0 ){
 				
 				wait_until_idle = force_refresh;
-				
-				current_root = new FilesViewNodeInner( null, MessageText.getString( "label.downloads" ), null );
-				
-				tree_file_map.clear();
-				
+								
 				force_refresh = false;
-
+				
 				tv.removeAllTableRows();
 
-				char file_separator = File.separatorChar;
-
-				int num = 0;
+				synchronized( tree_file_map ){
 				
-				for ( DownloadManager dm: managers ){
-				
-					num++;
-					
-					FilesViewNodeInner root =  new FilesViewNodeInner( dm, "(" + num + ") " + dm.getDisplayName(), current_root );
-	
-					current_root.addChild( root );
-					
-					DiskManagerFileInfo files[] = dm.getDiskManagerFileInfoSet().getFiles();
+					current_root = new FilesViewNodeInner( null, -1,  MessageText.getString( "label.downloads" ), new StringInterner.FileKey( "" ), null );
 
-					for ( DiskManagerFileInfo file: files ){
-	
-						FilesViewNodeInner node = root;
-	
-						TOTorrentFile t_file = file.getTorrentFile();
-	
-						String path = t_file.getRelativePath();
-	
-						int	pos = 0;
+					tree_file_map.clear();
+						
+					char file_separator = File.separatorChar;
 					
+					int num = 0;
+					
+					for ( DownloadManager dm: managers ){
+					
+						num++;
+						
+						int uid = 0;
 	
-						while( true ){
-	
-							int p = path.indexOf( file_separator, pos );
-	
-							String	bit;
-	
-							if ( p == -1 ){
-	
-								FilesViewNodeLeaf leaf = new FilesViewNodeLeaf( path, file, node );
+						FilesViewNodeInner root =  new FilesViewNodeInner( dm, uid, "(" + num + ") " + dm.getDisplayName(), new StringInterner.FileKey( "" ), current_root );
+		
+						Map<Integer,Boolean>	expansion_state;
+						
+						synchronized( KEY_DM_TREE_STATE ){
+							
+							expansion_state = (Map<Integer,Boolean>)dm.getUserData( KEY_DM_TREE_STATE );
+							
+							if ( expansion_state == null ){
 								
-								node.addFile( leaf );
-	
-								tree_file_map.put( t_file, leaf );
-								
-								break;
+								expansion_state = new HashMap<>();
 								
 							}else{
-	
-								bit = path.substring( pos, p );
-	
-								pos = p+1;
-							
-								FilesViewNodeInner n = (FilesViewNodeInner)node.getChild( bit );
-	
-								if ( n == null ){
-		
-									n = new FilesViewNodeInner( dm, bit, node );
-		
-									node.addChild( n );
-								}
-								node = n;
+								
+								expansion_state = new HashMap<>( expansion_state );
 							}
 						}
-					}			
+						
+						if ( expansion_state.containsKey( uid )){
+							
+							root.setExpanded( false );
+						}
+						
+						uid++;
+						
+						current_root.addChild( root );
+						
+						DiskManagerFileInfo files[] = dm.getDiskManagerFileInfoSet().getFiles();
+	
+						for ( DiskManagerFileInfo file: files ){
+		
+							FilesViewNodeInner node = root;
+		
+							TOTorrentFile t_file = file.getTorrentFile();
+		
+							String path = t_file.getRelativePath();
+		
+							int	pos = 0;
+						
+							StringInterner.DirKey subfolder = new StringInterner.DirKey( "" );
+							
+							while( true ){
+		
+								int p = path.indexOf( file_separator, pos );
+		
+								String	bit;
+		
+								if ( p == -1 ){
+		
+									FilesViewNodeLeaf leaf = new FilesViewNodeLeaf( path, file, node );
+									
+									node.addFile( leaf );
+		
+									tree_file_map.put( t_file, leaf );
+									
+									break;
+									
+								}else{
+										
+									bit = path.substring( pos, p );
+		
+									pos = p+1;
+								
+									FilesViewNodeInner n = (FilesViewNodeInner)node.getChild( bit );
+		
+									if ( n == null ){
+			
+										n = new FilesViewNodeInner( dm, uid, bit, subfolder, node );
+			
+										if ( expansion_state.containsKey( uid )){
+											
+											n.setExpanded( false );
+										}
+										
+										uid++;
+										
+										node.addChild( n );
+									}
+									
+									if ( subfolder.isEmpty()){
+																			
+										subfolder = new StringInterner.DirKey( bit );
+										
+									}else{
+										
+										subfolder = new StringInterner.DirKey( subfolder, bit );
+									}
+									
+									node = n;
+								}
+							}
+						}			
+					}
 				}
 				
 				tv.addDataSource( current_root );
@@ -1870,6 +2435,10 @@ public class FilesView
 		public List<FilesViewTreeNode>
 		getKids();
 		
+		public void
+		getLeaves(
+			List<FilesViewNodeLeaf>		leaves );
+		
 		public int
 		getDepth();
 		
@@ -1882,6 +2451,9 @@ public class FilesView
 		public void
 		setSkipped(
 			boolean		b );
+		
+		public Boolean
+		isSkipping();
 		
 		public void
 		recheck();
@@ -1920,7 +2492,9 @@ public class FilesView
 		implements DiskManagerFileInfo, FilesViewTreeNode, TableRowSWTChildController
 	{
 		private final DownloadManager						dm;
-		private final String								name;
+		private final int									uid;
+		private final String								node_name;
+		private final StringInterner.FileKey				node_path;
 		private final FilesViewNodeInner					parent;
 		private final Map<String,FilesViewTreeNode>			kids = new TreeMap<>( tree_comp );
 		
@@ -1932,12 +2506,22 @@ public class FilesView
 		private
 		FilesViewNodeInner(
 			DownloadManager			_dm,
-			String					_name,
+			int						_uid,
+			String					_node_name,
+			StringInterner.FileKey	_node_path,
 			FilesViewNodeInner		_parent )
 		{
-			dm		= _dm;
-			name	= _name;
-			parent	= _parent;
+			dm			= _dm;
+			uid			= _uid;
+			node_name	= StringInterner.intern( _node_name );
+			node_path	= _node_path;
+			parent		= _parent;
+		}
+		
+		protected int
+		getUID()
+		{
+			return( uid );
 		}
 		
 		@Override
@@ -2011,9 +2595,15 @@ public class FilesView
 		public String
 		getName()
 		{
-			return( name );
+			return( node_name );
 		}
 
+		protected String
+		getNodePath()
+		{
+			return( node_path.toString() + File.separator + node_name );
+		}
+		
 		@Override
 		public boolean
 		isExpanded()
@@ -2065,17 +2655,68 @@ public class FilesView
 		setSkipped(
 			boolean b )
 		{	
-			for ( FilesViewTreeNode kid: kids.values()){
+			List<FilesViewNodeLeaf>	leaves = new ArrayList<>();
+			
+			getLeaves( leaves );
+			
+			List<DiskManagerFileInfo>	delegates = new ArrayList<>( leaves.size());
+			
+			for ( FilesViewNodeLeaf l: leaves ){
 				
-				kid.setSkipped( b );
+				delegates.add( l.getTarget());
 			}
+			
+			ManagerUtils.setFilesSkipped( delegates, b );
 		}
 
+		@Override
+		public void
+		getLeaves(
+			List<FilesViewNodeLeaf>	result )
+		{
+			for ( FilesViewTreeNode kid: kids.values()){
+				
+				kid.getLeaves( result );
+			}
+		}
+		
+		@Override
+		public Boolean 
+		isSkipping()
+		{
+			Boolean result = null;
+			
+			for ( FilesViewTreeNode kid: kids.values()){
+				
+				Boolean k = kid.isSkipping();
+				
+				if ( k == null ){
+					
+					if ( result != null ){
+						
+						return( null );
+					}
+				}else{
+					
+					if ( result == null ){
+						
+						result = k;
+						
+					}else if ( result.booleanValue() != k ){
+						
+						return( null );
+					}
+				}
+			}
+			
+			return( result );
+		}
 
 		@Override
 		public boolean
 		setLink(
-			File	link_destination )
+			File	link_destination,
+			boolean	no_delete )
 		{
 			return( false );
 		}
@@ -2092,14 +2733,14 @@ public class FilesView
 		
 		@Override
 		public boolean
-		setLinkAtomic(File link_destination)
+		setLinkAtomic(File link_destination, boolean no_delete)
 		{
 			return( false );
 		}
 
 		@Override
 		public boolean
-		setLinkAtomic(File link_destination, FileUtil.ProgressListener pl )
+		setLinkAtomic(File link_destination, boolean no_delete, FileUtil.ProgressListener pl )
 		{
 			return( false );
 		}
@@ -2304,7 +2945,7 @@ public class FilesView
 		public File
 		getFile( boolean follow_link )
 		{
-			return( new File( name ));
+			return( node_path.isEmpty()?new File(node_name):new File( node_path.getFile(), node_name ));
 		}
 
 		@Override
@@ -2425,6 +3066,14 @@ public class FilesView
 		}
 		
 		@Override
+		public void
+		getLeaves(
+			List<FilesViewNodeLeaf>	result )
+		{
+			result.add( this );
+		}
+		
+		@Override
 		public boolean 
 		isLeaf()
 		{
@@ -2452,11 +3101,19 @@ public class FilesView
 		}
 
 		@Override
+		public Boolean 
+		isSkipping()
+		{
+			return( delegate.isSkipping());
+		}
+		
+		@Override
 		public boolean
 		setLink(
-			File	link_destination )
+			File		link_destination,
+			boolean		no_delete )
 		{
-			return( delegate.setLink(link_destination));
+			return( delegate.setLink(link_destination, no_delete));
 		}
 
 		@Override
@@ -2466,16 +3123,16 @@ public class FilesView
 		
 		@Override
 		public boolean
-		setLinkAtomic(File link_destination)
+		setLinkAtomic(File link_destination, boolean no_delete )
 		{
-			return( delegate.setLinkAtomic(link_destination));
+			return( delegate.setLinkAtomic(link_destination, no_delete));
 		}
 
 		@Override
 		public boolean
-		setLinkAtomic(File link_destination, FileUtil.ProgressListener pl )
+		setLinkAtomic(File link_destination, boolean no_delete, FileUtil.ProgressListener pl )
 		{
-			return( delegate.setLinkAtomic(link_destination, pl));
+			return( delegate.setLinkAtomic(link_destination, no_delete, pl));
 		}
 
 		@Override
@@ -2808,6 +3465,7 @@ public class FilesView
 		return( temp );
 	}
 	  
+	/*
 	private boolean doAllExist(DiskManagerFileInfo[] files) {
 		for (DiskManagerFileInfo fileinfo : files) {
 			if (tv.isFiltered(fileinfo)) {
@@ -2826,5 +3484,5 @@ public class FilesView
 		}
 		return true;
 	}
-
+	*/
 }

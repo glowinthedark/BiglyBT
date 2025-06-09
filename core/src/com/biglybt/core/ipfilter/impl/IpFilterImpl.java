@@ -48,6 +48,7 @@ IpFilterImpl
 	implements IpFilter
 {
 	protected static final LogIDs LOGID = LogIDs.CORE;
+	protected static final LogIDs LOGID_NWMAN = LogIDs.NWMAN;
 
 	private final static int MAX_BLOCKS_TO_REMEMBER = 500;
 
@@ -385,26 +386,27 @@ IpFilterImpl
 	public boolean
 	isInRange(
 		String 	ipAddress,
-		String 	torrent_name,
+		String 	name,
 		byte[]	torrent_hash )
 	{
-		return( isInRange( ipAddress, torrent_name, torrent_hash, true ));
+		return( isInRange( ipAddress, name, torrent_hash, false, true ));
 	}
 
 	@Override
 	public boolean
 	isInRange(
 		String ipAddress,
-		String torrent_name,
+		String name,
 		byte[] torrent_hash,
+		boolean	is_specific,
 		boolean	loggable )
 	{
-		//In all cases, block banned ip addresses
+			//In all cases, block banned ip addresses
+		
+		if ( ipBanner.isBanned(ipAddress, is_specific?torrent_hash:null )){
 
-		  if( ipBanner.isBanned(ipAddress)){
-
-			  return true;
-		  }
+			return true;
+		}
 
 
 		if ( !isEnabled()){
@@ -439,6 +441,11 @@ IpFilterImpl
 	  InetAddress ia;
 	  
 	  try{
+		  if ( HostNameToIPResolver.isNonDNSName(ipAddress)){
+			  
+			  return( false );
+		  }
+		  
 		  ia = HostNameToIPResolver.syncResolve(ipAddress);
 			
 	  }catch( Throwable e ){
@@ -482,10 +489,10 @@ IpFilterImpl
 			  return( false );
 		  }
 
-	      if ( addBlockedIP( new BlockedIpImpl( ipAddress, match, torrent_name, loggable), torrent_hash, loggable )){
+	      if ( addBlockedIP( new BlockedIpImpl( ipAddress, match, name, loggable), torrent_hash, loggable )){
 
 		      if (Logger.isEnabled())
-						Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING, "Ip Blocked : "
+						Logger.log(new LogEvent(LOGID_NWMAN, "Ip Blocked : "
 								+ ipAddress + ", in range : " + match));
 
 		      return true;
@@ -493,7 +500,7 @@ IpFilterImpl
 	      }else{
 
 		      if (Logger.isEnabled())
-					Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING, "Ip Blocking Denied : "
+					Logger.log(new LogEvent(LOGID_NWMAN, LogEvent.LT_WARNING, "Ip Blocking Denied : "
 							+ ipAddress + ", in range : " + match));
 
 		      return false;
@@ -511,10 +518,10 @@ IpFilterImpl
 		  return( false );
 		}
 
-	    if ( addBlockedIP( new BlockedIpImpl(ipAddress,null, torrent_name, loggable), torrent_hash, loggable )){
+	    if ( addBlockedIP( new BlockedIpImpl(ipAddress,null, name, loggable), torrent_hash, loggable )){
 
 		    if (Logger.isEnabled())
-					Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING, "Ip Blocked : "
+					Logger.log(new LogEvent(LOGID_NWMAN, "Ip Blocked : "
 							+ ipAddress + ", not in any range"));
 
 		    return true;
@@ -522,7 +529,7 @@ IpFilterImpl
 	    }else{
 
 		    if (Logger.isEnabled())
-				Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING, "Ip Blocking Denied : "
+				Logger.log(new LogEvent(LOGID_NWMAN, LogEvent.LT_WARNING, "Ip Blocking Denied : "
 						+ ipAddress + ", not in any range"));
 
 		    return false;
@@ -537,13 +544,14 @@ IpFilterImpl
 	public boolean
 	isInRange(
 		InetAddress ipAddress,
-		String 		torrent_name,
+		String 		name,
 		byte[] 		torrent_hash,
+		boolean		is_specific,
 		boolean		loggable )
 	{
 		//In all cases, block banned ip addresses
 
-		if( ipBanner.isBanned(ipAddress)){
+		if( ipBanner.isBanned(ipAddress,is_specific?torrent_hash:null)){
 
 			return true;
 		}
@@ -611,10 +619,10 @@ IpFilterImpl
 
 	    if(!allow) {
 
-	      if ( addBlockedIP( new BlockedIpImpl(ipAddress.getHostAddress(),match, torrent_name, loggable), torrent_hash, loggable )){
+	      if ( addBlockedIP( new BlockedIpImpl(ipAddress.getHostAddress(),match, name, loggable), torrent_hash, loggable )){
 
 		      if (Logger.isEnabled())
-						Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING, "Ip Blocked : "
+						Logger.log(new LogEvent(LOGID_NWMAN, "Ip Blocked : "
 								+ ipAddress + ", in range : " + match));
 
 		      return true;
@@ -622,7 +630,7 @@ IpFilterImpl
 	      }else{
 
 		      if (Logger.isEnabled())
-						Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING, "Ip Blocking Denied: "
+						Logger.log(new LogEvent(LOGID_NWMAN, LogEvent.LT_WARNING, "Ip Blocking Denied: "
 								+ ipAddress + ", in range : " + match));
 
 		      return false;
@@ -636,17 +644,17 @@ IpFilterImpl
 
 	  if( allow ){
 
-	    if ( addBlockedIP( new BlockedIpImpl(ipAddress.getHostAddress(),null, torrent_name, loggable), torrent_hash, loggable )){
+	    if ( addBlockedIP( new BlockedIpImpl(ipAddress.getHostAddress(),null, name, loggable), torrent_hash, loggable )){
 
 		    if (Logger.isEnabled())
-					Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING, "Ip Blocked : "
+					Logger.log(new LogEvent(LOGID_NWMAN, "Ip Blocked : "
 							+ ipAddress + ", not in any range"));
 
 		    return true;
 	    }else{
 
 		    if (Logger.isEnabled())
-				Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING, "Ip Blocking Denied : "
+				Logger.log(new LogEvent(LOGID_NWMAN, LogEvent.LT_WARNING, "Ip Blocking Denied : "
 						+ ipAddress + ", not in any range"));
 
 		    return false;
@@ -928,15 +936,32 @@ IpFilterImpl
 	public boolean
 	ban(
 		String 		ipAddress,
-		String		torrent_name,
+		String		name,
 		boolean		manual )
 	{
-		return( ban( ipAddress, torrent_name, manual, 0 ));
+		return( ban( ipAddress, name, null, manual ));
+	}
+	
+	@Override
+	public boolean
+	ban(
+		String 		ipAddress,
+		String		name,
+		byte[]		specific_hash,
+		boolean		manual )
+	{
+		return( ban( ipAddress, name, specific_hash, manual, 0 ));
 	}
 
-
-
-
+	@Override
+	public boolean 
+	isBanned(
+		String ipAddress, 
+		byte[] specific_hash)
+	{
+		return( ipBanner.isBanned( ipAddress, specific_hash ));
+	}
+	
 	@Override
 	public BlockedIp[]
 	getBlockedIps()
@@ -1121,11 +1146,22 @@ IpFilterImpl
 	public boolean 
 	ban(
 		String 		ipAddress, 
-		String 		torrent_name, 
+		String 		name, 
 		boolean 	manual, 
 		int 		for_mins )
 	{
-		return( ipBanner.ban( ipAddress, torrent_name, manual, for_mins ));
+		return( ban( ipAddress, name, null, manual, for_mins ));
+	}
+	
+	private boolean
+	ban(
+		String 		ipAddress, 
+		String 		name, 
+		byte[]		specific_hash,
+		boolean 	manual, 
+		int 		for_mins )
+	{
+		return( ipBanner.ban( ipAddress, name, specific_hash, manual, for_mins ));
 	}
 	
 	@Override
@@ -1150,19 +1186,19 @@ IpFilterImpl
 	}
 	
 	@Override
-	public void 
+	public boolean 
 	unban(
 		String ipAddress )
 	{
-		ipBanner.unban(ipAddress );
+		return( ipBanner.unban(ipAddress ));
 	}
 	
 	@Override
-	public void 
+	public boolean 
 	unban(
 		String 		ipAddress, 
 		boolean 	block )
 	{
-		ipBanner.unban( ipAddress, block );
+		return( ipBanner.unban( ipAddress, block ));
 	}
 }

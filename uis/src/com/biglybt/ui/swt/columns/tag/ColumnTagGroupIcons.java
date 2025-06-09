@@ -1,9 +1,5 @@
-/*
- * File    : CategoryItem.java
- * Created : 01 feb. 2004
- * By      : TuxPaper
- *
- * Copyright (C) Azureus Software, Inc, All Rights Reserved.
+/* 
+ * Copyright (C) Bigly Software, Inc, All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -12,12 +8,12 @@
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details ( see the LICENSE file ).
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307  USA
  */
 
 package com.biglybt.ui.swt.columns.tag;
@@ -36,7 +32,6 @@ import com.biglybt.pif.download.Download;
 import com.biglybt.pif.ui.tables.TableCell;
 import com.biglybt.pif.ui.tables.TableCellRefreshListener;
 import com.biglybt.pif.ui.tables.TableColumn;
-import com.biglybt.pif.ui.tables.TableColumnCreationListener;
 import com.biglybt.pif.ui.tables.TableColumnExtraInfoListener;
 import com.biglybt.pif.ui.tables.TableColumnInfo;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
@@ -60,8 +55,6 @@ public class ColumnTagGroupIcons
 	private static TagManager tag_manager = TagManagerFactory.getTagManager();
 
 	public static final Class DATASOURCE_TYPE = Download.class;
-
-	public static final String COLUMN_ID = "tag_icons";
 	
 	private static int[]	interesting_tts = { TagType.TT_DOWNLOAD_MANUAL, TagType.TT_DOWNLOAD_CATEGORY };
 
@@ -106,7 +99,7 @@ public class ColumnTagGroupIcons
 		
 							if ( sTags == null ){
 								
-								sTags = str;
+								sTags = tag_group.getName() + ": " + str;
 								
 							}else{
 								
@@ -117,8 +110,9 @@ public class ColumnTagGroupIcons
 				}
 			}
 		}
-		cell.setSortValue( sTags );
-		cell.setToolTip((sTags == null) ? "" : sTags );
+
+		cell.setSortValue( sTags==null?" ":sTags );	// need to use a space to sort sensibly
+		cell.setToolTip( sTags == null?"":sTags );
 	}
 
 	@Override
@@ -157,7 +151,7 @@ public class ColumnTagGroupIcons
 			bounds.x+=1;
 			bounds.y+=1;
 			bounds.width-=1;
-			bounds.height-=1;
+			bounds.height-=2;
 
 			int w = bounds.width / num_files;			
 			
@@ -188,6 +182,8 @@ public class ColumnTagGroupIcons
 				}
 			}
 			
+			int prefWidth = 0;
+			
 			if ( images.size() > 0 ){
 				
 				int	width_per_image = bounds.width / images.size();
@@ -198,12 +194,24 @@ public class ColumnTagGroupIcons
 					
 					int iw = image.getBounds().width;
 					
+					prefWidth += iw;
+					
 					gc.drawImage( image,  bounds.x + (width_per_image-iw)/2, bounds.y );
 	
 					bounds.x += width_per_image;
 	
 					ImageLoader.getInstance().releaseImage( keys.get(i));
 				}
+			}
+			
+			TableColumn tableColumn = cell.getTableColumn();
+			
+			if (tableColumn != null && tableColumn.getPreferredWidth() < prefWidth) {
+				
+				prefWidth = Math.max( 16, prefWidth );
+				prefWidth = Math.min( 256, prefWidth );
+				
+				tableColumn.setPreferredWidth(prefWidth);
 			}
 		}
 	}

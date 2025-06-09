@@ -19,6 +19,7 @@
 package com.biglybt.ui.swt.views;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -28,6 +29,8 @@ import org.eclipse.swt.events.KeyEvent;
 import org.eclipse.swt.events.KeyListener;
 import org.eclipse.swt.events.ModifyEvent;
 import org.eclipse.swt.events.ModifyListener;
+import org.eclipse.swt.events.TraverseEvent;
+import org.eclipse.swt.events.TraverseListener;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.*;
 import org.eclipse.swt.widgets.*;
@@ -44,6 +47,7 @@ import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.config.*;
 import com.biglybt.ui.swt.imageloader.ImageLoader;
+import com.biglybt.ui.swt.mainwindow.ClipboardCopy;
 import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.pif.UISWTView;
 import com.biglybt.ui.swt.pif.UISWTViewEvent;
@@ -89,6 +93,7 @@ public class TagSettingsView
 		private IconSwtParameter tagIcon;
 
 		private BooleanSwtParameter viewInSideBar;
+		private BooleanSwtParameter hideWhenEmpty;
 
 		private BooleanSwtParameter isPublic;
 		
@@ -98,8 +103,11 @@ public class TagSettingsView
 		public BooleanSwtParameter boost;
 
 		public IntSwtParameter maxActiveDownloads;
+		public IntSwtParameter maxActiveSeeders;
+		public BooleanSwtParameter activeLimitsStrict;
 
 		public BooleanSwtParameter firstPrioritySeeding;
+		public BooleanSwtParameter notFirstPrioritySeeding;
 
 		public FloatSwtParameter min_sr;
 
@@ -137,10 +145,12 @@ public class TagSettingsView
 
 
 		
-		public Text		 	constraints;
-		public Label		constraintError;
+		public Text		 				constraints;
+		public Label					constraintError;
 		public BooleanSwtParameter 		constraintEnabled;
 		public StringListSwtParameter 	constraintMode;
+		public IntSwtParameter			constraintWeight;
+		public IntSwtParameter 			constraintTagSortAuto;
 
 		public IntSwtParameter tfl_max_taggables;
 
@@ -162,7 +172,6 @@ public class TagSettingsView
 	public TagSettingsView() {
 	}
 
-	// @see com.biglybt.ui.swt.pif.UISWTViewEventListener#eventOccurred(com.biglybt.ui.swt.pif.UISWTViewEvent)
 	@Override
 	public boolean eventOccurred(UISWTViewEvent event) {
 		switch (event.getType()) {
@@ -190,7 +199,7 @@ public class TagSettingsView
 				dataSourceChanged(ds);
 				break;
 
-			case UISWTViewEvent.TYPE_FOCUSGAINED:
+			case UISWTViewEvent.TYPE_SHOWN:
 				break;
 
 			case UISWTViewEvent.TYPE_REFRESH:
@@ -243,6 +252,19 @@ public class TagSettingsView
 		buildUI();
 	}
 
+	private void
+	addPadding(
+		Composite	comp )
+	{
+		Composite cPad = new Composite(cMainComposite, SWT.NONE);
+		GridLayout gridLayout;
+		gridLayout = new GridLayout(2, false);
+		gridLayout.horizontalSpacing = gridLayout.verticalSpacing = 0;
+		gridLayout.marginHeight = gridLayout.marginWidth = 0;
+		cPad.setLayout(gridLayout);
+		cPad.setLayoutData(new GridData( GridData.FILL_HORIZONTAL));
+	}
+	
 	private void buildUI() {
 		if (Utils.runIfNotSWTThread(this::buildUI)) {
 			return;
@@ -302,7 +324,7 @@ public class TagSettingsView
 
 			GridData gd;
 			GridLayout gridLayout;
-			gridLayout = new GridLayout(1, false);
+			gridLayout = new GridLayout(2, false);
 			gridLayout.horizontalSpacing = gridLayout.verticalSpacing = 0;
 			gridLayout.marginHeight = gridLayout.marginWidth = 0;
 			cMainComposite.setLayout(gridLayout);
@@ -311,15 +333,19 @@ public class TagSettingsView
 			gridLayout = new GridLayout(6, false);
 			gridLayout.marginHeight = 0;
 			cSection1.setLayout(gridLayout);
-			gd = new GridData(SWT.FILL, SWT.FILL, true, false);
+			gd = new GridData(SWT.FILL, SWT.FILL, false, false);
 			cSection1.setLayoutData(gd);
 
+			addPadding(cMainComposite);
+			
 			Composite cSection2 = new Composite(cMainComposite, SWT.NONE);
 			gridLayout = new GridLayout(4, false);
 			cSection2.setLayout(gridLayout);
-			gd = new GridData(SWT.FILL, SWT.FILL, true, false);
+			gd = new GridData(SWT.FILL, SWT.FILL, false, false);
 			cSection2.setLayoutData(gd);
 
+			addPadding(cMainComposite);
+			
 			Label label;
 
 			// Field: Tag Type
@@ -340,6 +366,7 @@ public class TagSettingsView
 				Text txtName = new Text(cSection1, SWT.BORDER);
 				params.cName = txtName;
 				gd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+				gd.widthHint=200;
 				txtName.setLayoutData(gd);
 
 				txtName.addModifyListener(new ModifyListener() {
@@ -358,6 +385,7 @@ public class TagSettingsView
 			} else {
 				label = new Label(cSection1, SWT.WRAP);
 				gd = Utils.getWrappableLabelGridData(1, GridData.GRAB_HORIZONTAL);
+				gd.widthHint=200;
 				label.setLayoutData(gd);
 				params.cName = label;
 			}
@@ -448,6 +476,7 @@ public class TagSettingsView
 
 			boolean allManual 	= true;
 			boolean hasCat		= false;
+			boolean hasSwarm	= false;
 			
 			for ( Tag t: tags ){
 				
@@ -462,6 +491,11 @@ public class TagSettingsView
 					
 					hasCat = true;
 				}
+				
+				if ( type == TagType.TT_SWARM_TAG ){
+					
+					hasSwarm = true;
+				}
 			}
 
 				// for categories the show-in-library/tab and library button visibility isn't controlled
@@ -469,9 +503,10 @@ public class TagSettingsView
 
 			boolean 	hasVisibility 	= !hasCat;
 			
-			if ( hasVisibility ){
-
-				
+			int cSection2Line1 = 0;
+			
+			if ( hasVisibility && !hasSwarm ){
+			
 				// Field: Visible
 	
 				params.viewInSideBar = new BooleanSwtParameter(cSection2, "viewInSidebar",
@@ -499,8 +534,41 @@ public class TagSettingsView
 							}
 						});
 				gd = new GridData();
-				gd.horizontalSpan = allManual?1:4;
+				gd.horizontalSpan = 1;
+				cSection2Line1 +=gd.horizontalSpan;
+				
 				params.viewInSideBar.setLayoutData(gd);	
+				
+				// Field: Hide When Empty
+				
+				params.hideWhenEmpty = new BooleanSwtParameter(cSection2, "hideWhenEmpty",
+						"TagSettings.hideWhenEmpty", null,
+						new BooleanSwtParameter.ValueProcessor() {
+							@Override
+							public Boolean getValue(BooleanSwtParameter p) {
+								int isHideWhenEMpty = -1;
+								for (Tag tag : tags) {
+									isHideWhenEMpty = updateIntBoolean(tag.isHiddenWhenEmpty(), isHideWhenEMpty);
+								}
+								return isHideWhenEMpty == 2 ? null : (isHideWhenEMpty == 1);
+							}
+	
+							@Override
+							public boolean setValue(BooleanSwtParameter p, Boolean value) {
+								boolean changed = tags.length == 0;
+								for (Tag tag : tags) {
+									if (!tag.isHiddenWhenEmpty() == value) {
+										tag.setHiddenWhenEmpty(value);
+										changed = true;
+									}
+								}
+								return changed;
+							}
+						});
+				gd = new GridData();
+				gd.horizontalSpan = allManual?1:3;
+				cSection2Line1 += gd.horizontalSpan;
+				params.hideWhenEmpty.setLayoutData(gd);	
 			}
 			
 			if ( allManual ){
@@ -550,7 +618,7 @@ public class TagSettingsView
 							}
 						});
 				gd = new GridData();
-				gd.horizontalSpan = 3;
+				gd.horizontalSpan = 4-cSection2Line1;;
 				params.isFilter.setLayoutData(gd);
 			}
 			
@@ -588,16 +656,19 @@ public class TagSettingsView
 
 			////////////////////
 
-			Group gTransfer = new Group(cMainComposite, SWT.NONE);
-			gTransfer.setText( MessageText.getString("label.transfer.settings"));
-			final int gTransferCols = 8;
-			gridLayout = new GridLayout(gTransferCols, false);
-			gTransfer.setLayout(gridLayout);
-
-			gd = new GridData(SWT.FILL, SWT.NONE, false, false, 4, 1);
-			gTransfer.setLayoutData(gd);
-
 			if (tagsAreTagFeatureRateLimit) {
+				
+				Group gTransfer = Utils.createSkinnedGroup(cMainComposite, SWT.NONE);
+				gTransfer.setText( MessageText.getString("label.transfer.settings"));
+				final int gTransferCols = 8;
+				gridLayout = new GridLayout(gTransferCols, false);
+				gTransfer.setLayout(gridLayout);
+				
+				gd = new GridData(SWT.FILL, SWT.NONE, false, false, 1, 1);
+				gTransfer.setLayoutData(gd);
+
+				addPadding(cMainComposite);
+
 				final TagFeatureRateLimit rls[] = new TagFeatureRateLimit[tags.length];
 				System.arraycopy(tags, 0, rls, 0, tags.length);
 
@@ -606,6 +677,7 @@ public class TagSettingsView
 				boolean hasTagUploadPriority = true;
 				boolean supportsFPSeeding = true;
 				boolean supportsMaxDLS = true;
+				boolean supportsMaxCDS = true;
 				boolean supportsBoost = true;
 				for (TagFeatureRateLimit rl : rls) {
 					supportsTagDownloadLimit &= rl.supportsTagDownloadLimit();
@@ -618,6 +690,7 @@ public class TagSettingsView
 					
 						supportsFPSeeding 	= false;
 						supportsMaxDLS		= false;
+						supportsMaxCDS		= false;
 					}
 					if ( tt != TagType.TT_PEER_IPSET ){
 						
@@ -638,17 +711,15 @@ public class TagSettingsView
 							new IntSwtParameter.ValueProcessor() {
 								@Override
 								public Integer getValue(IntSwtParameter p) {
-									int limit = rls[0].getTagDownloadLimit();
-									if (numTags > 1) {
-										for (int i = 1; i < rls.length; i++) {
-											int nextLimit = rls[i].getTagDownloadLimit();
-											if (nextLimit != limit) {
-												return 0;
-											}
-										}
+									java.util.List<Integer> values = new ArrayList<>();
+									
+									for (int i = 0; i < rls.length; i++) {
+										int limit = rls[i].getTagDownloadLimit();
+										
+										values.add( limit< 0?limit:limit/ DisplayFormatters.getKinB());
 									}
-									return limit < 0 ? limit
-											: limit / DisplayFormatters.getKinB();
+									
+									return( getValue( values ));
 								}
 
 								@Override
@@ -674,7 +745,6 @@ public class TagSettingsView
 							});
 					params.maxDownloadSpeed.setLabelText(k_unit + " " + MessageText.getString(
 							"GeneralView.label.maxdownloadspeed.tooltip"));
-					params.maxDownloadSpeed.setZeroHidden(numTags > 1);
 
 					cols_used += 2;
 				}
@@ -687,17 +757,15 @@ public class TagSettingsView
 							new IntSwtParameter.ValueProcessor() {
 								@Override
 								public Integer getValue(IntSwtParameter p) {
-									int limit = rls[0].getTagUploadLimit();
-									if (numTags > 1) {
-										for (int i = 1; i < rls.length; i++) {
-											int nextLimit = rls[i].getTagUploadLimit();
-											if (nextLimit != limit) {
-												return 0;
-											}
-										}
+									java.util.List<Integer> values = new ArrayList<>();
+									
+									for (int i = 0; i < rls.length; i++) {
+										int limit = rls[i].getTagUploadLimit();
+										
+										values.add( limit< 0?limit:limit/ DisplayFormatters.getKinB());
 									}
-									return limit < 0 ? limit
-											: limit / DisplayFormatters.getKinB();
+									
+									return( getValue( values ));
 								}
 
 								@Override
@@ -717,7 +785,7 @@ public class TagSettingsView
 									return false;
 								}
 							});
-					params.maxUploadSpeed.setZeroHidden(numTags > 1);
+
 					params.maxUploadSpeed.setLabelText(k_unit + " " + MessageText.getString(
 							"GeneralView.label.maxuploadspeed.tooltip"));
 
@@ -796,25 +864,45 @@ public class TagSettingsView
 				}
 				
 				cols_used = 0;
+								
+				java.util.List<TagFeatureRateLimit> rlMinSR = new ArrayList<>();
+				java.util.List<TagFeatureRateLimit> rlMaxSR = new ArrayList<>();
+				
+				for (TagFeatureRateLimit rl : rls) {
+					if ( rl.getTagMinShareRatio() >= 0 ){
+						rlMinSR.add( rl );
+					}
+					if ( rl.getTagMaxShareRatio() >= 0 ){
+						rlMaxSR.add( rl );
+					}
+				}
 				
 				// Field: Min Share
-				if (numTags == 1 && rls[0].getTagMinShareRatio() >= 0) {
+
+				if ( !rlMinSR.isEmpty()) {
 					params.min_sr = new FloatSwtParameter(gTransfer, "tag.min_sr", "TableColumn.header.min_sr",
 							null, 0, Float.MAX_VALUE, true, 3,
 							new FloatSwtParameter.ValueProcessor() {
 								@Override
 								public Float getValue(FloatSwtParameter p) {
-									return rls[0].getTagMinShareRatio() / 1000f;
+									java.util.List<Float> values = new ArrayList<>();
+									for (TagFeatureRateLimit rl : rlMinSR) {
+										values.add( rl.getTagMinShareRatio() / 1000f );
+									}
+									return( getValue( values ));
 								}
 
 								@Override
 								public boolean setValue(FloatSwtParameter p, Float value) {
 									int newValue = (int) (value * 1000);
-									if (rls[0].getTagMinShareRatio() == newValue) {
-										return false;
+									boolean changed = false;
+									for (TagFeatureRateLimit rl : rlMinSR) {	
+										if ( rl.getTagMinShareRatio() != newValue) {
+											rl.setTagMinShareRatio(newValue);
+											changed = true;
+										}
 									}
-									rls[0].setTagMinShareRatio(newValue);
-									return true;
+									return( changed );
 								}
 							});
 					
@@ -822,26 +910,33 @@ public class TagSettingsView
 				}
 
 				// Field: Max Share
-				if (numTags == 1 && rls[0].getTagMaxShareRatio() >= 0) {
+				if ( !rlMaxSR.isEmpty()){
 
 					params.max_sr = new FloatSwtParameter(gTransfer, "tag.max_sr",
 							"TableColumn.header.max_sr", null, 0, Float.MAX_VALUE, true, 3,
 							new FloatSwtParameter.ValueProcessor() {
 								@Override
 								public Float getValue(FloatSwtParameter p) {
-									return rls[0].getTagMaxShareRatio() / 1000f;
-								}
+									java.util.List<Float> values = new ArrayList<>();
+									for (TagFeatureRateLimit rl : rlMaxSR) {
+										values.add( rl.getTagMaxShareRatio() / 1000f );
+									}
+									return( getValue( values ));								}
 
 								@Override
 								public boolean setValue(FloatSwtParameter p, Float value) {
 									int newValue = (int) (value * 1000);
-									if (rls[0].getTagMaxShareRatio() == newValue) {
-										return false;
+									boolean changed = false;
+									for (TagFeatureRateLimit rl : rlMaxSR) {	
+										if ( rl.getTagMaxShareRatio() != newValue) {
+											rl.setTagMaxShareRatio(newValue);
+											changed = true;
+										}
 									}
-									rls[0].setTagMaxShareRatio(newValue);
-
-									updateTagSRParams(params);
-									return true;
+									if ( changed ){
+										updateTagSRParams(params);
+									}
+									return ( changed );
 								}
 							});
 
@@ -873,18 +968,25 @@ public class TagSettingsView
 							new StringListSwtParameter.ValueProcessor() {
 								@Override
 								public String getValue(StringListSwtParameter p) {
-									return ("" + rls[0].getTagMaxShareRatioAction());
+									java.util.List<String> values = new ArrayList<>();
+									for (TagFeatureRateLimit rl : rlMaxSR) {
+										values.add("" + rl.getTagMaxShareRatioAction());
+									}
+									return( getValue( values ));
 								}
 
 								@Override
-								public boolean setValue(StringListSwtParameter p,
-										String value) {
+								public boolean 
+								setValue(StringListSwtParameter p, String value){
 									int val = Integer.parseInt(value);
-									if (rls[0].getTagMaxShareRatioAction() != val) {
-										rls[0].setTagMaxShareRatioAction(val);
-										return true;
+									boolean changed = false;
+									for (TagFeatureRateLimit rl : rlMaxSR) {
+										if ( rl.getTagMaxShareRatioAction() != val){
+											rl.setTagMaxShareRatioAction(val);
+											changed = true;
+										}
 									}
-									return false;
+									return( changed );
 								}
 							});
 					
@@ -996,37 +1098,109 @@ public class TagSettingsView
 				
 				cols_used = 0;
 				
-				if (supportsMaxDLS){
-					params.maxActiveDownloads = new IntSwtParameter(gTransfer,
-							"tag.maxActiveDownloads", "ConfigView.label.maxdownloads.short", null, 0, Integer.MAX_VALUE,
-							new IntSwtParameter.ValueProcessor() {
-								@Override
-								public Integer getValue(IntSwtParameter p) {
-									int limit = rls[0].getMaxActiveDownloads();
-									if (numTags > 1) {
-										for (int i = 1; i < rls.length; i++) {
-											int nextLimit = rls[i].getMaxActiveDownloads();
-											if (nextLimit != limit) {
-												return 0;
+				if ( numTags == 1 ){
+					if (supportsMaxDLS){
+						params.maxActiveDownloads = new IntSwtParameter(gTransfer,
+								"tag.maxActiveDownloads", "ConfigView.label.maxdownloads.short", null, 0, Integer.MAX_VALUE,
+								new IntSwtParameter.ValueProcessor() {
+									@Override
+									public Integer getValue(IntSwtParameter p) {
+										int limit = rls[0].getMaxActiveDownloads();
+										if (numTags > 1) {
+											for (int i = 1; i < rls.length; i++) {
+												int nextLimit = rls[i].getMaxActiveDownloads();
+												if (nextLimit != limit) {
+													return 0;
+												}
 											}
 										}
+										return limit;
 									}
-									return limit;
-								}
-
-								@Override
-								public boolean setValue(IntSwtParameter p, Integer value) {
-									if (value == null) {
-										return false;
+	
+									@Override
+									public boolean setValue(IntSwtParameter p, Integer value) {
+										if (value == null) {
+											return false;
+										}
+										for (TagFeatureRateLimit rl : rls) {
+											rl.setMaxActiveDownloads(value);
+										}
+										return true;
 									}
-									for (TagFeatureRateLimit rl : rls) {
-										rl.setMaxActiveDownloads(value);
+								});
+	
+						cols_used += 2;
+					}
+					
+					if (supportsMaxCDS){
+						params.maxActiveSeeders = new IntSwtParameter(gTransfer,
+								"tag.maxActiveSeeds", "ConfigView.label.maxseeding", null, 0, Integer.MAX_VALUE,
+								new IntSwtParameter.ValueProcessor() {
+									@Override
+									public Integer getValue(IntSwtParameter p) {
+										int limit = rls[0].getMaxActiveSeeds();
+										if (numTags > 1) {
+											for (int i = 1; i < rls.length; i++) {
+												int nextLimit = rls[i].getMaxActiveSeeds();
+												if (nextLimit != limit) {
+													return 0;
+												}
+											}
+										}
+										return limit;
 									}
-									return true;
-								}
-							});
-
-					cols_used += 2;
+	
+									@Override
+									public boolean setValue(IntSwtParameter p, Integer value) {
+										if (value == null) {
+											return false;
+										}
+										for (TagFeatureRateLimit rl : rls) {
+											rl.setMaxActiveSeeds(value);
+										}
+										return true;
+									}
+								});
+	
+						cols_used += 2;
+					}
+					
+					if (supportsMaxDLS||supportsMaxCDS){
+						params.activeLimitsStrict = new BooleanSwtParameter(gTransfer,
+								"tag.activelimitsstrict", "label.strict.limits", null,
+								new BooleanSwtParameter.ValueProcessor() {
+									@Override
+									public Boolean getValue(BooleanSwtParameter p) {
+										int value = -1;
+										for (TagFeatureRateLimit rl : rls) {
+											value = updateIntBoolean(rl.getStrictActivityLimits(),
+													value);
+										}
+										return value == 2 ? null : value == 1;
+									}
+	
+									@Override
+									public boolean setValue(BooleanSwtParameter p, Boolean value) {
+										boolean changed = rls.length == 0;
+										for (TagFeatureRateLimit rl : rls) {
+											if (rl.getStrictActivityLimits() != value) {
+												rl.setStrictActivityLimits(value);
+												changed = true;
+											}
+										}
+										return changed;
+									}
+								});
+						cols_used += 2;
+					}
+					
+					if ( cols_used > 0 && cols_used < gTransferCols){			
+						Label lab = new Label( gTransfer, SWT.NULL );
+						gd = new GridData();
+						gd.horizontalSpan = gTransferCols - cols_used;
+						lab.setLayoutData(gd);		
+						cols_used = 0;
+					}
 				}
 				
 				if (supportsFPSeeding) {
@@ -1056,6 +1230,32 @@ public class TagSettingsView
 								}
 							});
 					cols_used += 2;
+					params.notFirstPrioritySeeding = new BooleanSwtParameter(gTransfer,
+							"tag.notFirstPrioritySeeding", "label.not.first.priority.seeding", null,
+							new BooleanSwtParameter.ValueProcessor() {
+								@Override
+								public Boolean getValue(BooleanSwtParameter p) {
+									int value = -1;
+									for (TagFeatureRateLimit rl : rls) {
+										value = updateIntBoolean(rl.getNotFirstPrioritySeeding(),
+												value);
+									}
+									return value == 2 ? null : value == 1;
+								}
+
+								@Override
+								public boolean setValue(BooleanSwtParameter p, Boolean value) {
+									boolean changed = rls.length == 0;
+									for (TagFeatureRateLimit rl : rls) {
+										if (rl.getNotFirstPrioritySeeding() != value) {
+											rl.setNotFirstPrioritySeeding(value);
+											changed = true;
+										}
+									}
+									return changed;
+								}
+							});
+					cols_used += 2;
 				}
 				
 				if ( cols_used > 0 && cols_used < gTransferCols){			
@@ -1077,14 +1277,16 @@ public class TagSettingsView
 						fl.supportsTagMoveOnRemove() ||
 						fl.supportsTagMoveOnAssign()) {
 
-					Group gFiles = new Group(cMainComposite, SWT.NONE);
+					Group gFiles = Utils.createSkinnedGroup(cMainComposite, SWT.NONE);
 					gFiles.setText(MessageText.getString( "label.file.settings"));
 					// label, button, value, cb*2, cb*2 = 8
 					gridLayout = new GridLayout(8, false);
 					gFiles.setLayout(gridLayout);
 
-					gd = new GridData(SWT.FILL, SWT.NONE, true, false, 4, 1);
+					gd = new GridData(SWT.FILL, SWT.NONE, false, false, 1, 1);
 					gFiles.setLayoutData(gd);
+
+					addPadding(cMainComposite);
 
 					params.preventDeletion = new BooleanSwtParameter(gFiles,
 							"tag.prevent_delete", "label.prevent.dl.delete",
@@ -1486,19 +1688,24 @@ public class TagSettingsView
 
 				final TagProperty propConstraint = tfp.getProperty(
 						TagFeatureProperties.PR_CONSTRAINT);
+				
+				TagDownload tag_dl = tags[0] instanceof TagDownload?(TagDownload)tags[0]:null;
+
 				if (propConstraint != null) {
-					Group gConstraint = new Group(cMainComposite, SWT.NONE);
+					Group gConstraint = Utils.createSkinnedGroup(cMainComposite, SWT.NONE);
 					Messages.setLanguageText(gConstraint, "tag.property.constraint");
 					gridLayout = new GridLayout();
 					gConstraint.setLayout(gridLayout);
 
-					gd = new GridData(SWT.FILL, SWT.NONE, true, false, 4, 1);
+					gd = new GridData(SWT.FILL, SWT.NONE, false, false, 1, 1);
 					gConstraint.setLayoutData(gd);
 
+					addPadding(cMainComposite);
+
 					params.constraints = new Text(gConstraint,
-							SWT.WRAP | SWT.BORDER | SWT.MULTI);
+							SWT.WRAP | SWT.BORDER | SWT.MULTI | SWT.V_SCROLL);
 					gd = new GridData(SWT.FILL, SWT.NONE, true, false, 1, 1);
-					gd.heightHint = 40;
+					gd.heightHint = (int) (FontUtils.getFontHeightInPX(params.constraints.getFont()) * 2.5);
 					params.constraints.setLayoutData(gd);
 					params.constraints.addKeyListener(new KeyListener() {
 						@Override
@@ -1520,25 +1727,57 @@ public class TagSettingsView
 
 								params.constraints.selectAll();
 							}
+						}
+					});
+					
+					params.constraints.addModifyListener((e)->{
+						
+						String[] stringList = propConstraint.getStringList();
+						
+						if ( stringList.length > 0 ){
 							
-							params.constraints.setData("skipset", 1);
-							if (btnSaveConstraint != null && !btnSaveConstraint.isDisposed()) {
-								btnSaveConstraint.setEnabled(true);
-								btnResetConstraint.setEnabled(true);
+							String existing_text = stringList[0];
+								
+							if ( !existing_text.equals( params.constraints.getText())){
+								
+								params.constraints.setData("skipset", 1);
+								
+								if (btnSaveConstraint != null && !btnSaveConstraint.isDisposed()) {
+									btnSaveConstraint.setEnabled(true);
+									btnResetConstraint.setEnabled(true);
+								}
+							}else{
+								params.constraints.setData("skipset", null);
+								
+								if (btnSaveConstraint != null && !btnSaveConstraint.isDisposed()) {
+									btnSaveConstraint.setEnabled(false);
+									btnResetConstraint.setEnabled(false);
+								}
 							}
 						}
 					});
 
+						// ctrl+tab to exit the text box
+					
+					params.constraints.addListener( SWT.Traverse, (e)->{
+						if ( e.detail == SWT.TRAVERSE_TAB_NEXT && ( e.stateMask & SWT.MOD1 ) != 0 ){
+						
+							e.doit = true;
+						}
+					});
+					
 					params.constraintError = new Label(gConstraint, SWT.NULL );
 					params.constraintError.setLayoutData( new GridData( GridData.FILL_HORIZONTAL ));
-					params.constraintError.setForeground( Colors.colorError);
+					
+					Utils.setSkinnedForeground( params.constraintError, Colors.colorError, true );
 
 					Composite cConstraintOptions = new Composite(gConstraint, SWT.NULL);
-					RowLayout layout = new RowLayout(SWT.HORIZONTAL);
-					layout.spacing = 5;
-					layout.center = true;
-					cConstraintOptions.setLayout(layout);
-
+					cConstraintOptions.setLayoutData(new GridData( GridData.FILL_HORIZONTAL));
+					gridLayout = new GridLayout(11,false);
+					gridLayout.marginLeft = gridLayout.marginRight = gridLayout.marginWidth = 0;
+					gridLayout.marginTop = gridLayout.marginBottom = gridLayout.marginHeight = 0;
+					cConstraintOptions.setLayout(gridLayout);
+					
 					btnSaveConstraint = new Button(cConstraintOptions, SWT.PUSH);
 					btnSaveConstraint.setEnabled(false);
 					btnSaveConstraint.addListener(SWT.Selection, new Listener() {
@@ -1649,6 +1888,23 @@ public class TagSettingsView
 								}
 							});
 
+					params.constraintWeight = new IntSwtParameter(cConstraintOptions,
+							"tag_constraint_weight", "tag.constraints.weight", null,
+							Integer.MIN_VALUE, Integer.MAX_VALUE, new IntSwtParameter.ValueProcessor() {
+								@Override
+								public Integer getValue(IntSwtParameter p) {
+									return(((TagDownload)tags[0]).getWeight());
+								}
+
+								@Override
+								public boolean setValue(IntSwtParameter p, Integer value) {
+									((TagDownload)tags[0]).setWeight( value );
+									return true;
+								}
+							} );
+					
+					params.constraintWeight.setEnabled( tag_dl != null );
+					
 					Link lblAboutConstraint = new Link(cConstraintOptions, SWT.WRAP);
 					lblAboutConstraint.setText(
 							MessageText.getString("tag.constraints.info"));
@@ -1662,6 +1918,47 @@ public class TagSettingsView
 						}
 					});
 
+					ClipboardCopy.addCopyToClipMenu(lblAboutConstraint);
+					
+					Composite cApplySort = new Composite(gConstraint, SWT.NULL);
+					cApplySort.setLayoutData(new GridData( GridData.FILL_HORIZONTAL));
+					
+					gridLayout = new GridLayout(10,false);
+					gridLayout.marginLeft = gridLayout.marginRight = gridLayout.marginWidth = 0;
+					gridLayout.marginTop = gridLayout.marginBottom = gridLayout.marginHeight = 0;
+					cApplySort.setLayout( gridLayout );
+										
+					Label lApplySort = new Label( cApplySort, SWT.NULL );
+					
+					lApplySort.setText(	MessageText.getString( "tag.constraints.sort.apply.manual" ));
+					
+					Button btnApply = new Button(cApplySort, SWT.PUSH);
+		
+					btnApply.addListener(SWT.Selection, new Listener() {
+						@Override
+						public void handleEvent(Event event) {
+							tag_dl.applySort();
+						}
+					});
+					Messages.setLanguageText(btnApply, "Button.apply");
+					btnApply.setEnabled( tag_dl != null );
+					
+					params.constraintTagSortAuto = new IntSwtParameter(cApplySort,
+							"tag_constraint_tag_sort_auto", "tag.constraints.sort.apply.auto", null,
+							0, Integer.MAX_VALUE, new IntSwtParameter.ValueProcessor() {
+								@Override
+								public Integer getValue(IntSwtParameter p) {
+									return(((TagDownload)tags[0]).getAutoApplySortInterval());
+								}
+
+								@Override
+								public boolean setValue(IntSwtParameter p, Integer value) {
+									((TagDownload)tags[0]).setAutoApplySortInterval( value );
+									return true;
+								}
+							} );
+					
+					params.constraintTagSortAuto.setEnabled( tag_dl != null );
 				}
 			}
 
@@ -1674,14 +1971,15 @@ public class TagSettingsView
 
 					/////////////////////////////// limits
 
-					Group gLimits = new Group(cMainComposite, SWT.NONE);
+					Group gLimits = Utils.createSkinnedGroup(cMainComposite, SWT.NONE);
 					gLimits.setText(MessageText.getString("label.limit.settings"));
 					gridLayout = new GridLayout(6, false);
 					gLimits.setLayout(gridLayout);
 
-					gd = new GridData(SWT.FILL, SWT.NONE, false, false, 4, 1);
+					gd = new GridData(SWT.FILL, SWT.NONE, false, false, 1, 1);
 					gLimits.setLayoutData(gd);
 
+					addPadding(cMainComposite);
 
 					params.tfl_max_taggables = new IntSwtParameter(gLimits,
 							"tag.tfl_max_taggables", "TableColumn.header.max_taggables", null,
@@ -1769,14 +2067,15 @@ public class TagSettingsView
 
 					// notifications
 
-				Group gNotifications = new Group(cMainComposite, SWT.NONE);
+				Group gNotifications = Utils.createSkinnedGroup(cMainComposite, SWT.NONE);
 				gNotifications.setText(MessageText.getString("v3.MainWindow.tab.events"));
 				gridLayout = new GridLayout(6, false);
 				gNotifications.setLayout(gridLayout);
 
-				gd = new GridData(SWT.FILL, SWT.NONE, false, false, 4, 1);
+				gd = new GridData(SWT.FILL, SWT.NONE, false, false, 1, 1);
 				gNotifications.setLayoutData(gd);
-
+				
+				addPadding(cMainComposite);
 				label = new Label(gNotifications, SWT.NONE);
 				label.setText( MessageText.getString( "tag.notification.post" ) + ":" );
 
@@ -1857,7 +2156,7 @@ public class TagSettingsView
 	{
 		private Button btnClear;
 
-		private Label lblValue;
+		private Text lblValue;
 
 		public folderOption(final Composite parent, String labelTextID) {
 			ImageLoader imageLoader = ImageLoader.getInstance();
@@ -1898,11 +2197,30 @@ public class TagSettingsView
 				}
 			});
 
-			lblValue = new Label(parent, SWT.WRAP);
+			lblValue = new Text(parent, SWT.WRAP | SWT.BORDER );
 			gd = Utils.getWrappableLabelGridData(1, GridData.FILL_HORIZONTAL);
 			gd.verticalAlignment = SWT.CENTER;
 			lblValue.setLayoutData(gd);
 
+			lblValue.addTraverseListener((e)->{
+				if (e.detail == SWT.TRAVERSE_TAB_NEXT) {
+					e.doit = true;
+				}
+			});
+						
+			lblValue.addListener(SWT.FocusOut,(ev)->{
+				String str = lblValue.getText().trim();
+				Utils.getOffOfSWTThread(()->{
+					if ( str.isEmpty()){
+						setFolder(null);
+					}else{
+						File f = new File( str );
+						//f.mkdirs();
+						setFolder( f );
+					}
+				});
+			});
+			
 			btnClear = new Button(parent, SWT.PUSH);
 			Messages.setLanguageText(btnClear, "Button.clear");
 			btnClear.addListener(SWT.Selection, new Listener() {
@@ -1915,10 +2233,15 @@ public class TagSettingsView
 
 		public void update() {
 			File folder = getFolder();
-			if (folder == null) {
-				Messages.setLanguageText(lblValue, "label.none.assigned");
-			} else {
-				lblValue.setText(folder.toString());
+			if (folder == null){
+				if ( !lblValue.getText().isEmpty()){
+					lblValue.setText("");
+				}
+			}else{
+				String str = folder.toString();
+				if ( !lblValue.getText().equals(str)){
+					lblValue.setText( str );
+				}
 			}
 			btnClear.setVisible(folder != null);
 		}
@@ -1941,7 +2264,6 @@ public class TagSettingsView
 		int[] tagColor = tags[0].getColor();
 		Set<String> listTagNames = new HashSet<>();
 		for (Tag tag : tags) {
-			TagType tt = tag.getTagType();
 			String s = tag.getTagName(true);
 			listTagNames.add(s);
 
@@ -1972,6 +2294,9 @@ public class TagSettingsView
 
 		if (params.viewInSideBar != null) {
 			params.viewInSideBar.refreshControl();
+		}
+		if (params.hideWhenEmpty != null) {
+			params.hideWhenEmpty.refreshControl();
 		}
 
 		if (params.isPublic != null) {

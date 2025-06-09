@@ -18,11 +18,9 @@
 package com.biglybt.util;
 
 import java.io.UnsupportedEncodingException;
+import java.lang.reflect.Array;
 import java.net.URLDecoder;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import com.biglybt.core.util.UrlUtils;
 import org.gudy.bouncycastle.util.encoders.Base64;
@@ -44,6 +42,10 @@ import org.json.simple.JSONArray;
  */
 public class MapUtils
 {
+	public static void setMapInt(Map map, String key, int val) {
+		map.put( key, new Long( val ));
+	}
+
 	public static int getMapInt(Map map, String key, int def) {
 		if (map == null) {
 			return def;
@@ -218,6 +220,10 @@ public class MapUtils
 		}
 	}
 
+	public static void setMapBoolean(Map map, String key, boolean val) {
+		map.put( key, new Long( val?1:0 ));
+	}
+		
 	public static boolean getMapBoolean(Map map, String key, boolean def) {
 		if (map == null) {
 			return def;
@@ -515,5 +521,42 @@ public class MapUtils
 		}
 
 		return( values );
+	}
+	
+	public static String
+	importString(
+		Object		o )
+	{
+		if ( o == null ){
+			
+			return( null );
+		}
+		
+		if (o instanceof String){
+			return (String) o;
+		}else  if (o instanceof byte[]){
+			return new String((byte[]) o, Constants.UTF_8);
+		}else{
+			Debug.out( "unsupported: " + o );
+			return( null );
+		}
+	}
+	
+	@SuppressWarnings("unchecked")
+	/**
+	 * Sort based on Map's value (typically a count), descending
+	 * 
+	 * @param limit Limit returned array to max number of items
+	 * 
+	 * @return Array of keys
+	 */
+	public static <K> K[] sortCount(Map<K, Integer> map, int limit) {
+		if (map.isEmpty()) {
+			return null;
+		}
+		List<K> names = new ArrayList<>(map.keySet());
+		names.sort(Comparator.comparing(map::get, Comparator.reverseOrder()));
+		K[] o = (K[]) Array.newInstance(names.get(0).getClass(), Math.min(limit, names.size()));
+		return names.toArray(o);
 	}
 }

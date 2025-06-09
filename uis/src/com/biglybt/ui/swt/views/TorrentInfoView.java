@@ -118,7 +118,7 @@ public class TorrentInfoView
 		}
 
 		if (showHeader) {
-			Composite cHeader = new Composite(panel, SWT.BORDER);
+			Composite cHeader = new Composite(panel, Utils.isDarkAppearanceNativeWindows()?SWT.NONE:SWT.BORDER);
 			GridLayout configLayout = new GridLayout();
 			configLayout.marginHeight = 3;
 			configLayout.marginWidth = 0;
@@ -270,7 +270,7 @@ public class TorrentInfoView
 
 			// columns
 
-		Group gColumns = new Group(panel, SWT.NULL);
+		Group gColumns = Utils.createSkinnedGroup(panel, SWT.NULL);
 		Messages.setLanguageText(gColumns, "TorrentInfoView.columns" );
 		gridData = new GridData(GridData.FILL_BOTH);
 		gColumns.setLayoutData(gridData);

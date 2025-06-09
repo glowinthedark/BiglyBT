@@ -35,6 +35,7 @@ import com.biglybt.core.peermanager.messaging.Message;
 import com.biglybt.core.peermanager.piecepicker.util.BitFlags;
 import com.biglybt.core.tag.Taggable;
 import com.biglybt.pif.network.Connection;
+import com.biglybt.pif.peers.PeerDescriptor;
 
 
 /**
@@ -185,7 +186,7 @@ PEPeer
 
 	/**
 	 * checks several factors within the object so the caller wouldn't need to
-	 * for convienience and speed.
+	 * for convenience and speed.
 	 * @return true if none of several criteria indicate a request can't be made of the peer
 	 */
 	public boolean isDownloadPossible();
@@ -355,15 +356,79 @@ PEPeer
    */
   public int[] getOutgoingRequestedPieceNumbers();
 
-  public default DiskManagerReadRequest[] getRecentPiecesSent(){
+  public default DiskManagerReadRequest[] 
+  getRecentPiecesSent()
+  {
 	  return( new DiskManagerReadRequest[0]) ;
   }
+  	
+  public default int
+  getPercentDoneOfCurrentIncomingRequest()
+  {
+	  int[] progress = getCurrentIncomingRequestProgress();
+	  
+	  if ( progress == null ){
+	  
+		  return( -1 );
+		  
+	  }else{
+		  
+		  int length 	= progress[0];
+		  int done		= progress[1];
+		  
+		  if ( length <= 0 ){
+			  
+			  return( -1 );
+			  
+		  }else if ( done >= length ){
+			  
+			  return( 100 );
+			  
+		  }else{
+			  
+			  return((done*100)/length);
+		  }
+	  }
+  }
   
-  public int
-  getPercentDoneOfCurrentIncomingRequest();
+  /**
+   * @return null or { size, done }
+   */
+  
+  public int[]
+  getCurrentIncomingRequestProgress();
 
-  public int
-  getPercentDoneOfCurrentOutgoingRequest();
+  public default int
+  getPercentDoneOfCurrentOutgoingRequest()
+  {
+	  int[] progress = getCurrentOutgoingRequestProgress();
+	  
+	  if ( progress == null ){
+	  
+		  return( -1 );
+		  
+	  }else{
+		  
+		  int length 	= progress[0];
+		  int done		= progress[1];
+		  
+		  if ( length <= 0 ){
+			  
+			  return( -1 );
+			  
+		  }else if ( done >= length ){
+			  
+			  return( 100 );
+			  
+		  }else{
+			  
+			  return((done*100)/length);
+		  }
+	  }
+  }
+  
+  public int[]
+  getCurrentOutgoingRequestProgress();
 
   public long
   getBytesRemaining();
@@ -379,13 +444,14 @@ PEPeer
 		boolean	enable );
 
   /**
-   * Get the time since this connection was first established.
-   * NOTE: This method will always return 0 at any time before
+   * Get the time this connection was first established.
+   * NOTE: This method will always return -1 at any time before
    * the underlying transport is fully connected, i.e. before
    * handshaking begins.
-   * @return time count in ms
+   * @return mono time in ms
    */
-  public long getTimeSinceConnectionEstablished();
+  
+  public long getConnectionEstablishedMonoTime();
 
 	public void setLastPiece(int i);
 	public int getLastPiece();
@@ -446,4 +512,7 @@ PEPeer
 
 	public boolean
 	isClosed();
+	
+	 public PeerDescriptor
+	 getDescriptor();
 }

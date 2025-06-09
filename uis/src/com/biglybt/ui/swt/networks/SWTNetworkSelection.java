@@ -141,7 +141,7 @@ SWTNetworkSelection
 
 				// line
 
-			Label labelSeparator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
+			Control labelSeparator = Utils.createSkinnedLabelSeparator(shell,SWT.HORIZONTAL);
 			gridData = new GridData(GridData.FILL_HORIZONTAL);
 			gridData.horizontalSpan = 3;
 			labelSeparator.setLayoutData(gridData);
@@ -195,7 +195,7 @@ SWTNetworkSelection
 
 				// line
 
-			labelSeparator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
+			labelSeparator = Utils.createSkinnedLabelSeparator(shell, SWT.HORIZONTAL);
 			gridData = new GridData(GridData.FILL_HORIZONTAL);
 			gridData.horizontalSpan = 3;
 			labelSeparator.setLayoutData(gridData);
@@ -248,11 +248,7 @@ SWTNetworkSelection
 
 			shell.open ();
 
-			while (!shell.isDisposed()) {
-				if (!display.isDisposed() && !display.readAndDispatch()) {
-					display.sleep();
-				}
-			}
+			Utils.readAndDispatchLoop( shell );
 		}
 
 		protected void

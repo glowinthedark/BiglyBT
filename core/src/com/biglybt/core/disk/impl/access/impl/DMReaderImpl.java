@@ -659,8 +659,11 @@ DMReaderImpl
 				buffer.returnToPool();
 			}
 
-			disk_manager.setFailed( DiskManager.ET_READ_ERROR, "Disk read error", e );
-
+			if ( request.getErrorIsFatal()){
+				
+				disk_manager.setFailed( DiskManager.ET_READ_ERROR, "Disk read error", e, false );
+			}
+			
 			Debug.printStackTrace( e );
 
 			listener.readFailed( request, e );
@@ -767,6 +770,8 @@ DMReaderImpl
 									requestCancelled(
 										DiskAccessRequest	request )
 									{
+										active_requests.remove( request );
+										
 										Debug.out( "shouldn't get here" );
 									}
 
@@ -776,6 +781,8 @@ DMReaderImpl
 										DiskAccessRequest	request,
 										Throwable			cause )
 									{
+										active_requests.remove( request );
+										
 										error_request[0]	= request;
 										
 										error[0]	= cause;
@@ -890,6 +897,8 @@ DMReaderImpl
 		requestCancelled(
 			DiskAccessRequest	request )
 		{
+			active_requests.remove( request );
+			
 				// we never cancel so nothing to do here
 
 			Debug.out( "shouldn't get here" );
@@ -901,6 +910,8 @@ DMReaderImpl
 			DiskAccessRequest	request,
 			Throwable			cause )
 		{
+			active_requests.remove( request );
+			
 			failed( request, cause );
 		}
 
@@ -948,9 +959,18 @@ DMReaderImpl
 				}
 			}
 			
-			disk_manager.setFailed( error, "Disk read error", cause );
-
-			Debug.printStackTrace( cause );
+			if ( dm_request.getErrorIsFatal()){
+			
+				disk_manager.setFailed( error, "Disk read error", cause, true );
+			}
+			
+			if ( !disk_manager.isUploadOnly()){
+			
+					// we can get errors after switching to upload only due to the way it is
+					// implemented via download rate limits
+				
+				Debug.printStackTrace( cause );
+			}
 
 			listener.readFailed( dm_request, cause );
 		}

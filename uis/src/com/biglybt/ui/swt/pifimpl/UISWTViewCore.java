@@ -20,6 +20,7 @@ package com.biglybt.ui.swt.pifimpl;
 
 import org.eclipse.swt.widgets.Composite;
 
+import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
 import com.biglybt.ui.swt.pif.PluginUISWTSkinObject;
 import com.biglybt.ui.swt.pif.UISWTView;
 import com.biglybt.ui.swt.pif.UISWTViewEventListener;
@@ -36,6 +37,8 @@ public interface UISWTViewCore
 	// XXX ControlType never seems to be set to this.. could remove?
 	public static final int CONTROLTYPE_SKINOBJECT = 0x100 + 1;
 
+	public static final Object	UD_STANDALONE_DATA_SOURCE = new Object();
+	
 	// >> From IView
   /**
    * This method is called when the view is instanciated, it should initialize all GUI
@@ -91,6 +94,13 @@ public interface UISWTViewCore
 
 	UISWTViewBuilderCore getEventListenerBuilder();
 
+	public ViewTitleInfo
+	getViewTitleInfo();
+	
+	public void
+	setViewTitleInfo(
+		ViewTitleInfo		info );
+	
 	public void
 	setUserData(
 		Object		key,

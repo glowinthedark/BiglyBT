@@ -36,8 +36,8 @@ import com.biglybt.core.global.GlobalManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.*;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
+import com.biglybt.pifimpl.local.PluginInitializer;
 import com.biglybt.pifimpl.local.ui.UIManagerImpl;
-import com.biglybt.plugin.net.buddy.swt.FriendsView;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.UIFunctionsUserPrompter;
@@ -50,10 +50,14 @@ import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.debug.ObfuscateImage;
 import com.biglybt.ui.swt.imageloader.ImageLoader;
 import com.biglybt.ui.swt.pif.*;
+import com.biglybt.ui.swt.pif.UISWTViewBuilder.UISWTViewEventListenerInstantiator;
 import com.biglybt.ui.swt.pifimpl.*;
+import com.biglybt.ui.swt.plugin.net.buddy.swt.FriendsView;
 import com.biglybt.ui.swt.skin.*;
+import com.biglybt.ui.swt.views.ViewManagerSWT;
 import com.biglybt.ui.swt.views.skin.SkinnedDialog;
 import com.biglybt.ui.swt.views.skin.sidebar.SideBarEntrySWT;
+import com.biglybt.util.DataSourceUtils;
 import com.biglybt.util.MapUtils;
 
 import com.biglybt.pif.PluginInterface;
@@ -86,6 +90,8 @@ public abstract class BaseMdiEntry
 
 	private List<MdiSWTMenuHackListener> listMenuHackListners;
 
+	private List<MdiAcceleratorListener> listAcceleratorListeners = null;
+	
 	protected ViewTitleInfo viewTitleInfo;
 
 	/** Parent MDIEntry.  Doesn't mean that this view is embedded inside the parentID */
@@ -154,6 +160,26 @@ public abstract class BaseMdiEntry
 		}
 	}
 
+	public boolean
+	canClose(
+		boolean userInitiated )
+	{
+		MdiCloseListener[] list = {};
+		synchronized (this) {
+			if (listCloseListeners != null) {
+				list = listCloseListeners.toArray(new MdiCloseListener[0]);
+			}
+		}		
+		
+		for (MdiCloseListener l : list) {
+			if ( !l.midEntryCanClose( this, userInitiated )){
+				return( false );
+			}
+		}
+		
+		return( true );
+	}
+	
 	@Override
 	public boolean close(boolean forceClose) {
 		closeView();
@@ -183,7 +209,13 @@ public abstract class BaseMdiEntry
 
 		if (mdi != null) {
 			MdiEntry entry = mdi.getEntry(id);
-			if (entry != null) {
+			
+			// it is possible the entry has been replaced in the meantime, if it
+			// has the tidyup for the old one will already have been done and we 
+			// don't want to go and remove the new replacement that is probably queued
+			// for addition in the SWT tubes
+			
+			if (entry == this ) {
 				mdi.closeEntryByID(id,userInitiated);
 				return;
 			}
@@ -202,7 +234,13 @@ public abstract class BaseMdiEntry
 			}
 	
 			SWTSkinObject so = getSkinObject();
-			if (so != null) {
+			if (so != null ){
+				
+				SWTSkinObject master = getSkinObjectMaster();
+				
+				if ( master != null && master != so ){
+					master.dispose();
+				}
 				setSkinObjectMaster(null);
 				so.getSkin().removeSkinObject(so);
 			}
@@ -566,14 +604,16 @@ public abstract class BaseMdiEntry
 			ViewTitleInfoManager.addListener(this);
 
 			if (getEventListener() == null && (viewTitleInfo instanceof UISWTViewEventListener)) {
-				if (getSkinRef() == null) {
-					// TODO Remove this debug
-					System.out.println(
+				UISWTViewEventListener listener = (UISWTViewEventListener) viewTitleInfo;
+				
+				if (getSkinRef() == null && !listener.builderNotRequired()){
+					
+					Debug.out(
 							"Setting event listener because viewTitleInfo instance of UISWTViewEventListener.  Might lose builder info. "
 									+ getViewID() + " via " + Debug.getCompressedStackTrace());
 				}
 				try {
-					setEventListener((UISWTViewEventListener) viewTitleInfo, null, true);
+					setEventListener(listener, null, true);
 				} catch (UISWTViewEventCancelledException ignore) {
 				}
 			}
@@ -813,6 +853,13 @@ public abstract class BaseMdiEntry
 
 		// There's also DataSourceResolver that might be useful
 
+		if ( datasource instanceof List || datasource instanceof Object[]){
+			DownloadManager[] dms = DataSourceUtils.getDMs(datasource);
+			
+			if ( dms.length > 0 ){
+				datasource = dms;
+			}
+		}
 		if (datasource instanceof DownloadManager) {
 			try {
 				autoOpenInfo.put(
@@ -845,15 +892,23 @@ public abstract class BaseMdiEntry
 
 	// @see MdiEntry#setDefaultExpanded(boolean)
 	@Override
-	public void setDefaultExpanded(boolean defaultExpanded) {
-		COConfigurationManager.setBooleanDefault("SideBar.Expanded." + id,
-				defaultExpanded);
+	public void 
+	setDefaultExpanded(
+		boolean defaultExpanded) 
+	{
+		String configID = "SideBar.Expanded2." + Base32.encode( id.getBytes( Constants.UTF_8 ));
+		
+		COConfigurationManager.setBooleanDefault( configID, defaultExpanded );
 	}
 
 	@Override
-	public boolean isExpanded() {
+	public boolean 
+	isExpanded() 
+	{
+		String configID = "SideBar.Expanded2." + Base32.encode( id.getBytes( Constants.UTF_8 ));
+
 		return isExpanded == null
-				? COConfigurationManager.getBooleanParameter("SideBar.Expanded." + id)
+				? COConfigurationManager.getBooleanParameter(configID)
 				: isExpanded;
 			}
 
@@ -861,18 +916,24 @@ public abstract class BaseMdiEntry
 	 * @see MdiEntry#setExpanded(boolean)
 	 */
 	@Override
-	public void setExpanded(boolean expanded) {
+	public void 
+	setExpanded(boolean expanded) 
+	{
+		String configID = "SideBar.Expanded2." + Base32.encode( id.getBytes( Constants.UTF_8 ));
+
 		isExpanded = expanded;
+		
 		boolean defExpanded = true;
-		try {
+		
+		try{
 			defExpanded = ConfigurationDefaults.getInstance().getBooleanParameter(
-					"SideBar.Expanded." + id);
+					configID);
 		} catch (ConfigurationParameterNotFoundException e) {
 		}
 		if (isExpanded == defExpanded) {
-			COConfigurationManager.removeParameter("SideBar.Expanded." + id);
+			COConfigurationManager.removeParameter(configID);
 		} else {
-			COConfigurationManager.setParameter("SideBar.Expanded." + id, isExpanded);
+			COConfigurationManager.setParameter(configID, isExpanded);
 		}
 	}
 
@@ -963,7 +1024,7 @@ public abstract class BaseMdiEntry
 		String imageID = (String) viewTitleInfo.getTitleInfoProperty(ViewTitleInfo.TITLE_IMAGEID);
 		
 			// don't overwrite any any existing (probably statically assigned) image id with a
-			// ViewTitleInfo that doesn't bother returning anythign better
+			// ViewTitleInfo that doesn't bother returning anything better
 		
 		if ( imageID != null ){
 			if ( imageID.length() == 0 ){
@@ -1126,7 +1187,52 @@ public abstract class BaseMdiEntry
 		}
 	}
 
-	
+	@Override
+	public void addAcceleratorListener(MdiAcceleratorListener l) {
+		synchronized (this) {
+			if (listAcceleratorListeners == null) {
+				listAcceleratorListeners = new ArrayList<>(1);
+			}
+			if (!listAcceleratorListeners.contains(l)) {
+				listAcceleratorListeners.add(l);
+			}
+		}
+	}
+
+	@Override
+	public void removeAcceleratorListener(MdiAcceleratorListener l) {
+		synchronized (this) {
+			if (listAcceleratorListeners == null) {
+				listAcceleratorListeners = new ArrayList<>(1);
+			}
+			listAcceleratorListeners.remove(l);
+		}
+	}
+
+	@Override
+	public boolean processAccelerator( char c, int mask) {
+		MdiAcceleratorListener[] listeners;
+		
+		synchronized (this) {
+			if (listAcceleratorListeners == null) {
+				return( false );
+			}
+			listeners = listAcceleratorListeners.toArray(new MdiAcceleratorListener[0]);
+		}
+		
+		for ( MdiAcceleratorListener l: listeners ){
+			try{
+				if ( l.process(c, mask)){
+					
+					return( true );
+				}
+			}catch( Throwable e ){
+				Debug.out( e );
+			}
+		}
+		
+		return( false );
+	}
 	
 	@Override
 	public boolean
@@ -1166,6 +1272,54 @@ public abstract class BaseMdiEntry
 		
 		result.put( "title", title );
 		
+		String title_id = getTitleID();
+		
+		if ( title_id != null && !title_id.isEmpty()){
+
+			boolean ok = false;
+			
+			if ( title_id.startsWith( "!" ) && title_id.endsWith( "!" )){
+			
+				String id = getId();
+
+				if ( MessageText.keyExists( id )){
+					
+					title_id = id;
+					
+					ok = true;
+					
+				}else{
+				
+					String test = id + ".title.full";
+	
+					if ( MessageText.keyExists( test )){
+						
+						title_id = test;
+						
+						ok = true;
+					}
+				}
+			}
+			
+			if ( ok || MessageText.keyExists( title_id )){
+				
+				result.put( "title_id", title_id );
+			}
+		}
+		
+		if ( !result.containsKey( "title_id" )){
+			
+			if ( vti != null ){
+				
+				title_id = (String)vti.getTitleInfoProperty( ViewTitleInfo.TITLE_TEXT_ID );
+				
+				if ( title_id != null && MessageText.keyExists( title_id )){
+				
+					result.put( "title_id", title_id );
+				}
+			}
+		}
+		
 		result.put( "skin_ref", getSkinRef());
 		
 		result.put( "skin_id", skin.getSkinID());
@@ -1179,6 +1333,11 @@ public abstract class BaseMdiEntry
 		if ( data_source == null ) {
 		
 			data_source = getInitialDataSource();
+		}
+		
+		if ( data_source == null ){
+			
+			data_source = getUserData( UD_STANDALONE_DATA_SOURCE );
 		}
 		
 		if ( data_source != null ) {
@@ -1205,13 +1364,23 @@ public abstract class BaseMdiEntry
 		result.put( "control_type", getControlType());
 
 		UISWTViewBuilderCore builder = getEventListenerBuilder();
-		if (builder != null) {
+		
+		if ( builder != null){
+			
 			Map map = new HashMap();
+			
 			Class<? extends UISWTViewEventListener> cla = builder.getListenerClass();
+			
 			if (cla != null) {
 				map.put("name", cla.getName());
 			}
+			
+			UISWTViewEventListenerInstantiator instantiator = builder.getListenerInstantiator();
 
+			if ( instantiator != null ){			
+				map.put( "instantiator", instantiator.getUID());
+			}
+			
 			PluginInterface pi = builder.getPluginInterface();
 			if (pi != null) {
 				map.put( "plugin_id",  pi.getPluginID() );
@@ -1224,61 +1393,6 @@ public abstract class BaseMdiEntry
 
 		UISWTViewEventListener listener = getEventListener();
 
-
-		if ( listener instanceof UISWTViewEventListenerEx ){
-			
-			com.biglybt.ui.swt.pif.UISWTViewEventListenerEx.CloneConstructor cc = ((UISWTViewEventListenerEx)listener).getCloneConstructor();
-		
-			PluginInterface pi = cc.getPluginInterface();
-						
-			Map<String,Object>	map = new HashMap<>();
-			
-			map.put( "plugin_id",  pi.getPluginID() );
-			
-			map.put( "plugin_name", pi.getPluginName());
-			
-			map.put( "ipc_method", cc.getIPCMethod());
-			
-			List<Object>	params = cc.getIPCParameters();
-			
-			if ( params != null ){
-				
-				List	p_types	= new ArrayList<>();
-				List	p_vals	= new ArrayList<>();
-				
-				map.put( "p_types", p_types );
-				map.put( "p_vals", p_vals );
-				
-				for ( Object p: params ) {
-					
-					if ( p instanceof Boolean ) {
-						
-						p_types.add( "bool" );
-						
-						p_vals.add( new Long(((Boolean)p)?1:0));
-						
-					}else if ( p instanceof Long ) {
-
-						p_types.add( "long" );
-
-						p_vals.add( p );
-						
-					}else if ( p instanceof String ) {
-
-						p_types.add( "string" );
-
-						p_vals.add( p );
-	
-					}else {
-						
-						Debug.out( "Unsupported param type: " + p );
-					}
-				}
-			}
-			
-			result.put( "event_listener", map );
-		}
-		
 		return( result );
 	}
 
@@ -1287,72 +1401,32 @@ public abstract class BaseMdiEntry
 	buildStandAlone(
 		SWTSkinObjectContainer		soParent )
 	{
+		Object data_source = getDatasourceCore();
+
+		if ( data_source == null ){
+
+			data_source = getUserData( UD_STANDALONE_DATA_SOURCE );
+		}
+		
+		if ( data_source == null ){
+			
+			data_source = getInitialDataSource();
+		}
+		
 		return(
 			buildStandAlone(
 				soParent,
 				getSkinRef(),
 				skin,
 				id,
-				getDatasourceCore(),
+				data_source,
 				getControlType(),
 				getEventListenerBuilder() ));
 	}
 	
 	private static final Set<String>	installing_pids = new HashSet<>();
-
-	public static SkinnedDialog buildSkinnedDialog(String id, Object ds,
-		UISWTViewBuilderCore builder) {
-		SkinnedDialog skinnedDialog = new SkinnedDialog("skin3_dlg_sidebar_popout",
-			"shell", null, // standalone
-			SWT.RESIZE | SWT.MAX | SWT.DIALOG_TRIM);
-
-		SWTSkin skin = skinnedDialog.getSkin();
-
-		SWTSkinObjectContainer so = (SWTSkinObjectContainer) skin.getSkinObject(
-			"content-area");
-		SWTSkinObjectContainer cont = BaseMdiEntry.buildStandAlone(so, null,
-			SWTSkinFactory.getInstance(), id, ds, 0, builder);
-
-		if (cont == null) {
-			skinnedDialog.close();
-			return null;
-		}
-
-		return skinnedDialog;
-	}
-
-	public static void
-	popoutStandAlone(
-		String						title,
-		Map<String,Object>			state,
-		String						configPrefix )
-	{
-		SkinnedDialog skinnedDialog =
-				new SkinnedDialog(
-						"skin3_dlg_sidebar_popout",
-						"shell",
-						null,	// standalone
-						SWT.RESIZE | SWT.MAX | SWT.DIALOG_TRIM);
-
-		SWTSkin skin = skinnedDialog.getSkin();
-
-		SWTSkinObjectContainer cont = 
-			BaseMdiEntry.importStandAlone(
-				(SWTSkinObjectContainer)skin.getSkinObject( "content-area" ), 
-				state,
-				null );
-
-		if ( cont != null ){
-
-			skinnedDialog.setTitle( title );
-
-			skinnedDialog.open( configPrefix, true );
-
-		}else{
-
-			skinnedDialog.close();
-		}
-	}
+	
+	private static Map<String,List<Runnable>>	builder_waiters = new HashMap<>();
 	
 	public static SWTSkinObjectContainer
 	importStandAlone(
@@ -1415,18 +1489,25 @@ public abstract class BaseMdiEntry
 				String class_name = (String)el_map.get( "name" );
 
 				String try_install_plugin_id = null;
+				
 				PluginManager pluginManager = CoreFactory.getSingleton().getPluginManager();
+				
+					// Legacy didn't have plugin_id
+
+				String plugin_id = (String)el_map.get( "plugin_id" );
+				
+				PluginInterface pi = plugin_id==null?null:pluginManager.getPluginInterfaceByID( plugin_id );
+
 				if ( class_name != null ){
 					
-					// Legacy didn't have plugin_id
-					String plugin_id = (String)el_map.get( "plugin_id" );
-					PluginInterface pi = pluginManager.getPluginInterfaceByID( plugin_id );
-
 					ClassLoader cl;
 					
 					if ( pi != null ){
+						
 						cl = pi.getPluginClassLoader();
+						
 					}else{
+						
 						cl = BaseMdiEntry.class.getClassLoader();
 					}
 					
@@ -1493,6 +1574,7 @@ public abstract class BaseMdiEntry
 								data_source = new String[]{(String) args.get(0), (String) args.get(1)};
 								break;
 							case "com.biglybt.plugin.net.buddy.swt.BuddyPluginView":
+							case "com.biglybt.ui.swt.plugin.net.buddy.swt.BuddyPluginView":
 								cla = FriendsView.class;
 								pi = pluginManager.getPluginInterfaceByID("azbuddy");
 								break;
@@ -1509,84 +1591,146 @@ public abstract class BaseMdiEntry
 						
 					}
 					
-					if (plugin_id != null && pi == null) {
-						try_install_plugin_id = plugin_id;
-					} else {
+					if (	plugin_id != null && 
+							!plugin_id.equals( PluginInitializer.INTERNAL_PLUGIN_ID ) && 
+							pi == null ){
 						
-						if (cla == null ) {
+						try_install_plugin_id = plugin_id;
+						
+					}else{
+						
+						if ( cla == null ){
 							
 							throw(new Exception( "Failed to load class '" +class_name + "'"));
 						}
 						
 						builder = new UISWTViewBuilderCore( id, pi, cla ).setInitialDatasource(data_source);
 					}
-
 				}else{
-					
-					String plugin_id = (String)el_map.get( "plugin_id" );
-					
-					PluginInterface pi = pluginManager.getPluginInterfaceByID( plugin_id );
-					
-					if ( pi != null ){
-						
-						String ipc_method = (String)el_map.get( "ipc_method" );
-						
-						List	p_types = (List)el_map.get( "p_types" );
-						List	p_vals	= (List)el_map.get( "p_vals" );
-						
-						List<Object>	args = new ArrayList<>();
+					String instantiator_uid = (String)el_map.get( "instantiator" );
 
-						if ( p_types != null && !p_types.isEmpty()){
+					if ( instantiator_uid != null ){
+						
+						List<UISWTViewBuilderCore> builders = ViewManagerSWT.getInstance().getBuildersForInstantiatorUID( instantiator_uid );
+						
+						if ( !builders.isEmpty()){
 							
-							List<Class> 	types = new ArrayList<>();
+							builder = builders.get(0);
 							
-							for ( int i=0;i<p_types.size();i++) {
+						}else{
+							
+							if ( callback != null ){
 								
-								String type = (String)p_types.get(i);
-								Object val	= p_vals.get(i);
-								
-								if ( type.equals( "bool" )) {
+								synchronized( builder_waiters ){
 									
-									types.add( boolean.class );
+										// empty list denotes tried before and gave up
 									
-									args.add(((Long)val)!=0);
+									List<Runnable> list = builder_waiters.get( instantiator_uid );
 									
-								}else if ( type.equals( "long" )) {
+									if ( list == null ){
 									
-									types.add( long.class );
+										list = new ArrayList<>();
+										
+										builder_waiters.put( instantiator_uid, list );
+										
+										list.add( callback );
+										
+										TimerEventPeriodic[] timer = { null };
+										
+										synchronized( timer ){
+											
+											timer[0] = 
+												SimpleTimer.addPeriodicEvent(
+													"BuilderWaiter",
+													500,
+													new TimerEventPerformer(){
+														
+														long start = SystemTime.getMonotonousTime();
+														
+														@Override
+														public void 
+														perform(
+															TimerEvent event)
+														{
+															boolean done = false;
+															
+															try{
+																List<UISWTViewBuilderCore> builders = ViewManagerSWT.getInstance().getBuildersForInstantiatorUID( instantiator_uid );
+																
+																done = !builders.isEmpty();
+																	
+															}finally{
+											
+																if ( done || SystemTime.getMonotonousTime() - start > 30*1000 ){
+																
+																	synchronized( timer ){
+																	
+																		timer[0].cancel();
+																	}
+																	
+																	List<Runnable> todo;
+																	
+																	synchronized( builder_waiters ){
+																		
+																		List<Runnable> list = builder_waiters.get( instantiator_uid );
+																		
+																		todo = new ArrayList<>( list );
+																		
+																		list.clear();
+																	}
+																	
+																	for ( Runnable r: todo ){
+																		
+																		try{
+																			r.run();
+																			
+																		}catch( Throwable e ){
+																			
+																			Debug.out( e );
+																		}
+																	}
+																}
+															}
+														}
+													});
+											}
 									
-									args.add((Long)val );
-									
-								}else if ( type.equals( "string" )) {
-									
-									types.add( String.class );
-									
-									args.add((String)val );
-									
-								}else {
-									
-									Debug.out( "Unsupported type: " + type );
+										return( null );
+										
+									}else if ( !list.isEmpty()){
+										
+										list.add( callback );
+										
+										return( null );
+									}
 								}
 							}
+							
+							if (	plugin_id != null && 
+									!plugin_id.equals( PluginInitializer.INTERNAL_PLUGIN_ID ) && 
+									pi == null ){
+								
+								try_install_plugin_id = plugin_id;
+								
+							}else{
+								
+								throw(new Exception( "No builders found for '" + instantiator_uid + "'" ));
+							}
 						}
-
-						builder = new UISWTViewBuilderCore(id, pi).setListenerInstantiator(
-								true,
-							(Builder, view) -> (UISWTViewEventListener) pi.getIPC().invoke(ipc_method,
-										args.toArray(new Object[0])));
-						
-					}else{
-						try_install_plugin_id = plugin_id;
 					}
 				}
 
-				if (try_install_plugin_id != null) {
-					tryInstallPlugin(try_install_plugin_id, MapUtils.getMapString(el_map,
-							"plugin_name", try_install_plugin_id), callback);
+				if ( try_install_plugin_id != null ){
+					
+					tryInstallPlugin(
+						try_install_plugin_id, 
+						MapUtils.getMapString(el_map, "plugin_name", try_install_plugin_id), 
+						callback );
 				}
 			}catch( Throwable e ) {
 				
 				Debug.out( e );
+				
 				return null;
 			}
 		}

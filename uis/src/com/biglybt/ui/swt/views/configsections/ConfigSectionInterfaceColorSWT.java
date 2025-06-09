@@ -40,7 +40,9 @@ import com.biglybt.pifimpl.local.ui.config.ColorParameterImpl;
 import com.biglybt.pifimpl.local.ui.config.ParameterGroupImpl;
 import com.biglybt.pifimpl.local.ui.config.ParameterImpl;
 import com.biglybt.ui.config.ConfigSectionImpl;
+import com.biglybt.ui.swt.ConfigKeysSWT;
 import com.biglybt.ui.swt.Messages;
+import com.biglybt.ui.swt.UI;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.config.BaseSwtParameter;
 import com.biglybt.ui.swt.config.ColorSwtParameter;
@@ -72,9 +74,28 @@ public class ConfigSectionInterfaceColorSWT
 	public void build() {
 		setDefaultUITypesForAdd(UIInstance.UIT_SWT);
 
-		if ( Constants.isOSX && SWT.getVersion() >= 4924 ){	// 4.12RC2
+		if ( UI.canUseSystemTheme()){
 			
-			add( new BooleanParameterImpl( "Use System Theme", "ConfigView.section.style.usesystemtheme"));
+			String res;
+			
+			if ( Constants.isWindows ){
+				
+					// on Windows enabling this parameter actually forces it to dark mode regardless of what
+					// Windows is set to show
+				
+				res = "ConfigView.section.style.usedarktheme";
+				
+			}else{
+				
+				res = "ConfigView.section.style.usesystemtheme";
+			}
+			
+			add( new BooleanParameterImpl( "Use System Theme", res ));
+		}
+		
+		if ( Constants.isLinux ){
+			
+			add( new BooleanParameterImpl( "Force Dark Theme", "ConfigView.section.style.forcedarktheme"));
 		}
 
 		ColorParameterImpl colorScheme = new ColorParameterImpl("Color Scheme",
@@ -82,8 +103,17 @@ public class ConfigSectionInterfaceColorSWT
 		add(colorScheme);
 		colorScheme.setSuffixLabelKey("restart.required.for.some");
 		
+		BooleanParameterImpl gradient_sel = new BooleanParameterImpl(
+				"Gradient Fill Selection", "ConfigView.section.style.gradient.selection");
+		add(gradient_sel);
+		
+		
+		
 		List<Parameter> listOverride = new ArrayList<>();
 
+		add(new BooleanParameterImpl(ConfigKeysSWT.BCFG_FORCE_GRAYSCALE,
+			"ConfigView.section.style.forceGrayscale"), listOverride);
+		
 		for (String s : sColorsToOverride) {
 			if (Utils.TABLE_GRIDLINE_IS_ALTERNATING_COLOR
 					&& s.equals("altRow")) {

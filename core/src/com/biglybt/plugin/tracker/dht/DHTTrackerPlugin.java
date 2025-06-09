@@ -24,6 +24,8 @@ import java.net.InetSocketAddress;
 import java.net.URL;
 import java.net.UnknownHostException;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
@@ -66,7 +68,7 @@ import com.biglybt.util.StringCompareUtils;
 
 public class
 DHTTrackerPlugin
-	implements Plugin, DownloadListener, DownloadAttributeListener, DownloadTrackerListener
+	implements Plugin, DownloadListener, DownloadAttributeListener, DownloadTrackerListener, AEDiagnosticsEvidenceGenerator
 {
 	public static Object	DOWNLOAD_USER_DATA_I2P_SCRAPE_KEY	= new Object();
 
@@ -76,11 +78,14 @@ DHTTrackerPlugin
 
 	private static final int	ANNOUNCE_TIMEOUT			= 2*60*1000;
 	private static final int	ANNOUNCE_DERIVED_TIMEOUT	= 60*1000;	// spend less time on these
-	private static final int	SCRAPE_TIMEOUT				= 30*1000;
 
 	private static final int	ANNOUNCE_MIN_DEFAULT		= 2*60*1000;
 	private static final int	ANNOUNCE_MAX				= 60*60*1000;
 	private static final int	ANNOUNCE_MAX_DERIVED_ONLY	= 30*60*1000;
+
+	private static final Object SCRAPE_DATA_KEY				= new Object();
+	private static final int	SCRAPE_TIMEOUT				= 30*1000;
+	private static final int	SCRAPE_MIN_DEFAULT			= 30*60*1000;
 
 	private static final int	INTERESTING_CHECK_PERIOD		= 4*60*60*1000;
 	private static final int	INTERESTING_INIT_RAND_OURS		=    5*60*1000;
@@ -96,6 +101,11 @@ DHTTrackerPlugin
 	private static final int	INTERESTING_AVAIL_MAX		= 8;	// won't pub if more
 	private static final int	INTERESTING_PUB_MAX_DEFAULT	= 30;	// limit on pubs
 
+	private static final int	MAX_ACTIVE_DHT_GETS		= 8;
+	private static final int	MAX_ACTIVE_DHT_REMOVES	= 5;
+	private static final int	MAX_ACTIVE_DHT_PUTS		= 5;
+	private static final int	MAX_ACTIVE_DHT_SCRAPES	= 3;
+	
 	private static final int	REG_TYPE_NONE			= 1;
 	private static final int	REG_TYPE_FULL			= 2;
 	private static final int	REG_TYPE_DERIVED		= 3;
@@ -116,6 +126,8 @@ DHTTrackerPlugin
 	private static final int	DL_DERIVED_MAX_TRACK		= 20;
 	private static final int	DIRECT_INJECT_PEER_MAX		= 5;
 
+	private static final Object LATEST_REGISTER_REASON	= new Object();
+	
 	//private static final boolean ADD_ASN_DERIVED_TARGET			= false;
 	//private static final boolean ADD_NETPOS_DERIVED_TARGETS		= false;
 
@@ -139,7 +151,7 @@ DHTTrackerPlugin
 	private TorrentAttribute 	ta_peer_sources;
 
 	private Map<Download,Long>		interesting_downloads 	= new HashMap<>();
-	private int						interesting_published	= 0;
+	private Set<Download>			interesting_published	= new IdentityHashSet<>();
 	private int						interesting_pub_max		= INTERESTING_PUB_MAX_DEFAULT;
 	private Map<Download,int[]>		running_downloads 		= new HashMap<>();
 	private Map<Download,int[]>		run_data_cache	 		= new HashMap<>();
@@ -164,8 +176,17 @@ DHTTrackerPlugin
 	private Map<Download,int[]>					scrape_injection_map = new WeakHashMap<>();
 
 	private Random				random = new Random();
-	private boolean				is_running;
+	private volatile boolean	is_running;
+	private volatile boolean	closing	= false;
 
+	private AtomicInteger		dht_gets_active			= new AtomicInteger();
+	private AtomicInteger		dht_puts_active			= new AtomicInteger();
+	private AtomicInteger		dht_removes_active		= new AtomicInteger();
+	
+	private AtomicInteger		dht_scrapes_active			= new AtomicInteger();
+	private AtomicInteger		dht_scrapes_complete		= new AtomicInteger();
+	private AtomicLong			dht_scrape_complete_mono	= new AtomicLong(-1);
+	
 	private AEMonitor			this_mon	= new AEMonitor( "DHTTrackerPlugin" );
 
 	//private DHTNetworkPosition[]	current_network_positions;
@@ -211,6 +232,8 @@ DHTTrackerPlugin
 	initialize(
 		PluginInterface 	_plugin_interface )
 	{
+		AEDiagnostics.addEvidenceGenerator( this );
+		
 		plugin_interface	= _plugin_interface;
 
 		log = plugin_interface.getLogger().getTimeStampedChannel(PLUGIN_NAME);
@@ -412,7 +435,7 @@ DHTTrackerPlugin
 				public void
 				closedownInitiated()
 				{
-
+					closing = true;
 				}
 
 				@Override
@@ -490,9 +513,9 @@ DHTTrackerPlugin
 
 					processRegistrations( ticks%8==0 );
 
-					if ( ticks == 2 || ticks%4==0 ){
-
-						processNonRegistrations();
+					if ( !closing ){
+						
+						processNonRegistrations( ticks == 2 || ticks%4==0, true, ticks%4 == 0 );
 					}
 
 					if ( alt_lookup_handler != null ){
@@ -831,6 +854,8 @@ DHTTrackerPlugin
 
 				interesting_downloads.remove( download );
 
+				interesting_published.remove( download );
+				
 				running_downloads.remove( download );
 
 				run_data_cache.remove( download );
@@ -923,7 +948,7 @@ DHTTrackerPlugin
 
 						register_type	= REG_TYPE_FULL;
 
-						register_reason = "decentralised";
+						register_reason = "Decentralised";
 
 					}else{
 
@@ -948,7 +973,7 @@ DHTTrackerPlugin
 
 							if ( !( ok || TEST_ALWAYS_TRACK )){
 
-								register_reason = "decentralised peer source disabled";
+								register_reason = "Decentralised peer source disabled";
 
 							}else{
 									// this will always be true since change to exclude queued...
@@ -967,7 +992,7 @@ DHTTrackerPlugin
 
 									register_type	= REG_TYPE_FULL;
 
-									register_reason = TEST_ALWAYS_TRACK?"testing always track":"torrent requests decentralised tracking";
+									register_reason = TEST_ALWAYS_TRACK?"Testing always track":"Torrent requests decentralised tracking";
 
 								}else if ( track_normal_when_offline.getValue()){
 
@@ -983,11 +1008,11 @@ DHTTrackerPlugin
 
 											register_type	= REG_TYPE_FULL;
 
-											register_reason = "tracker unavailable (announce)";
+											register_reason = "Tracker unavailable (announce)";
 
 										}else{
 
-											register_reason = "tracker available (announce: " + result.getURL() + ")";
+											register_reason = "Tracker available (announce: " + result.getURL() + ")";
 										}
 									}else{
 
@@ -999,11 +1024,11 @@ DHTTrackerPlugin
 
 											register_type	= REG_TYPE_FULL;
 
-											register_reason = "tracker unavailable (scrape)";
+											register_reason = "Tracker unavailable (scrape)";
 
 										}else{
 
-											register_reason = "tracker available (scrape: " + result.getURL() + ")";
+											register_reason = "Tracker available (scrape: " + result.getURL() + ")";
 										}
 									}
 
@@ -1049,44 +1074,51 @@ DHTTrackerPlugin
 
 											register_type	= REG_TYPE_FULL;
 
-											register_reason = "limited online tracking";
+											register_reason = "Limited online tracking";
 										}
 									}
 								}else{
 									register_type	= REG_TYPE_FULL;
 
-									register_reason = "peer source enabled";
+									register_reason = "Peer source enabled";
 								}
 							}
 						}else{
 
-							register_reason = "decentralised backup disabled for the torrent";
+							register_reason = "Decentralised backup disabled for the torrent";
 						}
 					}
 				}else{
 
-					register_reason = "not public";
+					if ( public_net ){
+					
+						register_reason = MessageText.getString( "label.private" );
+						
+					}else{
+						
+						register_reason = MessageText.getString( "Scrape.status.networkdisabled" );
+					}
 				}
 			}else{
 
-				register_reason = "torrent is broken";
+				register_reason = "Torrent is broken";
 			}
 
 			if ( register_type == REG_TYPE_DERIVED ){
 
 				if ( register_reason.length() == 0 ){
 
-					register_reason = "derived";
+					register_reason = "Derived";
 
 				}else{
 
-					register_reason = "derived (overriding ' " + register_reason + "')";
+					register_reason = "Derived (overriding ' " + register_reason + "')";
 				}
 			}
 		}else if ( 	state == Download.ST_STOPPED ||
 					state == Download.ST_ERROR ){
 
-			register_reason	= "not running";
+			register_reason	= "Not running";
 
 			skip_log	= true;
 
@@ -1101,6 +1133,8 @@ DHTTrackerPlugin
 
 			register_reason	= "";
 		}
+
+		download.setUserData( LATEST_REGISTER_REASON, register_reason );
 
 		if ( register_reason.length() > 0 ){
 
@@ -1143,7 +1177,7 @@ DHTTrackerPlugin
 						}
 					}
 				}else{
-
+					
 					if ( run_data  != null ){
 
 						if ( !skip_log ){
@@ -1368,6 +1402,11 @@ DHTTrackerPlugin
 
 		while( rds_it.hasNext()){
 
+			if ( dht_puts_active.get() > MAX_ACTIVE_DHT_PUTS || closing ){
+				
+				break;
+			}
+			
 			Download	dl = rds_it.next();
 
 			int	reg_type = REG_TYPE_NONE;
@@ -1501,6 +1540,11 @@ DHTTrackerPlugin
 
 		while( rd_it.hasNext()){
 
+			if ( dht_removes_active.get() > MAX_ACTIVE_DHT_REMOVES ){
+				
+				break;
+			}
+			
 			Map.Entry<Download,RegistrationDetails>	entry = rd_it.next();
 
 			final Download	dl = entry.getKey();
@@ -1538,13 +1582,29 @@ DHTTrackerPlugin
 		}
 
 			// lastly gets
-
+				
 		rds_it = rds.iterator();
 
 		while( rds_it.hasNext()){
 
+			if ( dht_gets_active.get() > MAX_ACTIVE_DHT_GETS || closing ){
+				
+				break;
+			}
+			
 			final Download	dl = (Download)rds_it.next();
 
+			RegistrationDetails	registration = (RegistrationDetails)registered_downloads.get( dl );
+
+			if ( registration == null ){
+
+					// this can happen since we rate-limited the put operations
+				
+				// Debug.out( "Inconsistent, registration should be non-null: dl=" + dl.getName());
+
+				continue;
+			}
+			
 			Long	next_time;
 
 			try{
@@ -1590,15 +1650,6 @@ DHTTrackerPlugin
 				if ( skip ){
 
 					log( dl, "Deferring announce as activity outstanding" );
-				}
-
-				RegistrationDetails	registration = (RegistrationDetails)registered_downloads.get( dl );
-
-				if ( registration == null ){
-
-					Debug.out( "Inconsistent, registration should be non-null" );
-
-					continue;
 				}
 
 				boolean	derived_only = false;
@@ -1791,6 +1842,8 @@ DHTTrackerPlugin
 							byte[]	key,
 							boolean	timeout_occurred )
 						{
+							dht_puts_active.decrementAndGet();
+							
 							if ( target.getType() == REG_TYPE_FULL ){
 
 								log( 	download,
@@ -1800,6 +1853,8 @@ DHTTrackerPlugin
 								// decreaseActive( dl );
 						}
 					});
+				
+				dht_puts_active.incrementAndGet();
 			}
 		}
 	}
@@ -2124,6 +2179,8 @@ DHTTrackerPlugin
 								complete = true;
 							}
 
+							dht_gets_active.decrementAndGet();
+							
 							if ( 	target.getType() == REG_TYPE_FULL ||
 									(	target.getType() == REG_TYPE_DERIVED &&
 										seed_count + leecher_count > 1 )){
@@ -2596,6 +2653,8 @@ DHTTrackerPlugin
 								}
 						}
 					});
+			
+			dht_gets_active.incrementAndGet();
 		}
 
 		return( num_done );
@@ -2698,6 +2757,8 @@ DHTTrackerPlugin
 								byte[]	key,
 								boolean	timeout_occurred )
 							{
+								dht_removes_active.decrementAndGet();
+								
 								if ( target.getType() == REG_TYPE_FULL ){
 
 									log( 	download,
@@ -2708,6 +2769,8 @@ DHTTrackerPlugin
 								decreaseActive( download );
 							}
 						});
+				
+				dht_removes_active.incrementAndGet();
 			}
 		}
 	}
@@ -2788,24 +2851,27 @@ DHTTrackerPlugin
 	}
 
 	protected void
-	processNonRegistrations()
+	processNonRegistrations(
+		boolean	do_presence_checks,
+		boolean	do_scrape_checks,
+		boolean	do_logging )
 	{
-		Download	ready_download 				= null;
-		long		ready_download_next_check	= -1;
-
-		long	now = plugin_interface.getUtilities().getCurrentSystemTime();
-
+		long	now			= SystemTime.getCurrentTime();
+		long	mono_now	= SystemTime.getMonotonousTime();
+		
 			// unfortunately getting scrape results can acquire locks and there is a vague
 			// possibility of deadlock here, so pre-fetch the scrape results
 
-		List<Download>	to_scrape = new ArrayList<>();
+		List<Download>	to_scrape;
 
 		try{
 			this_mon.enter();
 
+			to_scrape = new ArrayList<>(interesting_downloads.size());
+			
 			Iterator<Download>	it = interesting_downloads.keySet().iterator();
 
-			while( it.hasNext() && ready_download == null ){
+			while( it.hasNext()){
 
 				Download	download = it.next();
 
@@ -2832,92 +2898,184 @@ DHTTrackerPlugin
 
 		Map<Download,DownloadScrapeResult> scrapes = new HashMap<>();
 
+		List<Download> dht_only_scrapes = new ArrayList<>( to_scrape.size());
+		
+		boolean do_dht_scrapes = dht_scrapes_active.get() < MAX_ACTIVE_DHT_SCRAPES;
+		
 		for (int i=0;i<to_scrape.size();i++){
 
 			Download	download = (Download)to_scrape.get(i);
 
 			scrapes.put( download, download.getLastScrapeResult());
+			
+			//if ( do_dht_scrapes ){
+				
+				Torrent torrent = download.getTorrent();
+
+				if ( torrent != null && TorrentUtils.isDecentralised( torrent.getAnnounceURL())){
+
+					int state = download.getState();
+					
+						// ignore stopped ones for the moment
+					
+					if ( state == Download.ST_QUEUED || download.isPaused()){
+						
+						dht_only_scrapes.add( download );
+					}
+				}
+			//}
 		}
 
-		try{
-			this_mon.enter();
+		Download	presence_download				= null;
+		long		presence_download_next_check	= -1;
 
-			Iterator<Download>	it = interesting_downloads.keySet().iterator();
-
-			while( it.hasNext() && ready_download == null ){
-
-				Download	download = it.next();
-
-				Torrent	torrent = download.getTorrent();
-
-				if ( torrent == null ){
-
-					continue;
-				}
-
-				int[] run_data = running_downloads.get( download );
-
-				if ( run_data == null || run_data[0] == REG_TYPE_DERIVED ){
-
-					boolean	force =  torrent.wasCreatedByUs();
-
-					if ( !force ){
-
-						if ( interesting_pub_max > 0 && interesting_published > interesting_pub_max ){
-
-							continue;
+		if ( do_presence_checks ){
+			
+			try{
+				this_mon.enter();
+	
+				Iterator<Download>	it = interesting_downloads.keySet().iterator();
+	
+				while( it.hasNext() && presence_download == null ){
+	
+					Download	download = it.next();
+	
+					if ( interesting_published.contains(download)){
+						
+						continue;
+					}
+					
+					Torrent	torrent = download.getTorrent();
+	
+					if ( torrent == null ){
+	
+						continue;
+					}
+	
+					int[] run_data = running_downloads.get( download );
+	
+					if ( run_data == null || run_data[0] == REG_TYPE_DERIVED ){
+	
+						boolean	force =  torrent.wasCreatedByUs();
+	
+						if ( !force ){
+	
+							if ( interesting_pub_max > 0 && interesting_published.size() > interesting_pub_max ){
+	
+								continue;
+							}
+	
+							DownloadScrapeResult	scrape = (DownloadScrapeResult)scrapes.get( download );
+	
+							if ( scrape == null ){
+	
+									// catch it next time round
+	
+								continue;
+							}
+	
+							if ( scrape.getSeedCount() + scrape.getNonSeedCount() > NUM_WANT ){
+	
+								continue;
+							}
 						}
-
-						DownloadScrapeResult	scrape = (DownloadScrapeResult)scrapes.get( download );
-
-						if ( scrape == null ){
-
-								// catch it next time round
-
-							continue;
-						}
-
-						if ( scrape.getSeedCount() + scrape.getNonSeedCount() > NUM_WANT ){
-
-							continue;
+	
+						long	target = ((Long)interesting_downloads.get( download )).longValue();
+	
+						long check_period = TorrentUtils.isDecentralised( torrent.getAnnounceURL())?INTERESTING_DHT_CHECK_PERIOD:INTERESTING_CHECK_PERIOD;
+	
+						if ( target <= now ){
+	
+							presence_download				= download;
+							presence_download_next_check 	= now + check_period;
+	
+							interesting_downloads.put( download, new Long( presence_download_next_check ));
+	
+						}else if ( target - now > check_period ){
+	
+							interesting_downloads.put( download, new Long( now + (target%check_period)));
 						}
 					}
+				}
+	
+			}finally{
+	
+				this_mon.exit();
+			}
+		}
+		
+		Download	ready_scrape	= null;
 
-					long	target = ((Long)interesting_downloads.get( download )).longValue();
-
-					long check_period = TorrentUtils.isDecentralised( torrent.getAnnounceURL())?INTERESTING_DHT_CHECK_PERIOD:INTERESTING_CHECK_PERIOD;
-
-					if ( target <= now ){
-
-						ready_download				= download;
-						ready_download_next_check 	= now + check_period;
-
-						interesting_downloads.put( download, new Long( ready_download_next_check ));
-
-					}else if ( target - now > check_period ){
-
-						interesting_downloads.put( download, new Long( now + (target%check_period)));
+		if ( do_scrape_checks ){
+			
+			if ( do_dht_scrapes && !dht_only_scrapes.isEmpty()){
+	
+				long		earliest		= -1;
+				
+				for ( Download download: dht_only_scrapes ){
+					
+					if ( download != presence_download ){
+										
+						long[] data = (long[])download.getUserData( SCRAPE_DATA_KEY );
+						
+						if ( data == null ){
+							
+							ready_scrape = download;
+													
+							break;
+							
+						}else{
+							
+							long mt = data[0];
+							
+							if ( mt <= mono_now ){
+							
+								if ( earliest == -1 || mt < earliest ){
+								
+									earliest		= mt;
+									ready_scrape	= download;
+								}
+							}
+						}
 					}
 				}
 			}
-
-		}finally{
-
-			this_mon.exit();
 		}
+		
+		if ( do_logging ){
+			
+			try{
+				this_mon.enter();
+				
+				String p_str = presence_download==null?"null":presence_download.getName();
+				String s_str = ready_scrape==null?"null":ready_scrape.getName();
+				
+				long last_scrape = dht_scrape_complete_mono.get();
+				
+				String last_scrape_str = last_scrape<0?"-":(((mono_now-last_scrape)/1000) + "s");
+				
+				log.log( 	"Stats: registered=" + registered_downloads.size() + ", query=" + query_map.size() + ", running=" + running_downloads.size() + 
+							", active=" + in_progress.size() + ", interesting=" + interesting_downloads.size() + 
+							", dhtget=" + dht_gets_active.get() + ", dhtput=" + dht_puts_active.get() + ", dhtrem=" + dht_removes_active.get() + 
+							", dhtscrape=" + dht_only_scrapes.size() + "/" + dht_scrapes_active.get() + "/" + dht_scrapes_complete.get() + "/" + last_scrape_str + 
+							", dl=" + p_str + "/" + s_str );
+				
+			}finally{
 
-		if ( ready_download != null ){
+				this_mon.exit();
+			}
+		}
+		
+		if ( presence_download != null ){
 
-			final Download	f_ready_download = ready_download;
+			Torrent torrent = presence_download.getTorrent();
 
-			final Torrent torrent = ready_download.getTorrent();
-
-			if ( ready_download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
+			if ( presence_download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
 
 				try{
 					this_mon.enter();
 
-					interesting_downloads.remove( f_ready_download );
+					interesting_downloads.remove( presence_download );
 
 				}finally{
 
@@ -2931,7 +3089,7 @@ DHTTrackerPlugin
 				try{
 					this_mon.enter();
 
-					interesting_downloads.remove( f_ready_download );
+					interesting_downloads.remove( presence_download );
 
 				}finally{
 
@@ -2939,13 +3097,15 @@ DHTTrackerPlugin
 				}
 			}else{
 
-				//System.out.println( "presence query for " + ready_download.getName());
+				Download	f_presence_download = presence_download;
+
+					//System.out.println( "presence query for " + ready_download.getName());
 
 				final long start 		= now;
-				final long f_next_check = ready_download_next_check;
-
+				final long f_next_check = presence_download_next_check;
+				
 				dht.get(	torrent.getHash(),
-							"Presence query for '" + ready_download.getName() + "'",
+							"Presence query for '" + presence_download.getName() + "'",
 							(byte)0,
 							INTERESTING_AVAIL_MAX,
 							ANNOUNCE_TIMEOUT,
@@ -3043,7 +3203,7 @@ DHTTrackerPlugin
 
 									int	total = leechers + seeds;
 
-									log( f_ready_download,
+									log( f_presence_download,
 											"Presence query: availability="+
 											(total==INTERESTING_AVAIL_MAX?(INTERESTING_AVAIL_MAX+"+"):(total+"")) + ",div=" + diversified +
 											" (elapsed=" + TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start) + ")");
@@ -3053,7 +3213,7 @@ DHTTrackerPlugin
 										try{
 											this_mon.enter();
 
-											interesting_downloads.remove( f_ready_download );
+											interesting_downloads.remove( f_presence_download );
 
 										}finally{
 
@@ -3062,26 +3222,21 @@ DHTTrackerPlugin
 
 									}else if ( total < INTERESTING_AVAIL_MAX ){
 
-											// once we're registered we don't need to process this download any
-											// more unless it goes active and then inactive again
-
 										try{
 											this_mon.enter();
 
-											interesting_downloads.remove( f_ready_download );
-
+											interesting_published.add( f_presence_download );
+											
 										}finally{
 
 											this_mon.exit();
 										}
 
-										interesting_published++;
-
 										if ( !disable_put ){
 
 											dht.put(
 												torrent.getHash(),
-												"Presence store for '" + f_ready_download.getName() + "'",
+												"Presence store for '" + f_presence_download.getName() + "'",
 												"0".getBytes(),	// port 0, no connections
 												(byte)0,
 												new DHTPluginOperationListener()
@@ -3131,11 +3286,11 @@ DHTTrackerPlugin
 									try{
 										this_mon.enter();
 
-										int[] run_data = running_downloads.get( f_ready_download );
+										int[] run_data = running_downloads.get( f_presence_download );
 
 										if ( run_data == null ){
 
-											run_data = run_data_cache.get( f_ready_download );
+											run_data = run_data_cache.get( f_presence_download );
 										}
 
 										if ( run_data != null ){
@@ -3161,13 +3316,13 @@ DHTTrackerPlugin
 
 									if ( i2p_seeds + i2p_leechers > 0 ){
 
-										int[] details = (int[])f_ready_download.getUserData( DOWNLOAD_USER_DATA_I2P_SCRAPE_KEY );
+										int[] details = (int[])f_presence_download.getUserData( DOWNLOAD_USER_DATA_I2P_SCRAPE_KEY );
 
 										if ( details == null ){
 
 											details = new int[]{ i2p_seeds, i2p_leechers };
 
-											f_ready_download.setUserData( DOWNLOAD_USER_DATA_I2P_SCRAPE_KEY,details );
+											f_presence_download.setUserData( DOWNLOAD_USER_DATA_I2P_SCRAPE_KEY,details );
 
 										}else{
 
@@ -3177,7 +3332,7 @@ DHTTrackerPlugin
 									}
 
 
-									f_ready_download.setScrapeResult(
+									f_presence_download.setScrapeResult(
 										new DownloadScrapeResult()
 										{
 											@Override
@@ -3249,6 +3404,245 @@ DHTTrackerPlugin
 							});
 
 			}
+		}
+		
+
+		
+		if ( ready_scrape != null ){
+							
+			Download f_ready_scrape = ready_scrape;
+			
+			Torrent torrent = ready_scrape.getTorrent();
+
+			long start 		= now;
+
+				// we scrape around 4 a minute so...
+			
+			long offset = dht_only_scrapes.size()*60*1000/4;
+			
+			if ( offset < SCRAPE_MIN_DEFAULT ){
+				
+				offset = SCRAPE_MIN_DEFAULT;
+			}
+			
+			offset += RandomUtils.nextLong( 2*60*1000 );	// spread things out a bit
+			
+			long f_next_check = now +  offset;
+			
+			long[] scrape_data = new long[]{ mono_now + offset, f_next_check, -1, -1 };
+			
+			ready_scrape.setUserData( SCRAPE_DATA_KEY, scrape_data );
+
+			dht.get(torrent.getHash(),
+					"Scrape for '" + ready_scrape.getName() + "'",
+					DHTPlugin.FLAG_DOWNLOADING,
+					INTERESTING_AVAIL_MAX,
+					SCRAPE_TIMEOUT,
+					false, false,
+					new DHTPluginOperationListener()
+					{
+						private boolean diversified;
+						private int 	leechers = 0;
+						private int 	seeds	 = 0;
+
+						private int 	i2p_leechers = 0;
+						private int 	i2p_seeds	 = 0;
+
+						@Override
+						public boolean
+						diversified()
+						{
+							diversified	= true;
+
+							return( false );
+						}
+
+						@Override
+						public void
+						starts(
+							byte[] 				key )
+						{
+						}
+
+						@Override
+						public void
+						valueRead(
+							DHTPluginContact	originator,
+							DHTPluginValue		value )
+						{
+							boolean is_leecher = ( value.getFlags() & DHTPlugin.FLAG_DOWNLOADING ) == 1;
+
+							if ( is_leecher ){
+
+								leechers++;
+
+							}else{
+
+								seeds++;
+							}
+
+							try{
+								String[]	tokens = new String(value.getValue()).split(";");
+
+								for (int i=1;i<tokens.length;i++){
+
+									String	token = tokens[i].trim();
+
+									if ( token.length() > 0 ){
+
+										if ( !Character.isDigit( token.charAt( 0 ))){
+
+											String flag_str = token;
+
+											if ( flag_str.contains("I")){
+
+												if ( is_leecher ){
+
+													i2p_leechers++;
+
+												}else{
+
+													i2p_seeds++;
+												}
+											}
+										}
+									}
+
+								}
+							}catch( Throwable e ){
+
+							}
+						}
+
+						@Override
+						public void
+						valueWritten(
+							DHTPluginContact	target,
+							DHTPluginValue		value )
+						{
+						}
+
+						@Override
+						public void
+						complete(
+							byte[]	key,
+							boolean	timeout_occurred )
+						{
+							dht_scrapes_active.decrementAndGet();
+							dht_scrapes_complete.incrementAndGet();
+							
+							dht_scrape_complete_mono.set( SystemTime.getMonotonousTime());
+							
+							log( 	f_ready_scrape,
+									"Scrape completed (elapsed=" + TimeFormatter.formatColonMillis(SystemTime.getCurrentTime() - start)
+											+ "), seeds=" + seeds + ", leechers=" + leechers);
+
+							scrape_data[2] = seeds;
+							scrape_data[3] = leechers;
+							
+							if ( diversified ){
+
+								try{
+									this_mon.enter();
+
+									interesting_downloads.remove( f_ready_scrape );
+
+								}finally{
+
+									this_mon.exit();
+								}
+							}
+
+							if ( i2p_seeds + i2p_leechers > 0 ){
+
+								int[] details = (int[])f_ready_scrape.getUserData( DOWNLOAD_USER_DATA_I2P_SCRAPE_KEY );
+
+								if ( details == null ){
+
+									details = new int[]{ i2p_seeds, i2p_leechers };
+
+									f_ready_scrape.setUserData( DOWNLOAD_USER_DATA_I2P_SCRAPE_KEY,details );
+
+								}else{
+
+									details[0] = Math.max( details[0], i2p_seeds );
+									details[1] = Math.max( details[1], i2p_leechers );
+								}
+							}
+
+
+							f_ready_scrape.setScrapeResult(
+								new DownloadScrapeResult()
+								{
+									@Override
+									public Download
+									getDownload()
+									{
+										return( null );
+									}
+
+									@Override
+									public int
+									getResponseType()
+									{
+										return( DownloadScrapeResult.RT_SUCCESS );
+									}
+
+									@Override
+									public int
+									getSeedCount()
+									{
+										return( seeds );
+									}
+
+									@Override
+									public int
+									getNonSeedCount()
+									{
+										return( leechers );
+									}
+
+									@Override
+									public long
+									getScrapeStartTime()
+									{
+										return( SystemTime.getCurrentTime());
+									}
+
+									@Override
+									public void
+									setNextScrapeStartTime(
+										long nextScrapeStartTime)
+									{
+									}
+
+									@Override
+									public long
+									getNextScrapeStartTime()
+									{
+										return( f_next_check );
+									}
+
+									@Override
+									public String
+									getStatus()
+									{
+										return( "OK" );
+									}
+
+									@Override
+									public URL
+									getURL()
+									{
+										URL	url_to_report = torrent.isDecentralised()?torrent.getAnnounceURL():DEFAULT_URL;
+
+										return( url_to_report );
+									}
+								});
+						}
+					});
+			
+			dht_scrapes_active.incrementAndGet();
 		}
 	}
 
@@ -3330,6 +3724,142 @@ DHTTrackerPlugin
 		}
 	}
 
+	public void
+	generate(
+		IndentWriter		writer )
+	{
+		writer.println( "DHT Tracker" );
+
+		long now		= SystemTime.getCurrentTime();
+		long mono_now	= SystemTime.getMonotonousTime();
+		
+		try{
+			writer.indent();
+			
+			try{
+				this_mon.enter();
+				
+				writer.println( "Registered" );
+				
+				try{
+					writer.indent();
+				
+					for ( Map.Entry<Download,RegistrationDetails> e: registered_downloads.entrySet()){
+					
+						writer.println( e.getKey().getName());
+					}
+				}finally{
+					
+					writer.exdent();
+				}
+				
+				writer.println( "Running" );
+				
+				try{
+					writer.indent();
+				
+					for ( Map.Entry<Download,int[]> e: running_downloads.entrySet()){
+					
+						int[] vals = e.getValue();
+						
+						writer.println( e.getKey().getName() + " -> " + vals[0] + "/" + vals[1] + "/" + vals[2] + "/" + vals[3] + "/" + vals[4] );
+					}
+				}finally{
+					
+					writer.exdent();
+				}
+				
+				writer.println( "Interesting" );
+				
+				try{
+					writer.indent();
+				
+					for ( Map.Entry<Download,Long> e: interesting_downloads.entrySet()){
+					
+						Download download = e.getKey();
+						
+						int[] run_data = running_downloads.get( download );
+
+						String scrape;
+						
+						if ( run_data == null || run_data[0] == REG_TYPE_DERIVED ){
+						
+							scrape = "yes";
+							
+							Torrent torrent = download.getTorrent();
+
+							if ( torrent != null && TorrentUtils.isDecentralised( torrent.getAnnounceURL())){
+
+								int state = download.getState();
+								
+									// ignore stopped ones for the moment
+								
+								if ( state == Download.ST_QUEUED || download.isPaused()){
+									
+									scrape += ", dht only";
+									
+									long[] data = (long[])download.getUserData( SCRAPE_DATA_KEY );
+								
+									if ( data == null ){
+										
+										scrape += ": pending";
+										
+									}else{
+										
+										scrape += ": next in " + ((data[0] - mono_now )/1000) + "s";
+									}
+								}
+							}
+						}else{
+							
+							scrape = "no";
+						}
+						
+						writer.println( e.getKey().getName() + " -> " + ( e.getValue() - now ) + ", scrape=" + scrape );
+					}
+				}finally{
+					
+					writer.exdent();
+				}
+				
+				writer.println( "Interesting Published" );
+				
+				try{
+					writer.indent();
+				
+					for ( Download d: interesting_published ){
+					
+						writer.println( d.getName());
+					}
+				}finally{
+					
+					writer.exdent();
+				}
+				
+				writer.println( "Query Map" );
+				
+				try{
+					writer.indent();
+				
+					for ( Map.Entry<Download,Long> q: query_map.entrySet()){
+					
+						writer.println( q.getKey().getName() + " -> " + ( q.getValue() - now ));
+					}
+				}finally{
+					
+					writer.exdent();
+				}
+			}finally{
+
+				this_mon.exit();
+			}
+			
+		}finally{
+			
+			writer.exdent();
+		}
+	}
+	
 	@Override
 	public void
 	positionChanged(
@@ -3878,6 +4408,7 @@ DHTTrackerPlugin
 				private String  status_str;
 				private long	next_time	= -1;
 				private int[]	run_data;
+				private long[]	scrape_data;
 
 				private void
 				fixup()
@@ -3896,6 +4427,8 @@ DHTTrackerPlugin
 
 							run_data = running_downloads.get( download );
 
+							scrape_data = (long[])download.getUserData( SCRAPE_DATA_KEY );
+							
 							if ( run_data != null ){
 
 								if ( in_progress.containsKey( download )){
@@ -3913,8 +4446,15 @@ DHTTrackerPlugin
 								}
 							}else if ( interesting_downloads.containsKey( download )){
 
-								status = TrackerPeerSource.ST_STOPPED;
-
+								// int dl_state = download.getState();
+								//status = dl_state == Download.ST_QUEUED?TrackerPeerSource.ST_QUEUED:TrackerPeerSource.ST_STOPPED;
+								
+								status = TrackerPeerSource.ST_STOPPED;							
+									
+								if ( scrape_data != null ){
+									
+									next_time = scrape_data[1];
+								}
 							}else{
 
 								int dl_state = download.getState();
@@ -3925,6 +4465,12 @@ DHTTrackerPlugin
 
 									status = TrackerPeerSource.ST_DISABLED;
 
+									String reason = (String)download.getUserData( LATEST_REGISTER_REASON );
+									
+									if ( reason != null && !reason.isEmpty()){
+										
+										new_status_str = reason;
+									}
 								}else{
 
 									status = TrackerPeerSource.ST_STOPPED;
@@ -4024,12 +4570,18 @@ DHTTrackerPlugin
 				{
 					fixup();
 
-					if ( run_data == null ){
-
+					if ( run_data != null ){
+						
+						return( run_data[1] );
+						
+					}else if ( scrape_data != null ){
+						
+						return((int)scrape_data[2] );
+						
+					}else{
+						
 						return( -1 );
 					}
-
-					return( run_data[1] );
 				}
 
 				@Override
@@ -4038,12 +4590,18 @@ DHTTrackerPlugin
 				{
 					fixup();
 
-					if ( run_data == null ){
-
+					if ( run_data != null ){
+						
+						return( run_data[2] );
+						
+					}else if ( scrape_data != null ){
+						
+						return((int)scrape_data[3] );
+						
+					}else{
+						
 						return( -1 );
 					}
-
-					return( run_data[2] );
 				}
 
 				@Override
@@ -4082,7 +4640,7 @@ DHTTrackerPlugin
 
 					if ( next_time < 0 ){
 
-						return( -1 );
+						return( Integer.MIN_VALUE );
 					}
 
 					return((int)(( next_time - SystemTime.getCurrentTime())/1000 ));
@@ -4129,13 +4687,15 @@ DHTTrackerPlugin
 				{
 					fixup();
 
-					return( run_data != null );
+					return( run_data != null || scrape_data != null );
 				}
 
 				@Override
 				public void
 				manualUpdate()
 				{
+					download.setUserData( SCRAPE_DATA_KEY, null );
+					
 					announce( download );
 				}
 				

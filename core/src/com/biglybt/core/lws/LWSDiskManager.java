@@ -23,6 +23,7 @@ package com.biglybt.core.lws;
 import java.io.File;
 
 import com.biglybt.core.disk.*;
+import com.biglybt.core.disk.DiskManager.DownloadEndedProgress;
 import com.biglybt.core.disk.impl.*;
 import com.biglybt.core.disk.impl.access.DMAccessFactory;
 import com.biglybt.core.disk.impl.access.DMChecker;
@@ -137,6 +138,13 @@ LWSDiskManager
 	}
 
 	@Override
+	public long[]
+	getWriteStats()
+	{
+		return( new long[]{ 0, 0, 0, 0 } );
+	}
+	
+	@Override
 	public void
 	start()
 	{
@@ -165,7 +173,7 @@ LWSDiskManager
 			}
 		}catch( Throwable e ){
 
-			setFailed( DiskManager.ET_OTHER, "Start failed", e );
+			setFailed( DiskManager.ET_OTHER, "Start failed", e, false );
 		}
 	}
 
@@ -227,7 +235,7 @@ LWSDiskManager
 
 		}catch( Throwable e ){
 
-			setFailed( DiskManager.ET_READ_ERROR, "getFiles failed", e );
+			setFailed( DiskManager.ET_READ_ERROR, "getFiles failed", e, false );
 
 			return( null );
 
@@ -299,6 +307,11 @@ LWSDiskManager
 		throw( new RuntimeException( "filesExist not implemented" ));
 	}
 
+	@Override
+	public void 
+	rateLimitChanged()
+	{
+	}
 
 	@Override
 	public DiskManagerWriteRequest
@@ -572,17 +585,22 @@ LWSDiskManager
 	}
 
 	@Override
-	public void
-	downloadEnded( OperationStatus op_status )
+	public DownloadEndedProgress
+	downloadEnded( boolean start_of_day )
 	{
+		return( new DownloadEndedProgress(){
+			@Override
+			public boolean isComplete(){
+				return( true );
+			}
+		});
 	}
 
 	@Override
 	public void
 	moveDataFiles(
 		File 				new_parent_dir,
-		String 				new_name,
-		OperationStatus		op_status )
+		String 				new_name )
 	{
 		throw( new RuntimeException( "moveDataFiles not implemented" ));
 	}
@@ -594,6 +612,13 @@ LWSDiskManager
 		return( -1 );
 	}
 
+	@Override
+	public boolean
+	getRecheckCancelled()
+	{
+		return( false );
+	}
+	
     @Override
     public long[]
     getMoveProgress()
@@ -750,7 +775,8 @@ LWSDiskManager
 	setFailed(
 		int				type,
 		String			reason,
-		Throwable		cause )
+		Throwable		cause,
+		boolean			can_continue )
 	{
 		started = false;
 
@@ -775,6 +801,13 @@ LWSDiskManager
 	}
 
 	@Override
+	public boolean
+	isUploadOnly()
+	{
+		return( false );
+	}
+	
+	@Override
 	public TOTorrent
 	getTorrent()
 	{
@@ -797,21 +830,28 @@ LWSDiskManager
 	}
 
   	@Override
-	  public void
+	public void
     skippedFileSetChanged(
   	   	DiskManagerFileInfo	file )
   	{
   	}
 
   	@Override
-	  public void
+	public void
   	priorityChanged(
   		DiskManagerFileInfo	file )
   	{
   	}
 
   	@Override
-	  public File
+  	public void 
+  	storageTypeChanged(
+  			DiskManagerFileInfo file)
+  	{
+  	}
+  	
+  	@Override
+	public File
   	getSaveLocation()
   	{
   		return( save_file );

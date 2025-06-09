@@ -70,29 +70,14 @@ public class ViewQuickConfig
 
 	private void
 	initialize(
-		Composite ooparent)
+		Composite oparent)
 	{
-		GridLayout layout = new GridLayout(1, false);
-		layout.marginWidth 	= 0;
-		layout.marginHeight = 0;
-
-		ooparent.setLayout( layout);
-
-		// if you put the border on the scrolled composite parent then on every resize the computedSize
-		// grows by 4 pixels :( So stick in extra composite for the border
-
-		final Composite oparent = new Composite( ooparent, SWT.BORDER );
-		GridData gridData = new GridData(GridData.FILL_BOTH);
-		oparent.setLayoutData(gridData);
-
-		layout = new GridLayout(1, false);
-		layout.marginWidth 	= 0;
-		layout.marginHeight = 0;
+		GridLayout layout = Utils.getSimpleGridLayout(1);
 
 		oparent.setLayout( layout);
-
+		
 		final Composite parent = new Composite( oparent, SWT.NULL );
-		gridData = new GridData(GridData.FILL_BOTH);
+		GridData gridData = new GridData(GridData.FILL_BOTH);
 		parent.setLayoutData(gridData);
 
 		composite = Utils.createScrolledComposite(parent);
@@ -130,7 +115,7 @@ public class ViewQuickConfig
 	addTemporaryRates(
 		Composite	composite )
 	{
-		Group temp_rates = new Group( composite, SWT.NULL );
+		Group temp_rates = Utils.createSkinnedGroup( composite, SWT.NULL );
 		Messages.setLanguageText( temp_rates, "label.temporary.rates" );
 
 		GridData gridData = new GridData(GridData.FILL_HORIZONTAL);
@@ -317,7 +302,7 @@ public class ViewQuickConfig
 	addTemporaryData(
 		Composite	composite )
 	{
-		Group temp_rates = new Group( composite, SWT.NULL );
+		Group temp_rates = Utils.createSkinnedGroup( composite, SWT.NULL );
 		Messages.setLanguageText( temp_rates, "label.temporary.data" );
 
 		GridData gridData = new GridData(GridData.FILL_HORIZONTAL);
@@ -603,9 +588,6 @@ public class ViewQuickConfig
       case UISWTViewEvent.TYPE_REFRESH:
         refresh();
         break;
-      case UISWTViewEvent.TYPE_FOCUSGAINED:{
-    	  break;
-      }
     }
 
     return true;
@@ -616,7 +598,7 @@ public class ViewQuickConfig
 			Composite		comp,
 			boolean			include_script_setting )
 	{
-		String[][]	action_details = ConfigSectionStartShutdown.getActionDetails();
+		String[][]	action_details = ConfigSectionStartShutdown.getActionDetails( false );
 
 		StringListSwtParameter dc = new StringListSwtParameter(comp,
 				"On Downloading Complete Do", "ConfigView.label.stop.downcomp", null,

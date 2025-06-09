@@ -23,13 +23,16 @@ package com.biglybt.core.subs.impl;
 import java.lang.ref.WeakReference;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.metasearch.FilterableResult;
 import com.biglybt.core.metasearch.Result;
+import com.biglybt.core.subs.Subscription;
 import com.biglybt.core.subs.SubscriptionResult;
+import com.biglybt.core.subs.util.SearchSubsResultBase;
 import com.biglybt.core.util.*;
 import com.biglybt.pif.utils.search.SearchResult;
 import com.biglybt.util.JSONUtils;
@@ -38,19 +41,19 @@ public class
 SubscriptionResultImpl
 	implements SubscriptionResult
 {
-	private static final long TIME_FOUND_DEFAULT;
+	private static final int TIME_FOUND_DEFAULT_SECS;
 
 	static{
-		long tfd = COConfigurationManager.getLongParameter( "subscription.result.time.found.default", 0 );
+		int tfd = COConfigurationManager.getIntParameter( "subscription.result.time.found.default", 0 );
 
 		if ( tfd == 0 ){
 
-			tfd = SystemTime.getCurrentTime()/1000;
+			tfd = (int)( SystemTime.getCurrentTime()/1000 );
 
 			COConfigurationManager.setParameter( "subscription.result.time.found.default", tfd );
 		}
 
-		TIME_FOUND_DEFAULT = tfd*1000;
+		TIME_FOUND_DEFAULT_SECS = tfd;
 	}
 
 	final private SubscriptionHistoryImpl	history;
@@ -59,7 +62,10 @@ SubscriptionResultImpl
 	private byte[]		key2;
 	private boolean		read;
 	private boolean		deleted;
-
+	private int			deleted_last_seen_day;
+	
+	private int			time_found_secs;
+	
 	private String		result_json;
 
 	private WeakReference<Map<Integer,Object>>	props_ref = null;
@@ -108,8 +114,77 @@ SubscriptionResultImpl
 				Debug.printStackTrace(e);
 			}
 		}
+		
+		try{
+			String tf = (String)map.get( "tf" );
+			
+			if ( tf != null ){
+				
+				time_found_secs = Integer.parseInt( tf );	// already in secs
+				
+			}else{
+				
+				time_found_secs = TIME_FOUND_DEFAULT_SECS;
+			}
+		}catch( Throwable e ){
+			
+			time_found_secs = TIME_FOUND_DEFAULT_SECS;
+		}
 	}
 
+	protected
+	SubscriptionResultImpl(
+		SubscriptionHistoryImpl		_history,
+		SearchSubsResultBase		_base )
+	{
+		history = _history;
+		
+		byte[] 	hash 	= _base.getHash();
+		String	name	= _base.getName();
+		long	size	= _base.getSize();
+		
+		String	key1_str;
+		
+		if ( hash != null ){
+			
+			key1_str = Base32.encode(hash);
+			
+		}else{
+			
+			key1_str = name + ":" + size;
+		}
+
+		try{
+			byte[] sha1 = new SHA1Simple().calculateHash( key1_str.getBytes( "UTF-8" ));
+
+			key1 = new byte[10];
+
+			System.arraycopy( sha1, 0, key1, 0, 10 );
+
+		}catch( Throwable e ){
+
+			Debug.printStackTrace(e);
+		}
+		
+		Map map = new HashMap<>();
+		
+		map.put( "lb", String.valueOf( size ));
+		map.put( "n", name );
+		
+		if ( hash != null ){
+			
+			map.put( "h", Base32.encode(hash));
+		}
+		
+		time_found_secs = (int)( SystemTime.getCurrentTime()/1000 );
+		
+		map.put( "tf", String.valueOf( time_found_secs ));
+		
+		result_json = JSONUtils.encodeToJSON( map );
+		
+		read = true;
+	}
+	
 	protected
 	SubscriptionResultImpl(
 		SubscriptionHistoryImpl		_history,
@@ -128,25 +203,74 @@ SubscriptionResultImpl
 
 			deleted	= true;
 
+			Number l_dls = (Number)map.get( "dls" );
+			
+			if ( l_dls != null ){
+				
+				deleted_last_seen_day = l_dls.intValue();
+			}else{
+				
+				deleted_last_seen_day = (int)( SystemTime.getCurrentTime() / (1000*60*60*24 ));
+			}
 		}else{
 
 			try{
-				result_json	= new String((byte[])map.get( "result_json" ), "UTF-8" );
+				byte[] bytes = (byte[])map.get( "result_json" );
+				
+				if ( bytes == null ){
+					
+					bytes = new byte[0];
+				}
+				
+				result_json	= new String( bytes, "UTF-8" );
 
 			}catch( Throwable e ){
 
 				Debug.printStackTrace(e);
+			}
+			
+			try{
+				Number tfs = (Number)map.get( "tz" );
+			
+				if ( tfs != null ){
+					
+					time_found_secs = tfs.intValue();
+				}
+			}catch( Throwable e ){
 			}
 		}
 	}
 
 	protected boolean
 	updateFrom(
-		SubscriptionResultImpl	other )
+		SubscriptionResultImpl	other,
+		boolean					allow_reincarnation )
 	{
 		if ( deleted ){
 
-			return( false );
+			if ( allow_reincarnation ){
+				
+				deleted 				= false;
+				deleted_last_seen_day	= 0;
+				
+				key2		= other.getKey2();
+				result_json = other.getJSON();
+
+				time_found_secs = other.time_found_secs;
+				
+				synchronized( this ){
+
+					props_ref = null;
+				}
+
+				return( true );
+				
+			}else{
+			
+				deleted_last_seen_day = (int)( SystemTime.getCurrentTime() / (1000*60*60*24 ));
+			
+				return( false );
+			}
 		}
 
 		String	my_json_str 	= getJSON();
@@ -165,13 +289,61 @@ SubscriptionResultImpl
 
 		Map	other_json_map = null;
 		
+		boolean	other_json_map_updated	= false;
+		
 		if ( my_tf != null ){
 
 			other_json_map 	= JSONUtils.decodeJSON( other_json_str );
 
 			other_json_map.put( "tf", my_tf );
+			
+			other_json_map_updated = true;
+		}
+			
+		List<String> my_tags 	= (List<String>)my_json_map.get( "tgs" );
 
-			other_json_str = JSONUtils.encodeToJSON( other_json_map );
+		if ( my_tags != null && !my_tags.isEmpty()){
+
+			boolean other_has_tgs = other_json_str.contains("\"tgs\"" );
+		
+			if ( other_has_tgs ){
+							
+				boolean updated = false;
+
+				if ( other_json_map == null ){
+					
+					other_json_map 	= JSONUtils.decodeJSON( other_json_str );
+				}
+				
+				List<String> other_tags = (List<String>)other_json_map.get( "tgs" );
+
+				for ( String t: my_tags ){
+					
+					if ( !other_tags.contains( t )){
+						
+						other_tags.add( t );
+						
+						updated = true;
+					}
+				}
+				
+				if ( updated ){
+					
+					other_json_map.put( "tgs", other_tags );
+					
+					other_json_map_updated = true;
+				}
+			}else{
+									
+				if ( other_json_map == null ){
+					
+					other_json_map 	= JSONUtils.decodeJSON( other_json_str );
+				}
+				
+				other_json_map.put( "tgs", my_tags );
+				
+				other_json_map_updated = true;
+			}
 		}
 		
 			// keep oldest pub date
@@ -209,9 +381,14 @@ SubscriptionResultImpl
 			if ( keep ){
 				
 				other_json_map.put( "ts", my_ts );
-
-				other_json_str = JSONUtils.encodeToJSON( other_json_map );
+				
+				other_json_map_updated = true;
 			}
+		}
+		
+		if ( other_json_map_updated ){
+			
+			other_json_str = JSONUtils.encodeToJSON( other_json_map );
 		}
 		
 		if ( my_json_str.equals( other_json_str )){
@@ -232,6 +409,13 @@ SubscriptionResultImpl
 		}
 	}
 
+	@Override
+	public Subscription 
+	getSubscription()
+	{
+		return( history.getSubscription());
+	}
+	
 	@Override
 	public String
 	getID()
@@ -286,6 +470,8 @@ SubscriptionResultImpl
 
 			deleted	= true;
 
+			deleted_last_seen_day = (int)( SystemTime.getCurrentTime() / (1000*60*60*24 ));
+
 			history.updateResult( this );
 		}
 	}
@@ -303,10 +489,16 @@ SubscriptionResultImpl
 		return( deleted );
 	}
 
+	protected int
+	getDeletedLastSeen()
+	{
+		return( deleted_last_seen_day );
+	}
+	
 	protected Map
 	toBEncodedMap()
 	{
-		Map		map	= new HashMap();
+		Map<String,Object>		map	= new HashMap<>();
 
 		map.put( "key", key1 );
 
@@ -320,14 +512,44 @@ SubscriptionResultImpl
 
 			map.put( "deleted", new Long(1));
 
+			if ( deleted_last_seen_day == 0 ){
+				
+				deleted_last_seen_day = (int)( SystemTime.getCurrentTime() / (1000*60*60*24 ));
+			}
+			
+			map.put( "dls", deleted_last_seen_day );
+			
 		}else{
 
 			try{
-				map.put( "result_json", result_json.getBytes( "UTF-8" ));
+				byte[] bytes;
+				
+				if ( result_json == null ){
+					
+					bytes = new byte[0];
+					
+				}else{
+					
+					bytes = result_json.getBytes( "UTF-8" );
+				}
+				
+				map.put( "result_json", bytes );
 
 			}catch( Throwable e ){
 
 				Debug.printStackTrace(e);
+			}
+			
+				// one off to back-populate old results with time-found
+			
+			if ( time_found_secs == 0 ){
+				
+				getTimeFound();
+			}
+			
+			if ( time_found_secs > 0 ){
+				
+				map.put( "tz", new Long( time_found_secs ));
 			}
 		}
 
@@ -405,6 +627,7 @@ SubscriptionResultImpl
 		return (Result.adjustLink((String)toJSONMap().get( "pl" )));
 	}
 
+	@Override
 	public String
 	getAssetHash()
 	{
@@ -415,14 +638,21 @@ SubscriptionResultImpl
 	public long
 	getTimeFound()
 	{
-		String tf_secs_str = (String)toJSONMap().get( "tf" );
+		if ( time_found_secs == 0 ){
 
-		if ( tf_secs_str == null ){
+			String tfs = (String)toJSONMap().get( "tf" );
 
-			return( TIME_FOUND_DEFAULT );
+			if ( tfs == null ){
+
+				time_found_secs = TIME_FOUND_DEFAULT_SECS;
+				
+			}else{
+				
+				time_found_secs = Integer.parseInt( tfs );
+			}
 		}
-
-		return( Long.parseLong( tf_secs_str )*1000 );
+		
+		return( time_found_secs*1000L );
 	}
 
 	@Override
@@ -495,6 +725,9 @@ SubscriptionResultImpl
 
 			result.put( SearchResult.PR_LEECHER_COUNT, peers==null?-1:Long.parseLong(peers) );
 
+			String	completed = (String)map.get( "gr" );
+
+			result.put( SearchResult.PR_COMPLETED_COUNT, completed==null?-1:Long.parseLong(completed) );
 
 			String	votes = (String)map.get( "v" );
 
@@ -514,7 +747,14 @@ SubscriptionResultImpl
 
 				result.put( SearchResult.PR_CATEGORY, category );
 			}
-
+			
+			List<String> tags = (List<String>)map.get( "tgs" );
+			
+			if ( tags != null && !tags.isEmpty()){
+				
+				result.put( SearchResult.PR_TAGS, tags.toArray( new String[tags.size()]));
+			}
+			
 			String contentType = (String)map.get( "ct" );
 
 			if ( contentType != null ){
@@ -531,5 +771,80 @@ SubscriptionResultImpl
 
 			return( result );
 		}
+	}
+	
+	@Override
+	public FilterableResult 
+	getFilterableResult()
+	{
+		Map<Integer,Object> properties = toPropertyMap();
+		
+		return( 
+			new FilterableResult(){
+				public String
+				getName()
+				{
+					return( (String)properties.get( SearchResult.PR_NAME ));
+				}
+				
+				public String
+				getCategory()
+				{
+					return((String)properties.get( SearchResult.PR_CATEGORY ));
+				}
+				
+				public String[]
+				getTags()
+				{
+					return((String[])properties.get( SearchResult.PR_TAGS ));
+				}
+				
+				public long
+				getSize()
+				{
+					return((Long)properties.get( SearchResult.PR_SIZE ));
+				}
+				
+				public int
+				getNbSeeds()
+				{
+					long seeds = (Long)properties.get( SearchResult.PR_SEED_COUNT );
+
+					return((int)(seeds<0?0:seeds));
+				}
+				
+				public int
+				getNbPeers()
+				{
+					long leechers 	= (Long)properties.get( SearchResult.PR_LEECHER_COUNT );
+					
+					return((int)(leechers<0?0:leechers));
+				}
+	
+				public long
+				getTime()
+				{
+					Date pub_date = (Date)properties.get( SearchResult.PR_PUB_DATE );
+
+					if ( pub_date == null ){
+
+						return( getTimeFound());
+
+					}else{
+
+						long pt = pub_date.getTime();
+
+						if ( pt <= 0 ){
+
+							return( getTimeFound());
+
+						}else{
+
+							return( pt );
+						}
+					}
+
+				}
+			});
 	}
 }

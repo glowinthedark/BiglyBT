@@ -21,8 +21,10 @@ package com.biglybt.ui.swt.views;
 import java.util.*;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Device;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
@@ -49,6 +51,7 @@ import com.biglybt.ui.swt.imageloader.ImageLoader;
 import com.biglybt.ui.swt.mainwindow.IMainWindow;
 import com.biglybt.ui.swt.mdi.BaseMDI;
 import com.biglybt.ui.swt.mdi.BaseMdiEntry;
+import com.biglybt.ui.swt.shells.PopOutManager;
 import com.biglybt.ui.swt.shells.main.MainWindow;
 import com.biglybt.ui.swt.skin.SWTSkinObject;
 import com.biglybt.ui.swt.views.stats.StatsView;
@@ -135,7 +138,7 @@ QuickLinksView
 						
 						if ( qli != null ){
 						
-							qli.popOut( mdi, onTop );
+							qli.popOut( mdi, onTop?PopOutManager.OPT_MAP_ON_TOP:PopOutManager.OPT_MAP_NONE );
 						}
 					}
 				};
@@ -230,7 +233,7 @@ QuickLinksView
 					
 					if ( qli != null ){
 					
-						qli.popOut( mdi, true );
+						qli.popOut( mdi, PopOutManager.OPT_MAP_ON_TOP );
 					}
 				}
 			}
@@ -279,7 +282,7 @@ QuickLinksView
 		
 		addDefaultItem( mdi, toolBar, StatsView.VIEW_ID,"image.sidebar.stats", "Stats.title.full" );
 
-		addDefaultItem( mdi, toolBar, MultipleDocumentInterface.SIDEBAR_SECTION_CONFIG, "image.sidebar.config2", "ConfigView.title.full" );
+		addDefaultItem( mdi, toolBar, MultipleDocumentInterface.SIDEBAR_SECTION_CONFIG, "image.sidebar.cog", "ConfigView.title.full" );
 	}
 	
 	public static void
@@ -434,11 +437,26 @@ QuickLinksView
 			
 		}else{
 			
-			item.setImage( resized );
+				// we get a nasty black border unless we centre the resized image on a transparent
+				// one of the right size
+			
+			Rectangle resized_bounds = resized.getBounds();
+			
+			Device device = resized.getDevice();
+			
+			Image base = Utils.createAlphaImage( device, 15, 15, (byte) 0);
+			
+			Image centred = Utils.blitImage( device, resized, resized_bounds, base, new Point( 0, ( 15 - resized_bounds.height )/2 ));
+			
+			base.dispose();
+			
+			resized.dispose();
+						
+			item.setImage( centred );
 			
 			item.addListener( SWT.Dispose, (ev)->{
 				
-				resized.dispose();
+				centred.dispose();
 			});
 		}
 			
@@ -542,7 +560,7 @@ QuickLinksView
 			
 			long	now = SystemTime.getMonotonousTime();
 			
-			if ( last_pop >= 0 && now - last_pop < 1000 ){
+			if ( last_pop >= 0 && now - last_pop < 2500 ){
 				
 				return;
 			}
@@ -553,7 +571,7 @@ QuickLinksView
 				
 				long	nownow = SystemTime.getMonotonousTime();
 				
-				if ( last_pop > 0 && nownow - last_pop < 1000 ){
+				if ( last_pop > 0 && nownow - last_pop < 2500 ){
 					
 					return;
 				}
@@ -575,8 +593,8 @@ QuickLinksView
 		
 		void 
 		popOut(
-			BaseMDI		mdi,
-			boolean		onTop )
+			BaseMDI				mdi,
+			Map<String,Object>	options )
 		{
 			long	now = SystemTime.getMonotonousTime();
 			
@@ -589,13 +607,13 @@ QuickLinksView
 			
 			if ( ds_map == null ){
 				
-				mdi.popoutEntryByID( mdi_id, null, onTop );
+				mdi.popoutEntryByID( mdi_id, null, options );
 					
 			}else{
 					
 				Object ds = DataSourceResolver.importDataSource( ds_map );
 					
-				mdi.popoutEntryByID( mdi_id, ds, onTop );
+				mdi.popoutEntryByID( mdi_id, ds, options );
 			}
 		}
 	}

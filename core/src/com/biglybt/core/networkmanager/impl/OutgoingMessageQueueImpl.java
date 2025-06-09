@@ -66,7 +66,8 @@ OutgoingMessageQueueImpl
   private MessageStreamEncoder stream_encoder;
   private Transport transport;
 
-  private int percent_complete = -1;
+  private int	progress_id;
+  private int[] progress;
 
   private static final boolean TRACE_HISTORY = false;  //TODO
   private static final int MAX_HISTORY_TRACES = 30;
@@ -113,13 +114,9 @@ OutgoingMessageQueueImpl
 	  return( stream_encoder );
   }
 
-  /**
-   * Get the percentage of the current message that has already been sent out.
-   * @return percentage complete (0-99), or -1 if no message is currently being sent
-   */
   @Override
-  public int getPercentDoneOfCurrentMessage() {
-    return percent_complete;
+  public int[] getCurrentMessageProgress() {
+    return progress;
   }
 
 
@@ -142,7 +139,8 @@ OutgoingMessageQueueImpl
     total_data_size = 0;
     prev_sent.clear();
     listeners = new ArrayList();
-    percent_complete = -1;
+    progress = null;
+    progress_id++;
     urgent_message = null;
   }
 
@@ -376,7 +374,8 @@ OutgoingMessageQueueImpl
       }
 
       if ( queue.isEmpty()){
-    	  percent_complete = -1;
+    	  progress = null;
+    	  progress_id++;
       }
     }finally{
       queue_mon.exit();
@@ -448,7 +447,8 @@ OutgoingMessageQueueImpl
       }
 
       if ( queue.isEmpty()){
-    	  percent_complete = -1;
+    	  progress = null;
+    	  progress_id++;
       }
     }finally{
       queue_mon.exit();
@@ -674,7 +674,7 @@ outer:
 							  }
 						  }
 
-						  percent_complete = (written * 100) / message_size;
+						  progress = new int[]{ message_size, written, progress_id };
 
 						  break;
 					  }
@@ -690,7 +690,8 @@ outer:
 						  }
 
 
-						  percent_complete = -1;  //reset send percentage
+						  progress = null;
+						  progress_id++;
 
 						  if( manual_listener_notify ) {
 							  NotificationItem item = new NotificationItem( NotificationItem.MESSAGE_SENT );

@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.channels.UnsupportedAddressTypeException;
+import java.util.List;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.networkmanager.admin.impl.NetworkAdminImpl;
@@ -49,6 +50,11 @@ NetworkAdmin
 		PR_AS
 	};
 
+		// this is not supposed to exist, it is used to test that resolution is being
+		// intercepted
+	
+	public static final String 		DNS_SPI_TEST_HOST	= "http://dns.test.client.biglybittorrent.com/";
+	
 	public static synchronized NetworkAdmin
 	getSingleton()
 	{
@@ -77,14 +83,24 @@ NetworkAdmin
 	public abstract InetAddress[]
 	getSingleHomedServiceBinding( String host ) throws UnknownHostException, UnsupportedAddressTypeException;
 	
+	public abstract List<InetAddress[]>
+	getSingleHomedServiceBindings( String host ) throws UnknownHostException, UnsupportedAddressTypeException;
+	
 	public abstract InetAddress[]
 	getMultiHomedServiceBindAddresses(boolean forNIO);
 
 	public abstract InetAddress
 	getMultiHomedOutgoingRoundRobinBindAddress(InetAddress target);
 
+	public String
+	getNetworkInterfacesAsString()
+	{
+		return( getNetworkInterfacesAsString( false ));
+	}
+	
 	public abstract String
-	getNetworkInterfacesAsString();
+	getNetworkInterfacesAsString(
+		boolean only_with_addresses );
 
 	public abstract InetAddress[]
 	getAllBindAddresses(
@@ -249,6 +265,10 @@ NetworkAdmin
 
 		throws NetworkAdminException;
 
+	public abstract boolean
+	isRecentPublicIPAddress(
+		InetAddress	address );
+	
 	public abstract InetAddress
 	getDefaultPublicAddress();
 

@@ -36,8 +36,11 @@ import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.peer.util.PeerUtils;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.util.*;
+import com.biglybt.pif.Plugin;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.download.Download;
+import com.biglybt.pif.peers.Peer;
+import com.biglybt.pif.peers.PeerDescriptor;
 import com.biglybt.pif.torrent.Torrent;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
 import com.biglybt.plugin.net.buddy.BuddyPluginBeta.ChatInstance;
@@ -286,6 +289,12 @@ BuddyPluginUtils
 		return( null );
 	}
 
+	public static boolean
+	isBetaChatEnabled()
+	{
+		return( BuddyPlugin.isBetaChatEnabled());
+	}
+	
 	public static boolean
 	isBetaChatAvailable()
 	{
@@ -584,9 +593,64 @@ BuddyPluginUtils
 
 	public static String
 	getChatKey(
+		Peer		peer )
+	{
+		if ( peer != null ){
+		
+			try{
+				InetAddress ia = AddressUtils.getByName( peer.getIp());
+			
+				String[] info = PeerUtils.getCountryDetails( ia );
+			
+				if ( info != null ){
+								
+					String cc = info[0].toUpperCase( Locale.US );
+				
+					String chat_key = Constants.APP_NAME + ": Country: " + cc ;
+					
+					return( chat_key );
+				}
+			}catch( Throwable e ){
+			}
+		}
+		
+		return( null );
+	}
+	
+	public static String
+	getChatKey(
+		PeerDescriptor		peer )
+	{
+		if ( peer != null ){
+		
+			try{
+				InetAddress ia = AddressUtils.getByName( peer.getIP());
+			
+				String[] info = PeerUtils.getCountryDetails( ia );
+			
+				if ( info != null ){
+								
+					String cc = info[0].toUpperCase( Locale.US );
+				
+					String chat_key = Constants.APP_NAME + ": Country: " + cc ;
+					
+					return( chat_key );
+				}
+			}catch( Throwable e ){
+			}
+		}
+		
+		return( null );
+	}
+	
+	public static String
+	getChatKey(
 		Torrent		torrent )
 	{
-		if ( torrent == null ){
+			// no harm in having chats for private torrents but eks is moaning about them so
+			// given that they're prolly never used in reality I'm getting rid of them
+		
+		if ( torrent == null || torrent.isPrivate()){
 
 			return( null );
 		}
@@ -619,6 +683,43 @@ BuddyPluginUtils
 		return( key );
 	}
 
+	public static boolean
+	isUnknownDownloadChatKey(
+		String		key )
+	{
+		if ( !key.startsWith( "Download:" )){
+			
+			return( false );
+		}
+		
+		if ( !key.endsWith( "}" )){
+			
+			return( false );
+		}
+		
+		int pos = key.lastIndexOf( "{" );
+		
+		if ( pos >= 0 ){
+		
+			String hash_str = key.substring( pos+1, key.length()-1 );
+			
+			if ( hash_str.length() == 40 ){
+				
+				byte[] hash = ByteFormatter.decodeString( hash_str );
+				
+				if ( hash != null ){
+					
+					if ( CoreFactory.getSingleton().getGlobalManager().getDownloadManager( new HashWrapper( hash )) == null ){
+												
+						return( true );
+					}
+				}
+			}
+		}
+		
+		return( false );
+	}
+	
 	public static String
 	getTrackerChatKey(
 		String		url )

@@ -21,6 +21,8 @@
 package com.biglybt.plugin.net.buddy;
 
 import java.io.File;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
@@ -45,6 +47,7 @@ import com.biglybt.pif.utils.PooledByteBuffer;
 import com.biglybt.pif.utils.security.SEPublicKey;
 import com.biglybt.pif.utils.security.SEPublicKeyLocator;
 import com.biglybt.plugin.net.buddy.BuddyPluginNetwork.DDBDetails;
+import com.biglybt.plugin.net.buddy.tracker.BuddyPluginTracker;
 
 
 public class
@@ -877,7 +880,29 @@ BuddyPluginBuddy
 		return( result );
 	}
 
-
+	public String
+	getProperties()
+	{
+		StringWriter sw = new StringWriter( 1024 );
+		
+		IndentWriter writer = new IndentWriter( new PrintWriter( sw ));
+		
+		writer.println( "current ip: " + AddressUtils.getHostAddress( current_ip ));
+		writer.println( "latest ipv4: " + AddressUtils.getHostAddress( latest_ipv4 ));
+		writer.println( "latest ipv6: " + AddressUtils.getHostAddress( latest_ipv6 ));
+		writer.println( "ports: " + tcp_port + "/" + udp_port );
+		writer.println( "online: " + online );
+		writer.println( "connected: " + isConnected());
+		
+		BuddyPluginTracker tracker = plugin_network.getPlugin().getTracker();
+		
+		tracker.getProperties( this, writer );
+		
+		writer.close();
+		
+		return( sw.toString());
+	}
+	
 	public int
 	getTCPPort()
 	{
@@ -943,7 +968,8 @@ BuddyPluginBuddy
 	{
 		public void
 		received(
-			List<String>		profile );
+			List<String>		profile,
+			boolean				failed );
 	}
 	
 	public void
@@ -954,7 +980,7 @@ BuddyPluginBuddy
 			
 			if ( profile_info != null ){
 				
-				informer.received( profile_info );
+				informer.received( profile_info, false );
 			}
 			
 			long now = SystemTime.getMonotonousTime();
@@ -1003,7 +1029,7 @@ BuddyPluginBuddy
 							profile_info = result;
 						}
 						
-						informer.received( result );
+						informer.received( result, false );
 						
 						return( null );
 					}
@@ -1018,6 +1044,8 @@ BuddyPluginBuddy
 							
 							profile_info_outstanding = false;
 						}
+						
+						informer.received( null, true );
 					}
 				});
 			
@@ -1027,6 +1055,8 @@ BuddyPluginBuddy
 				
 				profile_info_outstanding = false;
 			}
+			
+			informer.received( null, true );
 		}
 	}
 	
@@ -1804,7 +1834,7 @@ BuddyPluginBuddy
 
 					try{
 							// can't perform connect op while synchronized as may deadlock on password
-							// aquisition
+							// acquisition
 
 						GenericMessageConnection generic_connection = outgoingConnection();
 						

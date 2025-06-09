@@ -24,6 +24,7 @@ import java.net.URL;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.biglybt.core.Core;
@@ -31,6 +32,7 @@ import com.biglybt.core.CoreFactory;
 import com.biglybt.core.CoreLifecycleAdapter;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.download.DownloadManager;
+import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.logging.Logger;
@@ -47,13 +49,18 @@ import com.biglybt.core.tracker.AllTrackersManager.ScrapeStats;
 import com.biglybt.core.tracker.AllTrackersManager.ScrapeStatsProvider;
 import com.biglybt.core.tracker.client.TRTrackerAnnouncerRequest;
 import com.biglybt.core.tracker.client.TRTrackerAnnouncerResponse;
+import com.biglybt.core.tracker.client.TRTrackerAnnouncerResponsePeer;
 import com.biglybt.core.tracker.client.TRTrackerScraperResponse;
+import com.biglybt.core.util.AERunnable;
+import com.biglybt.core.util.AsyncDispatcher;
 import com.biglybt.core.util.Average;
 import com.biglybt.core.util.BDecoder;
+import com.biglybt.core.util.ByteFormatter;
 import com.biglybt.core.util.CopyOnWriteList;
 import com.biglybt.core.util.DNSUtils;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.FileUtil;
+import com.biglybt.core.util.FrequencyLimitedDispatcher;
 import com.biglybt.core.util.HashWrapper;
 import com.biglybt.core.util.SimpleTimer;
 import com.biglybt.core.util.SystemTime;
@@ -69,7 +76,7 @@ public class
 AllTrackersManagerImpl
 	implements AllTrackers, TOTorrentListener
 {
-	final static int	MAX_TRACKERS	= 1024;
+	final static int	MAX_TRACKERS	= 5000;
 	
 	final static int 	TICK_PERIOD	= 2500;
 	
@@ -94,7 +101,9 @@ AllTrackersManagerImpl
 
 	private final long start_time = SystemTime.getMonotonousTime();
 			
-	private final Core	core;
+	private final Core	core = CoreFactory.getSingleton();
+	
+	private volatile boolean started;
 	
 	private volatile boolean stopping;
 	
@@ -121,8 +130,6 @@ AllTrackersManagerImpl
 	private
 	AllTrackersManagerImpl()
 	{
-		core = CoreFactory.getSingleton();
-
 		loadConfig();
 		
 		updateLogging();
@@ -155,6 +162,15 @@ AllTrackersManagerImpl
 		core.addLifecycleListener(
 				new CoreLifecycleAdapter()
 				{
+					@Override
+					public void 
+					started(Core core)
+					{
+						started	= true;
+						
+						recalcTotals();
+					}
+					
 					@Override
 					public void 
 					stopping(
@@ -314,7 +330,34 @@ AllTrackersManagerImpl
 							
 					AllTrackersTrackerImpl 		tracker = (AllTrackersTrackerImpl)e0;
 					
-					if ( host_map.containsKey( tracker.getTrackerName())){
+					if ( tracker == null ){
+						
+						Object	obj 	= entry[1];
+
+						if ( obj instanceof TRTrackerScraperResponse ){
+						
+								// DHT scrapes come through this route
+							
+							TRTrackerScraperResponse s_resp = (TRTrackerScraperResponse)obj;							
+	
+							boolean online = s_resp.getStatus() == TRTrackerScraperResponse.ST_ONLINE;
+							
+							if ( online ){
+								
+								DownloadManager dm = core.getGlobalManager().getDownloadManager( s_resp.getHash());
+								
+								if ( dm != null ){
+								
+									int dm_state = dm.getState();
+									
+									if ( dm_state != DownloadManager.STATE_SEEDING && dm_state != DownloadManager.STATE_DOWNLOADING ){
+									
+										dm.getDownloadState().setLongAttribute( DownloadManagerState.AT_LAST_SCRAPE_TIME, SystemTime.getCurrentTime());
+									}
+								}
+							}
+						}
+					}else if ( host_map.containsKey( tracker.getTrackerName())){
 		
 						Object	obj 	= entry[1];
 												
@@ -348,11 +391,39 @@ AllTrackersManagerImpl
 								updated = true;
 							}
 		
+							TRTrackerAnnouncerResponsePeer[] peers = a_resp.getPeers();
+
+								// assume if one cached they are all cached in this response
+							
+							if ( peers != null && peers.length > 0 && !peers[0].isCached()){
+
+								tracker.peersReceived( peers.length );
+							}
+							
 							if ( updated ){
 								
 								tracker.log( a_resp );
 							}
 						}else if ( obj instanceof TRTrackerScraperResponse ){
+							
+							TRTrackerScraperResponse s_resp = (TRTrackerScraperResponse)obj;							
+
+							boolean online = s_resp.getStatus() == TRTrackerScraperResponse.ST_ONLINE;
+							
+							if ( online ){
+								
+								DownloadManager dm = core.getGlobalManager().getDownloadManager( s_resp.getHash());
+								
+								if ( dm != null ){
+								
+									int dm_state = dm.getState();
+									
+									if ( dm_state != DownloadManager.STATE_SEEDING && dm_state != DownloadManager.STATE_DOWNLOADING ){
+									
+										dm.getDownloadState().setLongAttribute( DownloadManagerState.AT_LAST_SCRAPE_TIME, SystemTime.getCurrentTime());
+									}
+								}
+							}
 							
 								// announce status trumps scrape 
 							
@@ -360,10 +431,8 @@ AllTrackersManagerImpl
 								
 								continue;
 							}
-							
-							TRTrackerScraperResponse s_resp = (TRTrackerScraperResponse)obj;							
-																						
-							if ( tracker.setOK( s_resp.getStatus() == TRTrackerScraperResponse.ST_ONLINE )){
+																													
+							if ( online ){
 								
 								updated = true;
 							}
@@ -505,9 +574,9 @@ AllTrackersManagerImpl
 			boolean skip_unregistered = closing && got_running;
 			
 			try{
-				Map map = new HashMap();
+				Map<String,Object> map = new HashMap<>();
 				
-				List<Map>	trackers = new ArrayList<>( host_map.size() + 32 );
+				List<Map<String,Object>>	trackers = new ArrayList<>( host_map.size() + 32 );
 				
 				map.put( "trackers", trackers ); 
 				
@@ -515,7 +584,36 @@ AllTrackersManagerImpl
 				
 					if ( skip_unregistered && !tracker.isRegistered()){
 						
-						continue;
+							// retain if it has non-default options
+						
+						Map<String,Object> options = tracker.getOptions();
+						
+						boolean has_non_def = false;
+						
+						if ( options != null ){
+							
+							for ( String opt: AllTrackersTracker.OPT_ALL ){
+								
+								try{
+									Number num = (Number)options.get( opt );
+									
+									if ( num != null && num.intValue() != 0 ){
+										
+										has_non_def = true;
+										
+										break;
+									}
+								}catch( Throwable e ){
+									
+									Debug.out( e );
+								}
+							}
+						}
+						
+						if ( !has_non_def ){
+						
+							continue;
+						}
 					}
 					
 					try{
@@ -536,13 +634,13 @@ AllTrackersManagerImpl
 				
 				if ( !logging_keys.isEmpty()){
 					
-					List<Map>	logging = new ArrayList<>( logging_keys.size() + 32 );
+					List<Map<String,String>>	logging = new ArrayList<>( logging_keys.size() + 32 );
 					
 					map.put( "logging", logging ); 
 					
 					for ( String key: logging_keys.keySet()){
 						
-						Map m = new HashMap();
+						Map<String,String> m = new HashMap<>();
 						
 						logging.add( m );
 						
@@ -568,6 +666,8 @@ AllTrackersManagerImpl
 		}
 	}
 	
+	private final static List<String> active = Collections.emptyList();
+	
 	private final Average announce_rate = Average.getInstance( 1000, 20 );  //update every 3s, average over 60s
 	private final Average scrape_rate 	= Average.getInstance( 1000, 20 );  //update every 3s, average over 60s
 
@@ -581,6 +681,20 @@ AllTrackersManagerImpl
 		@Override
 		public long getPublicLagMillis(){
 			return 0;
+		}
+		
+		@Override
+		public List<String> 
+		getPublicActive()
+		{
+			return( active );
+		}
+		
+		@Override
+		public List<String> 
+		getPrivateActive()
+		{	
+			return( active );
 		}
 		
 		@Override
@@ -644,6 +758,15 @@ AllTrackersManagerImpl
 		TRTrackerAnnouncerRequest	request )
 	{
 		active_requests.put( request, "" );
+		
+		String key = ingestURL( request.getURL());
+		
+		AllTrackersTrackerImpl tracker = host_map.get( key );
+		
+		if ( tracker != null ){
+			
+			tracker.addActiveRequest();
+		}
 	}
 		
 	@Override
@@ -654,6 +777,15 @@ AllTrackersManagerImpl
 		active_requests.remove( request );
 		
 		announce_rate.addValue( 100 );
+		
+	String key = ingestURL( request.getURL());
+		
+		AllTrackersTrackerImpl tracker = host_map.get( key );
+		
+		if ( tracker != null ){
+			
+			tracker.removeActiveRequest();
+		}
 	}
 	
 	@Override
@@ -721,6 +853,148 @@ AllTrackersManagerImpl
 		return( host_map.size());
 	}
 	
+	private final FrequencyLimitedDispatcher totalDisp = 
+		new FrequencyLimitedDispatcher(AERunnable.create(()->{
+			
+			Map<String,int[]> counts = new HashMap<>();
+			
+			for ( DownloadManager dm: core.getGlobalManager().getDownloadManagers()){
+				
+				try{
+					TOTorrent torrent = dm.getTorrent();
+					
+					if ( torrent != null ){
+						
+						boolean priv = torrent.getPrivate();
+						
+						URL announce_url = torrent.getAnnounceURL();
+						
+						String announce_name;
+						
+						if ( announce_url != null ){
+						
+							announce_name = ingestURL( announce_url );
+							
+							if ( announce_name == null ){
+								
+								announce_name = "";
+								
+							}else{
+								
+								int[] c = counts.get( announce_name );
+								
+								if ( c == null ){
+									
+									c = new int[2];
+									
+									counts.put( announce_name, c );
+								}
+								
+								if ( priv ){
+									c[0]++;
+								}else{
+									c[1]++;
+								}
+							}
+						}else{
+							
+							announce_name = "";
+						}
+						
+						TOTorrentAnnounceURLSet[] sets = torrent.getAnnounceURLGroup().getAnnounceURLSets();
+									
+						for ( TOTorrentAnnounceURLSet set: sets ){
+								
+							URL[] urls = set.getAnnounceURLs();
+								
+							for ( URL url: urls ){
+									
+								String name = ingestURL( url );
+								
+								if ( name == null || name.equals( announce_name )){
+									
+									continue;
+								}
+								
+								int[] c = counts.get( name );
+								
+								if ( c == null ){
+									
+									c = new int[2];
+									
+									counts.put( name, c );
+								}
+								
+								if ( priv ){
+									c[0]++;
+								}else{
+									c[1]++;
+								}
+							}
+						}
+					}
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+			}
+			
+			List<AllTrackersTracker> updates = new ArrayList<>();
+
+			for ( AllTrackersTrackerImpl tracker: host_map.values()){
+				
+				int[] c = counts.get( tracker.getTrackerName());
+				
+				boolean changed;
+				
+				if ( c != null ){
+				
+					changed = tracker.updateCounts( c[1],  c[0] );
+					
+				}else{
+					
+					changed = tracker.updateCounts( 0,  0 );
+				}
+				
+				if ( changed ){
+					
+					updates.add( tracker );
+				}
+			}
+			
+			if ( !updates.isEmpty()){
+				
+				for ( AllTrackersListener listener: listeners ){
+					
+					try{
+						listener.trackerEventOccurred(	new AllTrackersEventImpl( AllTrackersEvent.ET_TRACKER_UPDATED, updates ));
+						
+					}catch( Throwable e ){
+						
+						Debug.out( e );
+					}
+				}
+			}
+		}),
+		5000 );
+	
+	{
+		totalDisp.setSingleThreaded();
+	}
+	
+	AsyncDispatcher asyncDisp = new AsyncDispatcher( "recalctots" );
+	
+	private void
+	recalcTotals()
+	{
+		if ( started ){
+			
+				// can take a while to actually run so don't block caller
+			
+			asyncDisp.dispatch(()->totalDisp.dispatch());
+		}
+	}
+	
 	@Override
 	public void 
 	registerTorrent(
@@ -734,6 +1008,16 @@ AllTrackersManagerImpl
 		registerTorrentSupport( torrent );
 		
 		update_queue.add( new Object[]{ torrent } );
+		
+		recalcTotals();
+	}
+	
+	@Override
+	public void 
+	unregisterTorrent(
+		TOTorrent torrent )
+	{
+		recalcTotals();
 	}
 	
 	private void 
@@ -755,12 +1039,16 @@ AllTrackersManagerImpl
 		}
 	}
 	
+	@Override
 	public void
 	torrentChanged(
 		TOTorrent		torrent,
-		int				change_type )
+		int				change_type,
+		Object			data )
 	{
 		registerTorrentSupport( torrent );
+		
+		recalcTotals();
 	}
 	
 	@Override
@@ -874,15 +1162,40 @@ AllTrackersManagerImpl
 					}
 				}
 				
-				new_tracker.setRegistered( torrent_maybe_null );
+				new_tracker.setRegistered();
 				
 				return( new_tracker );
 			}
 		}
 		
-		existing_tracker.setRegistered( torrent_maybe_null );
+		existing_tracker.setRegistered();
 			
 		return( existing_tracker );
+	}
+	
+	private void
+	unregisterTracker(
+		String		name )
+	{
+		AllTrackersTrackerImpl existing_tracker = host_map.remove( name );
+		
+		if ( existing_tracker != null ){
+			
+			for ( AllTrackersListener listener: listeners ){
+				
+				List<AllTrackersTracker>	trackers = new ArrayList<>();
+				
+				trackers.add( existing_tracker );
+				
+				try{
+					listener.trackerEventOccurred( new AllTrackersEventImpl( AllTrackersEvent.ET_TRACKER_REMOVED, trackers ));
+	
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+			}
+		}
 	}
 	
 	@Override
@@ -919,18 +1232,21 @@ AllTrackersManagerImpl
 		URL 							url, 
 		TRTrackerScraperResponse	 	response )
 	{
-		AllTrackersTrackerImpl tracker = register( null, url );
+		int scrape_state = response.getStatus();
 		
-		if ( tracker != null ){
+		if ( 	scrape_state == TRTrackerScraperResponse.ST_INITIALIZING ||
+				scrape_state == TRTrackerScraperResponse.ST_SCRAPING ){
 			
-			int scrape_state = response.getStatus();
+				// ignore
+		}else{
 			
-			if ( 	scrape_state == TRTrackerScraperResponse.ST_INITIALIZING ||
-					scrape_state == TRTrackerScraperResponse.ST_SCRAPING ){
-				
-					// ignore
+			if ( response.getPeers() < 0 || response.getSeeds() < 0 ){
+			
+					// invalid, not the result of an actual successful scrape
 			}else{
-				
+			
+				AllTrackersTrackerImpl tracker = register( null, url );
+								
 				update_queue.add( new Object[]{ tracker, response } );
 			}
 		}
@@ -1087,11 +1403,15 @@ AllTrackersManagerImpl
 		private long				total_down;
 		
 		private boolean		registered;
-		
+				
 		private int			num_private;
 		private int			num_public;
 		
 		private LoggerChannel	logger;
+		
+		private long			peers_received;		// not persisted
+		
+		private AtomicInteger	active_request_count = new AtomicInteger();
 		
 		private MovingImmediateAverage	request_average = AverageFactory.MovingImmediateAverage( 5 );
 		
@@ -1193,7 +1513,7 @@ AllTrackersManagerImpl
 			logger = logging_keys.get( short_key );
 		}
 		
-		private Map
+		private Map<String,Object>
 		exportToMap()
 		{
 			Map<String,Object>	map = new HashMap<>();
@@ -1220,7 +1540,7 @@ AllTrackersManagerImpl
 																		
 					if ( consolidated == null ){
 						
-						consolidated = vals;
+						consolidated = vals.clone();
 						
 					}else{
 						
@@ -1254,28 +1574,87 @@ AllTrackersManagerImpl
 		}
 		
 		private void
-		setRegistered(
-			TOTorrent	torrent_maybe_null )
+		setRegistered()
 		{
 			registered	= true;
-			
-			if ( torrent_maybe_null != null ){
-				
-				if ( torrent_maybe_null.getPrivate()){
-				
-					num_private++
-					;
-				}else{
-					
-					num_public++;
-				}
-			}
 		}
 		
 		private boolean
 		isRegistered()
 		{
 			return( registered );
+		}
+		
+		private boolean
+		updateCounts(
+			int		_pub,
+			int		_priv )
+		{
+			if ( num_private != _priv || num_public != _pub ){
+			
+				num_private	= _priv;
+				num_public	= _pub;
+				
+				return( true );
+				
+			}else{
+				
+				return( false );
+			}
+		}
+		
+		@Override
+		public int
+		getTorrentCount()
+		{
+			return( num_private + num_public );
+		}
+		
+		@Override
+		public int
+		getActiveRequestCount()
+		{
+			return( active_request_count.get());
+		}
+		
+		protected void
+		addActiveRequest()
+		{
+			active_request_count.incrementAndGet();
+		}
+		
+		protected void
+		removeActiveRequest()
+		{
+			active_request_count.decrementAndGet();
+		}
+		
+		@Override
+		public boolean 
+		isRemovable()
+		{
+			return( getTorrentCount() == 0 );
+		}
+		
+		private void
+		peersReceived(
+			int		num )
+		{
+			peers_received += num;
+		}
+		
+		@Override
+		public long 
+		getPeersReceived()
+		{
+			return( peers_received );
+		}
+		
+		@Override
+		public void 
+		remove()
+		{
+			unregisterTracker( name );
 		}
 		
 		@Override
@@ -1406,43 +1785,58 @@ AllTrackersManagerImpl
 				
 				if ( hw != null ){
 					
-					DownloadManager dm = core.getGlobalManager().getDownloadManager( hw );
-				
-					if ( dm != null ){
-					
-						if ( resp.getStatus() != TRTrackerAnnouncerResponse.ST_ONLINE ){
+					if ( resp.getStatus() != TRTrackerAnnouncerResponse.ST_ONLINE ){
 						
-							TRTrackerAnnouncerRequest req = resp.getRequest();
+						DownloadManager dm = core.getGlobalManager().getDownloadManager( hw );
+						
+						String dm_name;
+						
+						if ( dm != null ){
 							
-							String req_details;
+							dm_name = dm.getDisplayName();
 							
-							if ( req != null ){
-								
-								long session = req.getSessionID();
-								
-								String sid = Long.toHexString( session );
-								
-								if ( sid.length() > 4 ){
-									sid = sid.substring( 0, 4 );
-								}else{
-									while( sid.length() < 4 ){
-										sid = "0" + sid;
-									}
-								}
-								
-								if ( req.isStopRequest()){
-									sid += "$";
-								}
-								
-								req_details = ", session=" + sid + " - pending_sent=" + req.getReportedUpload() + ", pending_received=" + req.getReportedDownload();
-								
+							dm_name_cache.put( hw, dm_name );
+							
+						}else{
+							
+							dm_name = dm_name_cache.get( hw );
+						}
+						
+						if ( dm_name == null ){
+							
+							dm_name = "[" + ByteFormatter.encodeString( hw.getBytes()) + "]";		
+						}
+						
+						TRTrackerAnnouncerRequest req = resp.getRequest();
+						
+						String req_details;
+						
+						if ( req != null ){
+							
+							long session = req.getSessionID();
+							
+							String sid = Long.toHexString( session );
+							
+							if ( sid.length() > 4 ){
+								sid = sid.substring( 0, 4 );
 							}else{
-								
-								req_details = "";
+								while( sid.length() < 4 ){
+									sid = "0" + sid;
+								}
 							}
 							
-							logger.log( dm.getDisplayName() + ", " + name + req_details + " - " + resp.getStatusString());
+							if ( req.isStopRequest()){
+								sid += "$";
+							}
+							
+							req_details = ", session=" + sid + " - pending_sent=" + req.getReportedUpload() + ", pending_received=" + req.getReportedDownload();
+							
+						}else{
+							
+							req_details = "";
 						}
+						
+						logger.log( dm_name + ", " + name + req_details + " - " + resp.getStatusString());
 					}
 				}
 			}
@@ -1467,36 +1861,40 @@ AllTrackersManagerImpl
 						
 						dm_name = dm.getDisplayName();
 						
+						dm_name_cache.put( hw, dm_name );
+						
 					}else{
 						
 						dm_name = dm_name_cache.get( hw );
 					}
 					
-					if ( dm_name != null ){
-					
-						long session = req.getSessionID();
+					if ( dm_name == null ){
 						
-						String sid = Long.toHexString( session );
-						
-						if ( sid.length() > 4 ){
-							sid = sid.substring( 0, 4 );
-						}else{
-							while( sid.length() < 4 ){
-								sid = "0" + sid;
-							}
-						}
-						
-						if ( req.isStopRequest()){
-							sid += "$";
-						}
-						
-						if ( incomplete ){
-							
-							sid += "[Success unknown]";
-						}
-						
-						logger.log( dm_name + ", " + name + ", session=" + sid + " - sent=" + req.getReportedUpload() + ", received=" + req.getReportedDownload());
+						dm_name = "[" + ByteFormatter.encodeString( hw.getBytes()) + "]";		
 					}
+										
+					long session = req.getSessionID();
+					
+					String sid = Long.toHexString( session );
+					
+					if ( sid.length() > 4 ){
+						sid = sid.substring( 0, 4 );
+					}else{
+						while( sid.length() < 4 ){
+							sid = "0" + sid;
+						}
+					}
+					
+					if ( req.isStopRequest()){
+						sid += "$";
+					}
+					
+					if ( incomplete ){
+						
+						sid += "[Success unknown]";
+					}
+					
+					logger.log( dm_name + ", " + name + ", session=" + sid + " - sent=" + req.getReportedUpload() + ", received=" + req.getReportedDownload());
 				}
 			}
 		}

@@ -23,6 +23,8 @@ package com.biglybt.core.content;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.lang.ref.Reference;
 import java.lang.ref.WeakReference;
 import java.net.URL;
 import java.util.*;
@@ -41,6 +43,7 @@ import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagManager;
 import com.biglybt.core.tag.TagManagerFactory;
 import com.biglybt.core.tag.TagType;
+import com.biglybt.core.tag.TagUtils;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentAnnounceURLGroup;
 import com.biglybt.core.torrent.TOTorrentAnnounceURLSet;
@@ -77,7 +80,7 @@ RelatedContentManager
 	public static final int RCM_SEARCH_PROPERTY_NETWORKS		= 50004;
 
 	private static final boolean 	TRACE 			= false;
-
+	
 	private static final int		MAX_HISTORY					= 16;
 	private static final int		MAX_TITLE_LENGTH			= 80;
 	private static final int		MAX_CONCURRENT_PUBLISH;
@@ -188,9 +191,11 @@ RelatedContentManager
 	private PluginInterface 				plugin_interface;
 	private TorrentAttribute 				ta_networks;
 	private TorrentAttribute 				ta_category;
-	private DHTPluginInterface				public_dht_plugin;
+	
+	private DHTPluginBasicInterface			public_dht_plugin;
+	private DHTPluginBasicInterface			public_dht_plugin_bigly;
 
-	private volatile Map<Byte,DHTPluginInterface>		i2p_dht_plugin_map = new HashMap<>();
+	private volatile Map<Byte,DHTPluginBasicInterface>		i2p_dht_plugin_map = new HashMap<>();
 
 	private TagManager						tag_manager;
 
@@ -208,6 +213,8 @@ RelatedContentManager
 
 	private final boolean	enabled;
 
+	private boolean	use_bigly_dht_for_public_lookups;
+	
 	private int		max_search_level;
 	private int		max_results;
 
@@ -239,9 +246,11 @@ RelatedContentManager
 	boolean	secondary_lookup_in_progress;
 	long	secondary_lookup_complete_time;
 
-	RCMSearchXFer			transfer_type = new RCMSearchXFer();
+	RCMSearchXFer			main_transfer_type	= new RCMSearchXFer();
+	RCMSearchXFerBiglyBT	bigly_transfer_type = new RCMSearchXFerBiglyBT();
 
 	final 	CopyOnWriteList<RelatedContentSearcher>	searchers = new CopyOnWriteList<>();
+
 	private boolean	added_i2p_searcher;
 	private RelatedContentSearcher	mix_searcher;
 
@@ -292,6 +301,7 @@ RelatedContentManager
 					"rcm.max_search_level",
 					"rcm.max_results",
 					"rcm.global.filter.active_only",
+					"rcm.use.bigly.dht",
 				},
 				new ParameterListener()
 				{
@@ -300,6 +310,8 @@ RelatedContentManager
 					parameterChanged(
 						String name )
 					{
+						use_bigly_dht_for_public_lookups = COConfigurationManager.getBooleanParameter( "rcm.use.bigly.dht", false );
+						
 						max_search_level 	= COConfigurationManager.getIntParameter( "rcm.max_search_level", 3 );
 						max_results		 	= COConfigurationManager.getIntParameter( "rcm.max_results", 500 );
 						
@@ -387,115 +399,128 @@ RelatedContentManager
 				public void
 				initializationComplete()
 				{
-					if ( !persist ){
+					AEThread2.createAndStartDaemon( 
+						"rcm.delay.init",
+						()->{
+							try{
+								if ( !persist ){
+									
+									deleteRelatedContent();
+								}
 
-						deleteRelatedContent();
-					}
-
-					try{
-						PluginInterface dht_pi =
-							plugin_interface.getPluginManager().getPluginInterfaceByClass(
-										DHTPlugin.class );
-
-						if ( dht_pi != null ){
-
-							DHTPlugin dp = (DHTPlugin)dht_pi.getPlugin();
-
-							public_dht_plugin = dp;
-
-							RelatedContentSearcher public_searcher = new RelatedContentSearcher( RelatedContentManager.this, transfer_type, dp, true );
-
-							searchers.add( public_searcher );
-
-							DownloadManager dm = plugin_interface.getDownloadManager();
-
-							Download[] downloads = dm.getDownloads();
-
-							addDownloads( downloads, true );
-
-							dm.addListener(
-								new DownloadManagerListener()
-								{
-									@Override
-									public void
-									downloadAdded(
-										Download	download )
-									{
-										addDownloads( new Download[]{ download }, false );
+								PluginInterface dht_pi =
+									plugin_interface.getPluginManager().getPluginInterfaceByClass(
+												DHTPlugin.class );
+		
+								if ( dht_pi != null ){
+		
+									DHTPlugin dp = (DHTPlugin)dht_pi.getPlugin();
+		
+									public_dht_plugin = dp;
+																														
+									RelatedContentSearcher public_searcher = new RelatedContentSearcher( RelatedContentManager.this, main_transfer_type, public_dht_plugin, true );
+															
+									searchers.add( public_searcher );
+		
+									if ( dp.isEnabled()){
+										
+										public_dht_plugin_bigly = dp.getDHTPlugin( DHTPlugin.NW_BIGLYBT_MAIN );
+											
+										RelatedContentSearcher bigly_searcher = new RelatedContentSearcher( RelatedContentManager.this, bigly_transfer_type, public_dht_plugin_bigly, true );
+										
+										searchers.add( bigly_searcher );
 									}
-
-									@Override
-									public void
-									downloadRemoved(
-										Download	download )
-									{
-									}
-								},
-								false );
-
-							SimpleTimer.addPeriodicEvent(
-								"RCM:publisher",
-								TIMER_PERIOD,
-								new TimerEventPerformer()
-								{
-									private int	tick_count;
-
-									@Override
-									public void
-									perform(
-										TimerEvent event )
-									{
-										tick_count++;
-
-										if ( tick_count == 1 || tick_count % I2P_SEARCHER_CHECK_TICKS == 0 ){
-
-											checkI2PSearcher( false );
-										}
-
-										if ( enabled ){
-
-											if ( tick_count >= INITIAL_PUBLISH_TICKS ){
-
-												if ( tick_count % ( public_dht_plugin.isSleeping()?PUBLISH_SLEEPING_CHECK_TICKS:PUBLISH_CHECK_TICKS) == 0 ){
-
-													publish();
+		
+									DownloadManager dm = plugin_interface.getDownloadManager();
+		
+									Download[] downloads = dm.getDownloads();
+		
+									addDownloads( downloads, true );
+		
+									dm.addListener(
+										new DownloadManagerListener()
+										{
+											@Override
+											public void
+											downloadAdded(
+												Download	download )
+											{
+												addDownloads( new Download[]{ download }, false );
+											}
+		
+											@Override
+											public void
+											downloadRemoved(
+												Download	download )
+											{
+											}
+										},
+										false );
+		
+									SimpleTimer.addPeriodicEvent(
+										"RCM:publisher",
+										TIMER_PERIOD,
+										new TimerEventPerformer()
+										{
+											private int	tick_count;
+		
+											@Override
+											public void
+											perform(
+												TimerEvent event )
+											{
+												tick_count++;
+		
+												if ( tick_count == 1 || tick_count % I2P_SEARCHER_CHECK_TICKS == 0 ){
+		
+													checkI2PSearcher( false );
 												}
-
-												if ( tick_count % SECONDARY_LOOKUP_TICKS == 0 ){
-
-													secondaryLookup();
+		
+												if ( enabled ){
+		
+													if ( tick_count >= INITIAL_PUBLISH_TICKS ){
+		
+														if ( tick_count % ( public_dht_plugin.isSleeping()?PUBLISH_SLEEPING_CHECK_TICKS:PUBLISH_CHECK_TICKS) == 0 ){
+		
+															publish();
+														}
+		
+														if ( tick_count % SECONDARY_LOOKUP_TICKS == 0 ){
+		
+															secondaryLookup();
+														}
+		
+														if ( tick_count % REPUBLISH_TICKS == 0 ){
+		
+															republish();
+														}
+		
+														if ( tick_count % CONFIG_SAVE_CHECK_TICKS == 0 ){
+		
+															saveRelatedContent( tick_count, false );
+														}
+													}
 												}
-
-												if ( tick_count % REPUBLISH_TICKS == 0 ){
-
-													republish();
-												}
-
-												if ( tick_count % CONFIG_SAVE_CHECK_TICKS == 0 ){
-
-													saveRelatedContent( tick_count );
+		
+												for ( RelatedContentSearcher searcher: searchers ){
+		
+													searcher.timerTick( enabled, tick_count );
 												}
 											}
-										}
-
-										for ( RelatedContentSearcher searcher: searchers ){
-
-											searcher.timerTick( enabled, tick_count );
-										}
-									}
-								});
-						}
-					}finally{
-
-						initialisation_complete_sem.releaseForever();
-					}
+										});
+								}
+							}finally{
+		
+								initialisation_complete_sem.releaseForever();
+							}
+						});
 				}
 
 				@Override
 				public void
 				closedownInitiated()
 				{
-					saveRelatedContent( 0 );
+					saveRelatedContent( 0, true );
 				}
 
 				@Override
@@ -551,9 +576,9 @@ RelatedContentManager
 
 				if ( ddb.getNetwork() == AENetworkClassifier.AT_I2P ){
 
-					DHTPluginInterface i2p_dht = ddb.getDHTPlugin();
+					DHTPluginBasicInterface i2p_dht = ddb.getDHTPlugin();
 
-					RelatedContentSearcher i2p_searcher = new RelatedContentSearcher( RelatedContentManager.this, transfer_type, i2p_dht, false );
+					RelatedContentSearcher i2p_searcher = new RelatedContentSearcher( RelatedContentManager.this, main_transfer_type, i2p_dht, false );
 
 					searchers.add( i2p_searcher );
 
@@ -577,9 +602,9 @@ RelatedContentManager
 	
 					if ( ddb.getNetwork() == AENetworkClassifier.AT_I2P ){
 	
-						DHTPluginInterface i2p_mix_dht = ddb.getDHTPlugin();
+						DHTPluginBasicInterface i2p_mix_dht = ddb.getDHTPlugin();
 	
-						mix_searcher = new RelatedContentSearcher( RelatedContentManager.this, transfer_type, i2p_mix_dht, false );
+						mix_searcher = new RelatedContentSearcher( RelatedContentManager.this, main_transfer_type, i2p_mix_dht, false );
 					}
 				}
 			}
@@ -593,6 +618,19 @@ RelatedContentManager
 	isEnabled()
 	{
 		return( enabled );
+	}
+	
+	public boolean
+	getUseBiglyDHTForPublicLookups()
+	{
+		return( use_bigly_dht_for_public_lookups );
+	}
+
+	public void
+	setUseBiglyDHTForPublicLookups(
+		boolean		b )
+	{
+		COConfigurationManager.setParameter( "rcm.use.bigly.dht", b );
 	}
 
 	public int
@@ -640,18 +678,25 @@ RelatedContentManager
 		
 
 
-	private DHTPluginInterface
+	private DHTPluginBasicInterface
 	selectDHT(
-		byte		networks )
+		byte		networks,
+		boolean		for_lookup )
 	{
-		DHTPluginInterface	result = null;
+		DHTPluginBasicInterface	result = null;
 		
 		if (	(networks & NET_PUBLIC ) != 0 &&
 				(	( !prefer_i2p ) ||
 					( networks & NET_I2P ) == 0 )){
 
-			result = public_dht_plugin;
-
+			if ( for_lookup && use_bigly_dht_for_public_lookups ){
+				
+				result = public_dht_plugin_bigly;
+				
+			}else{
+			
+				result = public_dht_plugin;
+			}
 		}else if ((networks & NET_I2P ) != 0 ){
 
 			synchronized( i2p_dht_plugin_map ){
@@ -1183,7 +1228,7 @@ RelatedContentManager
 
 		throws Exception
 	{
-		final DHTPluginInterface dht_plugin = selectDHT( from_info.getNetworksInternal());
+		final DHTPluginBasicInterface dht_plugin = selectDHT( from_info.getNetworksInternal(), false );
 
 		// System.out.println( "publish: " + from_info.getString() + " -> " + to_info.getString() + ": " + dht_plugin );
 
@@ -1223,13 +1268,13 @@ RelatedContentManager
 		if ( to_info.getLevel() == 0 ){
 
 			try{
-				Download d = to_info.getRelatedToDownload();
+				Download to_download = to_info.getRelatedToDownload();
 
-				if ( d != null ){
+				if ( to_download != null ){
 
 					int	version	= RelatedContent.VERSION_INITIAL;
 
-					Torrent torrent = d.getTorrent();
+					Torrent torrent = to_download.getTorrent();
 
 					if ( torrent != null ){
 
@@ -1243,7 +1288,7 @@ RelatedContentManager
 						}
 					}
 
-					DownloadManagerState state = PluginCoreUtils.unwrap( d ).getDownloadState();
+					DownloadManagerState state = PluginCoreUtils.unwrap( to_download ).getDownloadState();
 
 					int leechers 	= -1;
 					int seeds 		= -1;
@@ -1278,7 +1323,7 @@ RelatedContentManager
 						map.put( "z", new Long( seeds ));
 					}
 
-					byte[][] keys = getKeys( d );
+					byte[][] keys = getKeys( to_download );
 
 					if ( keys[0] != null ){
 						map.put( "k", keys[0] );
@@ -1287,30 +1332,31 @@ RelatedContentManager
 						map.put( "w", keys[1] );
 					}
 
-					String[] _tags = getTags( d );
+					String[] _tags = getTags( to_download );
 
 					if ( _tags != null ){
 						map.put( "g", encodeTags( _tags ));
 					}
 
-					byte nets = getNetworks( d );
+					byte nets = getNetworks( to_download );
 
 					if ( nets != NET_PUBLIC ){
 						map.put( "o", new Long( nets&0xff ));
 					}
 				}
 			}catch( Throwable e ){
+				Debug.out(e);
 			}
 		}
+
+		Download from_download = from_info.getRelatedToDownload();
 
 		final Set<String>	my_tags = new HashSet<>();
 
 		try{
-			Download d = from_info.getRelatedToDownload();
+			if ( from_download != null ){
 
-			if ( d != null ){
-
-				String[] _tags = getTags( d );
+				String[] _tags = getTags( from_download );
 
 				if ( _tags != null ){
 
@@ -1322,8 +1368,12 @@ RelatedContentManager
 				}
 			}
 		}catch( Throwable e ){
+			
+			Debug.out(e);
 		}
 
+		Set<String>	my_tags_original = new HashSet<>( my_tags );
+		
 		long	size = to_info.getSize();
 
 		if ( size != 0 ){
@@ -1352,6 +1402,8 @@ RelatedContentManager
 
 					private Set<String>	entries = new HashSet<>();
 
+					private Set<String>	discovered_tags = new HashSet<>();
+					
 					@Override
 					public void
 					starts(
@@ -1395,6 +1447,11 @@ RelatedContentManager
 											synchronized( my_tags ){
 
 												my_tags.remove( tag );
+												
+												if ( !my_tags_original.contains( tag )){
+													
+													discovered_tags.add( tag );
+												}
 											}
 										}
 									}
@@ -1427,6 +1484,54 @@ RelatedContentManager
 						byte[]				key,
 						boolean				timeout_occurred )
 					{
+						if ( from_download != null ){
+							
+							synchronized( my_tags ){
+							
+								if ( !discovered_tags.isEmpty()){
+									
+									Set<String> interesting = new HashSet<>();
+									
+									for ( String tag: discovered_tags ){
+										
+										if ( TagUtils.isInternalTagName( tag )){
+											
+											continue;
+										}
+										
+										interesting.add( tag );
+									}
+									
+									if ( !interesting.isEmpty()){
+
+										try{
+											DownloadManagerState dms = PluginCoreUtils.unwrap( from_download ).getDownloadState();
+											
+											String[] old = dms.getListAttribute( DownloadManagerState.AT_SWARM_TAGS );
+											
+											if ( old == null || old.length == 0 ){
+												
+												dms.setListAttribute( DownloadManagerState.AT_SWARM_TAGS, interesting.toArray( new String[0] ));
+												
+											}else{
+													
+												if ( old.length < 16 ){
+													
+													interesting.addAll( Arrays.asList( old ));
+													
+													if ( interesting.size() > old.length ){
+														
+														dms.setListAttribute( DownloadManagerState.AT_SWARM_TAGS, interesting.toArray( new String[0] ));
+													}
+												}
+											}
+										}catch( Throwable e ){
+											
+										}
+									}
+								}
+							}
+						}
 							// if we have something to say prioritise it somewhat
 
 						int f_cutoff = my_tags.size()>0?20:10;
@@ -1542,7 +1647,7 @@ RelatedContentManager
 				}
 			}
 
-			final DHTPluginInterface dht_plugin = selectDHT( to_info.getNetworksInternal());
+			final DHTPluginBasicInterface dht_plugin = selectDHT( to_info.getNetworksInternal(), false );
 
 			if ( dht_plugin != null && sizes.size() > 0 ){
 
@@ -1693,7 +1798,7 @@ RelatedContentManager
 	protected DownloadInfo
 	decodeInfo(
 		Map				map,
-		byte[]			from_hash,	// will be null for those trawled from teh local DHT
+		byte[]			from_hash,	// will be null for those trawled from the local DHT
 		int				level,
 		boolean			explicit,
 		Set<String>		unique_keys )
@@ -1859,7 +1964,20 @@ RelatedContentManager
 				throw( new ContentException( "rcm is disabled" ));
 			}
 
-			final DHTPluginInterface dht_plugin = selectDHT( networks );
+			Download from_download = getDownload( from_hash );
+			
+			Set<String> existing_tags;
+			
+			if ( from_download != null ){
+
+				existing_tags = getExplicitTags( from_download );
+				
+			}else{
+				
+				existing_tags = Collections.emptySet();
+			}
+			
+			final DHTPluginBasicInterface dht_plugin = selectDHT( networks, true );
 
 			if ( dht_plugin == null ){
 
@@ -1886,8 +2004,10 @@ RelatedContentManager
 					true,
 					new DHTPluginOperationListener()
 					{
-						private Set<String>	tags = new HashSet<>();
-
+						private Set<String>	tags 		= new HashSet<>();
+						private Set<String>	swarm_tags	= new HashSet<>();
+						
+						
 						@Override
 						public void
 						starts(
@@ -1962,6 +2082,14 @@ RelatedContentManager
 
 										synchronized( tags ){
 
+											if ( !TagUtils.isInternalTagName( tag )){
+												
+												if ( !existing_tags.contains( tag )){
+
+													swarm_tags.add( tag );
+												}
+											}
+											
 											if ( tags.contains( tag )){
 
 												continue;
@@ -1999,6 +2127,36 @@ RelatedContentManager
 							byte[]				key,
 							boolean				timeout_occurred )
 						{
+							if ( from_download != null ){
+								
+								synchronized( tags ){
+									
+									if ( !swarm_tags.isEmpty()){
+										
+										DownloadManagerState dms = PluginCoreUtils.unwrap( from_download ).getDownloadState();
+										
+										String[] old = dms.getListAttribute( DownloadManagerState.AT_SWARM_TAGS );
+										
+										if ( old == null || old.length == 0 ){
+											
+											dms.setListAttribute( DownloadManagerState.AT_SWARM_TAGS, swarm_tags.toArray( new String[0] ));
+											
+										}else{
+												
+											if ( old.length < 16 ){
+												
+												swarm_tags.addAll( Arrays.asList( old ));
+												
+												if ( swarm_tags.size() > old.length ){
+													
+													dms.setListAttribute( DownloadManagerState.AT_SWARM_TAGS, swarm_tags.toArray( new String[0] ));
+												}
+											}
+										}
+									}
+								}
+							}
+							
 							if ( listener != null ){
 
 								try{
@@ -2053,7 +2211,7 @@ RelatedContentManager
 		byte	net = NET_PUBLIC;
 
 		try{
-			Download download = plugin_interface.getDownloadManager().getDownload( hash );
+			Download download = getDownload( hash );
 
 			if ( download != null ){
 
@@ -2331,7 +2489,7 @@ RelatedContentManager
 		try{
 			final int max_hits = 30;
 
-			DHTPluginInterface dht_plugin = selectDHT( networks );
+			DHTPluginBasicInterface dht_plugin = selectDHT( networks, true );
 
 			if ( dht_plugin == null ){
 
@@ -2932,7 +3090,7 @@ RelatedContentManager
 
 					if ( download_info_map.containsKey( target )){
 
-							// target refers to downoad we already have
+							// target refers to download we already have
 
 						return;
 					}
@@ -2945,7 +3103,7 @@ RelatedContentManager
 
 					if ( download_priv_set.contains( key )){
 
-							// target refers to downoad we already have
+							// target refers to download we already have
 
 						return;
 					}
@@ -2981,32 +3139,40 @@ RelatedContentManager
 
 						byte[] from_hash = to_info.getRelatedToHash();
 
-						ArrayList<DownloadInfo> links = content_cache.related_content_map.get( from_hash );
-
-						if ( links == null ){
-
-							links = new ArrayList<>(1);
-
-							content_cache.related_content_map.put( from_hash, links );
-						}
-
-						links.add( target_info );
-
-						links.trimToSize();
-
-						target_info.setPublic( content_cache );
-
-						if ( secondary_lookups.size() < SECONDARY_LOOKUP_CACHE_MAX ){
-
-							byte[]	hash 	= target_info.getHash();
-							int		level	= target_info.getLevel();
-
-							if ( hash != null && level < max_search_level ){
-
-								secondary_lookups.add( new SecondaryLookup( hash, level, target_info.getNetworksInternal()));
+							// if we are importing content then related hash will be null
+						
+						if ( from_hash != null ){
+							
+							ArrayList<DownloadInfo> links = content_cache.related_content_map.get( from_hash );
+	
+							if ( links == null ){
+	
+								links = new ArrayList<>(1);
+	
+								content_cache.related_content_map.put( from_hash, links );
 							}
+	
+							links.add( target_info );
+	
+							links.trimToSize();
+	
+							target_info.setPublic( content_cache );
+	
+							if ( secondary_lookups.size() < SECONDARY_LOOKUP_CACHE_MAX ){
+	
+								byte[]	hash 	= target_info.getHash();
+								int		level	= target_info.getLevel();
+	
+								if ( hash != null && level < max_search_level ){
+	
+									secondary_lookups.add( new SecondaryLookup( hash, level, target_info.getNetworksInternal()));
+								}
+							}
+						}else{
+							
+							target_info.setPublic( content_cache );
 						}
-
+						
 						new_content = true;
 
 					}else{
@@ -3460,13 +3626,22 @@ RelatedContentManager
 			}
 		}
 		
+		DHTPluginBasicInterface target_dht_plugin = use_bigly_dht_for_public_lookups?public_dht_plugin_bigly:null;
+		
 		for ( RelatedContentSearcher searcher: searchers ){
 
-			String net = searcher.getDHTPlugin().getNetwork();
+			DHTPluginBasicInterface dht_plugin = searcher.getDHTPlugin();
+			
+			String net = dht_plugin.getAENetwork();
 
 			if ( net == target_net ){
-
-				return( searcher.searchRCM( search_parameters, observer ));
+				
+				if ( 	target_net !=  AENetworkClassifier.AT_PUBLIC ||
+						target_dht_plugin == null || 
+						target_dht_plugin == dht_plugin ){
+					
+					return( searcher.searchRCM( search_parameters, observer ));		
+				}
 			}
 		}
 
@@ -3721,7 +3896,8 @@ RelatedContentManager
 
 	protected void
 	saveRelatedContent(
-		int	tick_count )
+		int			tick_count,
+		boolean		closing )
 	{
 		synchronized( rcm_lock ){
 
@@ -3881,14 +4057,83 @@ RelatedContentManager
 					deleteRelatedContent();
 				}
 
-				for ( RelatedContentSearcher searcher: searchers ){
-
-					searcher.updateKeyBloom( cc );
+				if ( !closing ){
+					
+					for ( RelatedContentSearcher searcher: searchers ){
+	
+						searcher.updateKeyBloom( cc );
+					}
 				}
 			}
 		}
 	}
 
+	public void
+	exportToFile(
+		File		file )
+	{
+		try{
+			Map<String,Object>	root = new HashMap<>();
+			
+			List<Map> list = new ArrayList<>();
+			
+			root.put( "content", list );
+			
+			synchronized( rcm_lock ){
+	
+				ContentCache	content_cache = loadRelatedContent();
+	
+				Collection<DownloadInfo> content = content_cache.related_content.values();
+			
+				for ( DownloadInfo c: content ){
+				
+					Map<String,Object> map = serialiseDI( c, null );
+					
+					list.add( map );
+				}
+			}
+			
+			String json = BEncoder.encodeToJSON( root );
+			
+			FileUtil.writeStringAsFile( file, json );
+	
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+		}
+	}
+	
+	public void
+	importFromFile(
+		File		file )
+	{
+		try{
+			String json = FileUtil.readFileAsString( file, -1 );
+			
+			Map<String,Object> map = BDecoder.decodeFromJSON( json );
+			
+			List<Map> list = (List<Map>)map.get( "content" );
+			
+			synchronized( rcm_lock ){
+				
+				ContentCache	content_cache = loadRelatedContent();
+
+				for ( Map m: list ){
+					
+					DownloadInfo di = deserialiseDI( m, content_cache );
+					
+					if ( di != null ){
+						
+						analyseResponse( di, null );
+					}
+				}
+			}
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+		}
+	}
+	
 	void
 	deleteRelatedContent()
 	{
@@ -4014,6 +4259,8 @@ RelatedContentManager
 
 				Set<String>	ws_domains = new HashSet<>();
 
+				/*
+				 * never really used these so let's stop wasting time getting them
 				List getright = BDecoder.decodeStrings( getURLList( to_torrent, "url-list" ));
 				List webseeds = BDecoder.decodeStrings( getURLList( to_torrent, "httpseeds" ));
 
@@ -4032,7 +4279,8 @@ RelatedContentManager
 						}
 					}
 				}
-
+				*/
+				
 				ws_keys = domainsToArray( ws_domains, 3 );
 			}
 		}catch( Throwable e ){
@@ -4221,6 +4469,40 @@ RelatedContentManager
 		return( nets );
 	}
 
+	private Set<String>
+	getExplicitTags(
+		Download	download )
+	{
+		Set<String>	all_tags = new HashSet<>();
+
+		if ( tag_manager.isEnabled()){
+
+			String	cat_name = ta_category==null?null:download.getAttribute( ta_category );
+
+			if ( cat_name != null ){
+
+				Tag cat_tag = tag_manager.getTagType( TagType.TT_DOWNLOAD_CATEGORY ).getTag( cat_name, true );
+
+				if ( cat_tag != null && cat_tag.isPublic()){
+
+					all_tags.add( cat_name.toLowerCase( Locale.US ));
+				}
+			}
+
+			List<Tag> tags = tag_manager.getTagType( TagType.TT_DOWNLOAD_MANUAL ).getTagsForTaggable( PluginCoreUtils.unwrap( download ));
+
+			for ( Tag t: tags ){
+
+				if ( t.isPublic()){
+
+					all_tags.add( t.getTagName( true ).toLowerCase( Locale.US ));
+				}
+			}
+		}
+		
+		return( all_tags );
+	}
+	
 	private String[]
 	getTags(
 		Download	download )
@@ -4957,6 +5239,8 @@ RelatedContentManager
 
 		private ContentCache	cc;
 
+		private Reference<String[]> title_word_cache = null;
+		
 		protected
 		DownloadInfo(
 			int			_version,
@@ -5030,6 +5314,26 @@ RelatedContentManager
 			}
 		}
 
+		protected String[]
+		getTitleWordCache()
+		{
+			Reference<String[]> ref = title_word_cache;
+			
+			if ( ref != null ){
+				
+				return( ref.get());
+			}
+			
+			return( null );
+		}
+		
+		protected void
+		setTitleWordCache(
+			String[]		words )
+		{
+			title_word_cache = new WeakReference<>( words );
+		}
+		
 		protected boolean
 		addInfo(
 			DownloadInfo		info )
@@ -5361,13 +5665,20 @@ RelatedContentManager
 
 	// can't move this class out of here as the key for the transfer type is based on its
 	// class name...
-
+	// note there is migration for this in DDBaseHelpers::xfer_migration
+	
 	protected static class
 	RCMSearchXFer
 		implements DistributedDatabaseTransferType
 	{
 	}
 
+	protected static class
+	RCMSearchXFerBiglyBT
+		implements DistributedDatabaseTransferType
+	{
+	}
+	
 	protected static class
 	ContentCache
 	{

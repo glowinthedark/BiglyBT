@@ -63,12 +63,12 @@ PeerForeignDelegate
 
 	protected volatile int		_lastPiece =-1;
 
-	private PeerManagerImpl		manager;
-	private Peer				foreign;
+	private final PeerManagerImpl		manager;
+	private final Peer					foreign;
 
-	private NetworkConnectionBase	network_connection;
+	private final NetworkConnectionBase	network_connection;
 
-	private long	create_time		= SystemTime.getCurrentTime();
+	private long	create_time_mono		= SystemTime.getMonotonousTime();
 	private long	last_data_received_time =-1;
 	private long	last_data_message_received_time =-1;
 	private int[]	reserved_pieces	= null;
@@ -164,6 +164,13 @@ PeerForeignDelegate
 	isMyPeer()
 	{
 		return( false );
+	}
+	
+	@Override
+	public int 
+	getOutboundConnectionProgress()
+	{
+		return( CP_UNKNOWN );
 	}
 	
 	@Override
@@ -264,7 +271,7 @@ PeerForeignDelegate
 	{
 		return( foreign.getRequests().indexOf( request ));
 	}
-
+	
 	protected  void
 	dataReceived()
 	{
@@ -274,12 +281,13 @@ PeerForeignDelegate
 	@Override
 	public void
 	closeConnection(
-		String reason )
+		String 	reason,
+		int		reason_code )
 	{
 		closed = true;
 
 		try{
-			foreign.close( reason, false, false );
+			foreign.close( reason, reason_code, false, false );
 
 		}finally{
 
@@ -303,9 +311,9 @@ PeerForeignDelegate
 
 	@Override
 	public long
-	getLastMessageSentTime()
+	getLastMessageSentTimeMono()
 	{
-		return( 0 );
+		return( -1 );
 	}
 
 	@Override
@@ -425,16 +433,9 @@ PeerForeignDelegate
 
   	@Override
 	  public long
-  	getTimeSinceConnectionEstablished()
+	  getConnectionEstablishedMonoTime()
   	{
-  		long	now = SystemTime.getCurrentTime();
-
-  		if ( now > create_time ){
-
-  			return( now - create_time );
-  		}
-
-  		return( 0 );
+  		return( create_time_mono );
   	}
 
     @Override
@@ -768,7 +769,14 @@ PeerForeignDelegate
 	public PEPeerStats
 	getStats()
 	{
-		return( ((PeerStatsImpl)foreign.getStats()).getDelegate());
+		PeerStatsImpl ps = (PeerStatsImpl)foreign.getStats();
+		
+		if ( ps == null ){
+			
+			return( null );
+		}
+		
+		return( ps.getDelegate());
 	}
 
 
@@ -938,17 +946,17 @@ PeerForeignDelegate
 	}
 
 	@Override
-	public int
-	getPercentDoneOfCurrentIncomingRequest()
+	public int[]
+	getCurrentIncomingRequestProgress()
 	{
-		return( foreign.getPercentDoneOfCurrentIncomingRequest());
+		return( foreign.getCurrentIncomingRequestProgress());
 	}
 
 	@Override
-	public int
-	getPercentDoneOfCurrentOutgoingRequest()
+	public int[]
+	getCurrentOutgoingRequestProgress()
 	{
-		return( foreign.getPercentDoneOfCurrentOutgoingRequest());
+		return( foreign.getCurrentOutgoingRequestProgress());
 	}
 
 	@Override
@@ -1215,7 +1223,10 @@ PeerForeignDelegate
 	public void clearAvailabilityAdded() {}
 
 	@Override
-	public PEPeerTransport reconnect(boolean tryUDP, boolean tryIPv6){ return null; }
+	public PEPeerTransport reconnect(boolean tryUDP, boolean tryIPv6, Map userData ){ return null; }
+	
+	@Override
+	public boolean isReconnect(){ return false; }
 	@Override
 	public boolean isSafeForReconnect() { return false; }
 
@@ -1318,16 +1329,13 @@ PeerForeignDelegate
 
 			if ( is_download_disabled ){
 
-				List<Object>	list = foreign.getRequests();
+				List<PeerReadRequest>	list = foreign.getRequests();
 
 				if ( list != null ){
 
-					for ( Object obj: list ){
+					for ( PeerReadRequest req: list ){
 
-						if ( obj instanceof PeerReadRequest ){
-
-							foreign.cancelRequest((PeerReadRequest)obj);
-						}
+						foreign.cancelRequest( req );
 					}
 				}
 			}
@@ -1372,6 +1380,21 @@ PeerForeignDelegate
 	}
 
 	@Override
+	public boolean 
+	canSendHolePunch()
+	{
+		return( false );
+	}
+	
+	@Override
+	public void 
+	sendHolePunch(
+		InetAddress address,
+		int 		port)
+	{
+	}
+	
+	@Override
 	public void
 	generateEvidence(
 		IndentWriter	writer )
@@ -1400,5 +1423,12 @@ PeerForeignDelegate
 	}
 	@Override
 	public void setTaggableTransientProperty(String key, Object value) {
+	}
+	
+	@Override
+	public PeerDescriptor 
+	getDescriptor()
+	{
+		return( PeerItemFactory.getDescriptor( this ));
 	}
 }

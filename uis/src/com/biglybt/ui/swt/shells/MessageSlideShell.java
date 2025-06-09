@@ -74,7 +74,7 @@ public class MessageSlideShell
 	/** Standard height of the shell.  Shell may grow depending on text */
 	private final static int SHELL_MIN_HEIGHT = 150;
 
-	/** Maximimum height of popup.  If text is too long, the full text will be
+	/** Maximum height of popup.  If text is too long, the full text will be
 	 * put into details.
 	 */
 	private final static int SHELL_MAX_HEIGHT = 330;
@@ -575,7 +575,7 @@ public class MessageSlideShell
 			endBounds = shell.computeTrim(boundsX2 - bestSize.x, boundsY2
 					- bestSize.y, bestSize.x, bestSize.y);
 
-			// bottom and right trim will be off the edge, calulate this trim
+			// bottom and right trim will be off the edge, calculate this trim
 			// and adjust it up and left (trim may not be the same size on all sides)
 			int diff = (endBounds.x + endBounds.width) - boundsX2;
 			if (diff >= 0)
@@ -683,7 +683,7 @@ public class MessageSlideShell
 					Rectangle area = canvas.getClientArea();
 					sp = new GCStringPrinter(e.gc, popupParams.text, area, true, false,
 							SWT.WRAP | SWT.TOP);
-					sp.setUrlColor(ColorCache.getColor(e.gc.getDevice(), "#0000ff"));
+					sp.setUrlColor(e.gc.getDevice().getSystemColor(SWT.COLOR_LINK_FOREGROUND));
 					if (colorURL != null) {
 						sp.setUrlColor(colorURL);
 					}
@@ -948,14 +948,8 @@ public class MessageSlideShell
 	 * Waits until all slideys are closed before returning to caller.
 	 */
 	public static void waitUntilClosed() {
-		if (currentPopupIndex < 0)
-			return;
 
-		Display display = Display.getCurrent();
-		while (currentPopupIndex >= 0) {
-			if (!display.readAndDispatch())
-				display.sleep();
-		}
+		Utils.readAndDispatchLoop(()->currentPopupIndex < 0);
 	}
 
 	public static class PopupParams

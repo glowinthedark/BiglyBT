@@ -179,17 +179,26 @@ MetaSearchManagerImpl
 			}
 		};
 
-	boolean	proxy_requests_enabled;
+	int	proxy_requests_enabled_type;
 
 	{
 		COConfigurationManager.addAndFireParameterListener(
-			"metasearch.config.proxy.enable",
+			"metasearch.config.proxy.type",
 			new ParameterListener() {
 
 				@Override
 				public void parameterChanged(String parameterName)
 				{
-					proxy_requests_enabled = COConfigurationManager.getBooleanParameter( "metasearch.config.proxy.enable", false );
+						// migrate 
+					
+					if ( COConfigurationManager.getBooleanParameter( "metasearch.config.proxy.enable", false )){
+						
+						COConfigurationManager.removeParameter( "metasearch.config.proxy.enable" );
+												
+						COConfigurationManager.setParameter( "metasearch.config.proxy.type", PROXY_TOR );
+					}
+					
+					proxy_requests_enabled_type = COConfigurationManager.getIntParameter( "metasearch.config.proxy.type", PROXY_NONE );
 				}
 			});
 	}
@@ -1357,18 +1366,18 @@ MetaSearchManagerImpl
 	}
 
 	@Override
-	public boolean
+	public int
 	getProxyRequestsEnabled()
 	{
-		return( proxy_requests_enabled );
+		return( proxy_requests_enabled_type );
 	}
 
 	@Override
 	public void
 	setProxyRequestsEnabled(
-		boolean enabled)
+		int	 type )
 	{
-		COConfigurationManager.setParameter( "metasearch.config.proxy.enable", enabled );
+		COConfigurationManager.setParameter( "metasearch.config.proxy.type", type );
 	}
 
 	@Override
@@ -1912,9 +1921,17 @@ MetaSearchManagerImpl
 
 	     				return( new Long( result.getNbSuperSeeds()));
 	     			}
+	     			case PR_COMPLETED_COUNT:{
+
+	     				return( new Long( result.getNbCompleted()));
+	     			}
 	     			case PR_CATEGORY:{
 
 	     				return( result.getCategory());
+	     			}
+	     			case PR_TAGS:{
+
+	     				return( result.getTags());
 	     			}
 	     			case PR_COMMENTS:{
 

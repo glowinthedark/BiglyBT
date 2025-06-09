@@ -30,8 +30,8 @@ public abstract class IConsoleCommand {
 	protected static final class TorrentComparator implements Comparator<DownloadManager> {
 			@Override
 			public final int compare(DownloadManager aDL, DownloadManager bDL) {
-				boolean aIsComplete = aDL.getStats().getDownloadCompleted(false) == 1000;
-				boolean bIsComplete = bDL.getStats().getDownloadCompleted(false) == 1000;
+				boolean aIsComplete = aDL.isDownloadComplete(false);
+				boolean bIsComplete = bDL.isDownloadComplete(false);
 				if (aIsComplete && !bIsComplete)
 					return 1;
 				if (!aIsComplete && bIsComplete)
@@ -179,7 +179,7 @@ public abstract class IConsoleCommand {
 		switch( variable )
 		{
 			case 'a':
-				return getShortStateString(dm.getState());
+				return getShortStateString(dm.getState(),dm.isForceStart());
 			case 'c':
 				DecimalFormat df = new DecimalFormat("000.0%");
 				return df.format(dm.getStats().getCompleted() / 1000.0);
@@ -280,7 +280,7 @@ public abstract class IConsoleCommand {
 	 * @param dmstate
 	 * @return
 	 */
-	private static String getShortStateString(int dmstate) {
+	private static String getShortStateString(int dmstate, boolean forced) {
 		switch( dmstate )
 		{
 		case DownloadManager.STATE_INITIALIZING:
@@ -290,11 +290,11 @@ public abstract class IConsoleCommand {
 		case DownloadManager.STATE_CHECKING:
 			return("C");
 		case DownloadManager.STATE_DOWNLOADING:
-			return(">");
+			return( forced?"F":">");
 		case DownloadManager.STATE_ERROR:
 			return("E");
 		case DownloadManager.STATE_SEEDING:
-			return("*");
+			return( forced?"F":"*");
 		case DownloadManager.STATE_STOPPED:
 			return("!");
 		case DownloadManager.STATE_WAITING:

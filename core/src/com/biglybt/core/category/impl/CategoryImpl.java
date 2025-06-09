@@ -35,8 +35,10 @@ import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.networkmanager.LimitedRateGroup;
+import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagDownload;
 import com.biglybt.core.tag.TagFeatureRunState;
+import com.biglybt.core.tag.TagListener;
 import com.biglybt.core.tag.Taggable;
 import com.biglybt.core.tag.impl.TagBase;
 import com.biglybt.core.util.*;
@@ -44,11 +46,12 @@ import com.biglybt.core.util.*;
 public class
 CategoryImpl
 	extends TagBase
-	implements Category, Comparable, TagDownload
+	implements Category, Comparable, TagDownload, TagListener
 {
   final String sName;
   private final int type;
-  private final CopyOnWriteList<DownloadManager> managers_cow = new CopyOnWriteList<>();
+  private final CopyOnWriteList<DownloadManager> 	managers_cow	= new CopyOnWriteList<>();
+  private final IdentityHashSet<DownloadManager> 	managers_set	= new IdentityHashSet<>();
 
   int upload_speed;
   int download_speed;
@@ -150,6 +153,8 @@ CategoryImpl
     upload_speed	= maxup;
     download_speed	= maxdown;
     attributes = _attributes;
+    
+    addTagListener( this, true );
   }
 
   protected CategoryImpl(CategoryManagerImpl manager, String sName, int type, Map<String,String> _attributes) {
@@ -164,6 +169,12 @@ CategoryImpl
     attributes = _attributes;
   }
 
+  protected void
+  localeChanged()
+  {
+	   setGroup( MessageText.getString( "TableColumn.header.category" )); 
+  }
+  
   @Override
   public void addCategoryListener(CategoryListener l) {
   	if (!category_listeners.hasListener(l)) {
@@ -236,13 +247,14 @@ CategoryImpl
     
     synchronized( managers_cow ){
     	
-    	do_add = !managers_cow.contains(manager);
+    	do_add = !managers_set.contains(manager);
     	
     	if ( do_add ){
     		
         	if ( type == Category.TYPE_USER ){
         		
         		managers_cow.add( manager );
+        		managers_set.add( manager );
         	}
     	}
     }
@@ -251,18 +263,6 @@ CategoryImpl
     	
         manager.addRateLimiter( upload_limiter, true );
         manager.addRateLimiter( download_limiter, false );
-
-        int pri = getIntAttribute( AT_UPLOAD_PRIORITY, -1 );
-
-        if ( pri > 0 ){
-
-      	  	// another call-during-construction issue to avoid here
-
-      	  if ( manager.getDownloadState() != null ){
-
-      		  manager.updateAutoUploadPriority( UPLOAD_PRIORITY_KEY, true );
-      	  }
-        }
     }
     
     super.addTaggable( manager );
@@ -291,11 +291,12 @@ CategoryImpl
     
     synchronized( managers_cow ){
     	
-    	do_remove = type != Category.TYPE_USER || managers_cow.contains(manager);
+    	do_remove = type != Category.TYPE_USER || managers_set.contains(manager);
     
     	if ( do_remove ){
     	
     		managers_cow.remove(manager);
+    		managers_set.remove(manager);
     	}
     }
     
@@ -303,18 +304,6 @@ CategoryImpl
 
         manager.removeRateLimiter( upload_limiter, true );
         manager.removeRateLimiter( download_limiter, false );
-
-        int pri = getIntAttribute( AT_UPLOAD_PRIORITY, -1 );
-
-        if ( pri > 0 ){
-
-      	  	// another call-during-construction issue to avoid here
-
-      	  if ( manager.getDownloadState() != null ){
-
-      		  manager.updateAutoUploadPriority( UPLOAD_PRIORITY_KEY, false );
-      	  }
-        }
     }
     
     super.removeTaggable( manager );
@@ -344,6 +333,42 @@ CategoryImpl
 		DownloadManager dm = (DownloadManager)t;
 		
 		removeManager( dm.getDownloadState());
+	}
+	
+	public void
+	taggableAdded(
+		Tag			tag,
+		Taggable	tagged )
+	{
+		DownloadManager manager = (DownloadManager)tagged;
+		
+		int pri = getIntAttribute( AT_UPLOAD_PRIORITY, -1 );
+
+		if ( pri > 0 ){
+
+			manager.updateAutoUploadPriority( UPLOAD_PRIORITY_KEY, true );
+		}	
+	}
+
+	public void
+	taggableSync(
+		Tag			tag )
+	{
+	}
+
+	public void
+	taggableRemoved(
+		Tag			tag,
+		Taggable	tagged )
+	{
+		DownloadManager manager = (DownloadManager)tagged;
+		
+		int pri = getIntAttribute( AT_UPLOAD_PRIORITY, -1 );
+
+		if ( pri > 0 ){
+
+			manager.updateAutoUploadPriority( UPLOAD_PRIORITY_KEY, false );
+		}
 	}
 	
   @Override
@@ -670,7 +695,7 @@ CategoryImpl
 
 	  	if ( type == Category.TYPE_USER ){
 
-	  		return( managers_cow.contains((DownloadManager)t));
+	  		return( managers_set.contains((DownloadManager)t));
 
 	  	}else if ( type == Category.TYPE_ALL ){
 
@@ -717,11 +742,13 @@ CategoryImpl
 	}
 
 	@Override
-	public void
+	public List<Taggable>
 	performOperation(
 		int		op )
 	{
 		Debug.out( "derp" );
+		
+		return( new ArrayList<>());
 	}
 
   @Override
@@ -732,7 +759,9 @@ CategoryImpl
 
 		  destroyed = true;
 
-		  removeTag();
+		  removeTagListener( this );
+		  
+		  removeTag();		  
 	  }
   }
 

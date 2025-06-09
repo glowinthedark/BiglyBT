@@ -45,7 +45,7 @@ import com.biglybt.core.peer.PEPeerSource;
 import com.biglybt.core.torrent.*;
 import com.biglybt.core.tracker.client.TRTrackerAnnouncer;
 import com.biglybt.core.util.*;
-import com.biglybt.pif.logging.LoggerChannel;
+import com.biglybt.core.util.StringInterner.FileKey;
 
 /**
  * @author parg
@@ -56,14 +56,16 @@ import com.biglybt.pif.logging.LoggerChannel;
 
 public class
 DownloadManagerStateImpl
-	implements DownloadManagerState, ParameterListener
+	implements DownloadManagerState, ParameterListener, LinkFileMap.IndexResolver
 {
 	private static final int	VER_INCOMING_PEER_SOURCE	= 1;
-	private static final int	VER_CURRENT					= VER_INCOMING_PEER_SOURCE;
+	private static final int	VER_HOLE_PUNCH_PEER_SOURCE	= 2;
+	private static final int	VER_CURRENT					= VER_HOLE_PUNCH_PEER_SOURCE;
 
 
 	private static final LogIDs LOGID = LogIDs.DISK;
 	private static final String			RESUME_KEY						= "resume";
+	private static final String			RESUME_HISTORY_KEY				= "resume_history";
 	private static final String			TRACKER_CACHE_KEY				= "tracker_cache";
 	private static final String			ATTRIBUTE_KEY					= "attributes";
 	private static final String			AZUREUS_PROPERTIES_KEY			= "azureus_properties";
@@ -77,7 +79,7 @@ DownloadManagerStateImpl
 
 		ACTIVE_DIR = FileUtil.getUserFile( "active" );
 
-		if ( !ACTIVE_DIR.exists()){
+		if ( !FileUtil.exists( ACTIVE_DIR )){
 
 			FileUtil.mkdirs(ACTIVE_DIR);
 		}
@@ -126,8 +128,18 @@ DownloadManagerStateImpl
 			default_attributes.put( ATTRIBUTE_DEFAULTS[i][0], ATTRIBUTE_DEFAULTS[i][1] );
 		}
 
-		// only add keys that will point to Map objects here!
-		TorrentUtils.registerMapFluff( new String[] {TRACKER_CACHE_KEY,RESUME_KEY} );
+			// only add keys that will point to Map objects here!
+		
+		TorrentUtils.registerMapFluff( new String[]{ TRACKER_CACHE_KEY, RESUME_KEY, RESUME_HISTORY_KEY });
+	}
+	
+	private static boolean debug_on;
+	
+	public static void
+	setDebugOn(
+		boolean		on )
+	{
+		debug_on = on;
 	}
 
 	private static Object
@@ -273,7 +285,8 @@ DownloadManagerStateImpl
 	private DownloadManagerImpl			download_manager;
 
 	private final TorrentUtils.ExtendedTorrent	torrent;
-
+	private final File							state_dir;
+	
 	private boolean						write_required_soon;
 	private long						write_required_sometime = -1;
 
@@ -305,6 +318,8 @@ DownloadManagerStateImpl
 
 	private int transient_flags;
 		
+	private Map<String,Object>	transient_attributes = new HashMap<>();
+			
 	private static DownloadManagerStateImpl
 	getDownloadState(
 		DownloadManagerImpl				download_manager,
@@ -330,8 +345,18 @@ DownloadManagerStateImpl
 
 				state_map.put( hash_wrapper, res );
 
+				if ( debug_on ){
+
+					FileUtil.log("    dms created" );
+				}
+
 			}else{
 
+				if ( debug_on ){
+
+					FileUtil.log("    dms found in state_map" );
+				}
+				
 					// if original state was created without a download manager,
 					// bind it to this one
 
@@ -370,7 +395,7 @@ DownloadManagerStateImpl
 
 		boolean	was_corrupt = false;
 		
-		if ( saved_file.exists()){
+		if ( FileUtil.exists( saved_file )){
 
 			try{
 				saved_state = TorrentUtils.readDelegateFromFile( saved_file, false );
@@ -413,8 +438,11 @@ DownloadManagerStateImpl
 	{
 		boolean	discard_pieces = state_map.size() > 32;
 
-		// System.out.println( "getDownloadState: hash = " + (torrent_hash==null?"null":ByteFormatter.encodeString(torrent_hash) + ", file = " + torrent_file ));
+		if ( debug_on ){
 
+			FileUtil.log("getDownloadState: hash = " + (torrent_hash==null?"null":ByteFormatter.encodeString(torrent_hash) + ", file = " + torrent_file ));
+		}
+		
 		TOTorrent						original_torrent	= null;
 		TorrentUtils.ExtendedTorrent 	saved_state			= null;
 
@@ -422,29 +450,50 @@ DownloadManagerStateImpl
 
 		if ( torrent_hash != null ){
 
-			File	saved_file = getStateFile( torrent_hash );
+			Map	cached_state = (Map)global_state_cache.remove( new HashWrapper( torrent_hash ));
 
-			if ( saved_file.exists()){
+			if ( cached_state != null ){
 
-				try{
-					Map	cached_state = (Map)global_state_cache.remove( new HashWrapper( torrent_hash ));
+				if ( debug_on ){
 
-					if ( cached_state != null ){
+					FileUtil.log("    saved state 1: got cached state" );
+				}
+						
+				CachedStateWrapper wrapper = new CachedStateWrapper( download_manager, torrent_file, torrent_hash, cached_state, inactive );
 
-						CachedStateWrapper wrapper = new CachedStateWrapper( download_manager, torrent_file, torrent_hash, cached_state, inactive );
+				global_state_cache_wrappers.add( wrapper );
 
-						global_state_cache_wrappers.add( wrapper );
+				saved_state	= wrapper;
 
-						saved_state	= wrapper;
+			}else{
 
-					}else{
+				File	saved_file = getStateFile( torrent_hash );
+
+				if ( FileUtil.exists( saved_file )){
+			
+					try{
+
+						if ( debug_on ){
+
+							FileUtil.log("    saved state 1 exists" );
+						}
 
 						saved_state = TorrentUtils.readDelegateFromFile( saved_file, discard_pieces );
+						
+						if ( debug_on ){
+
+							FileUtil.log("    saved state 1: read from " + saved_file );
+						}
+					}catch( Throwable e ){
+
+						Debug.out( "Failed to load download state for " + saved_file, e );
 					}
+				}else{
+				
+					if ( debug_on ){
 
-				}catch( Throwable e ){
-
-					Debug.out( "Failed to load download state for " + saved_file, e );
+						FileUtil.log("    saved state 1 doesn't exist" );
+					}
 				}
 			}
 		}
@@ -462,16 +511,31 @@ DownloadManagerStateImpl
 
 			File	saved_file = getStateFile( torrent_hash );
 			
-			if ( saved_file.exists()){
+			if ( FileUtil.exists( saved_file )){
+				
+				if ( debug_on ){
+
+					FileUtil.log("    saved state 2 exists" );
+				}
 				
 				try{
 					saved_state = TorrentUtils.readDelegateFromFile( saved_file, discard_pieces );
 
+					if ( debug_on ){
+
+						FileUtil.log("    saved state 2: read from " + saved_file );
+					}
 				}catch( Throwable e ){
 
 					was_corrupt = true;
 					
 					Debug.out( "Failed to load download state for " + saved_file );
+				}
+			}else{
+				
+				if ( debug_on ){
+
+					FileUtil.log("    saved state 2 doesn't exist" );
 				}
 			}
 
@@ -485,6 +549,11 @@ DownloadManagerStateImpl
 				copyTorrentToActive( original_torrent, saved_file, was_corrupt );
 
 				saved_state = TorrentUtils.readDelegateFromFile( saved_file, discard_pieces );
+				
+				if ( debug_on ){
+
+					FileUtil.log("    saved state 3: read from " + saved_file );
+				}
 			}
 		}
 
@@ -614,6 +683,8 @@ DownloadManagerStateImpl
 		try{
 			class_mon.enter();
 
+			SUPPRESS_FIXUP_ERRORS = true;	// closing
+			
 			Map	map = new HashMap();
 
 			List	cache = new ArrayList();
@@ -700,12 +771,12 @@ DownloadManagerStateImpl
 		File	target_state_file 	= FileUtil.newFile( ACTIVE_DIR, state_file );
 		File	source_state_file 	= FileUtil.newFile( source_dir, state_file );
 
-		if ( !source_state_file.exists()){
+		if ( !FileUtil.exists( source_state_file )){
 
 			throw( new DownloadManagerException( "Source state file missing: " + source_state_file ));
 		}
 
-		if ( target_state_file.exists()){
+		if ( FileUtil.exists( target_state_file )){
 
 			target_state_file.delete();
 
@@ -719,7 +790,7 @@ DownloadManagerStateImpl
 
 		File	source_state_dir = FileUtil.newFile( source_dir, hash_str );
 
-		if ( source_state_dir.exists()){
+		if ( FileUtil.exists( source_state_dir )){
 
 			try{
 				FileUtil.copyFileOrDirectory( source_state_dir, ACTIVE_DIR );
@@ -735,11 +806,27 @@ DownloadManagerStateImpl
 
 	public static void
 	deleteDownloadState(
-		byte[]		download_hash )
+		byte[]		download_hash,
+		boolean		delete_cache )
 
 		throws DownloadManagerException
 	{
 		deleteDownloadState( ACTIVE_DIR, download_hash );
+		
+		if ( delete_cache ){
+			
+			try{
+				class_mon.enter();
+
+				HashWrapper	wrapper = new HashWrapper( download_hash );
+
+				state_map.remove( wrapper );
+				
+			}finally{
+				
+				class_mon.exit();
+			}
+		}
 	}
 
 	public static void
@@ -755,7 +842,7 @@ DownloadManagerStateImpl
 
 		File	target_state_file 	= FileUtil.newFile( source_dir, state_file );
 
-		if ( target_state_file.exists()){
+		if ( FileUtil.exists( target_state_file )){
 
 			if ( !target_state_file.delete()){
 
@@ -763,11 +850,19 @@ DownloadManagerStateImpl
 			}
 		}
 
-		FileUtil.newFile( source_dir, state_file + ".bak" ).delete();
+		File target_state_file_bak = FileUtil.newFile( source_dir, state_file + ".bak" );
+		
+		if ( FileUtil.exists( target_state_file_bak )){
+
+			if ( !target_state_file_bak.delete()){
+
+				throw( new DownloadManagerException( "Failed to delete state backup file: " + target_state_file_bak ));
+			}
+		}
 
 		File	target_state_dir = FileUtil.newFile( source_dir, hash_str );
 
-		if ( target_state_dir.exists()){
+		if ( FileUtil.exists( target_state_dir )){
 
 			if ( !FileUtil.recursiveDelete( target_state_dir )){
 
@@ -784,6 +879,20 @@ DownloadManagerStateImpl
 		download_manager	= _download_manager;
 		torrent				= _torrent;
 
+		File	_state_dir;
+		
+		try{
+			_state_dir = FileUtil.newFile( ACTIVE_DIR, ByteFormatter.encodeString( torrent.getHash()));
+
+		}catch( Throwable e ){
+
+			Debug.printStackTrace(e);
+
+			_state_dir = null;
+		}
+		
+		state_dir = _state_dir;
+		
 		attributes = torrent.getAdditionalMapProperty( ATTRIBUTE_KEY );
 
 		if ( attributes == null ){
@@ -814,16 +923,16 @@ DownloadManagerStateImpl
 
         int	version = getIntAttribute( AT_VERSION );
 
-        if ( version < VER_INCOMING_PEER_SOURCE ){
+        if ( version < VER_HOLE_PUNCH_PEER_SOURCE ){
 
-        		// migrate by adding incoming as enabled - only needed if we have any specified as other
+        		// migrate by adding as enabled - only needed if we have any specified as other
         		// code takes care of the case where we have none
 
         	if ( getPeerSources().length > 0 ){
 
-        		if ( PEPeerSource.isPeerSourceEnabledByDefault( PEPeerSource.PS_INCOMING )){
+        		if ( PEPeerSource.isPeerSourceEnabledByDefault( PEPeerSource.PS_HOLE_PUNCH )){
 
-        			setPeerSourceEnabled( PEPeerSource.PS_INCOMING, true );
+        			setPeerSourceEnabled( PEPeerSource.PS_HOLE_PUNCH, true );
         		}
         	}else{
 
@@ -878,19 +987,9 @@ DownloadManagerStateImpl
 
 	@Override
 	public File
-	getStateFile( )
+	getStateDir( )
 	{
-		try{
-			File	parent = FileUtil.newFile( ACTIVE_DIR, ByteFormatter.encodeString( torrent.getHash()));
-
-			return( StringInterner.internFile(parent));
-
-		}catch( Throwable e ){
-
-			Debug.printStackTrace(e);
-
-			return( null );
-		}
+		return( state_dir );
 	}
 
 	private void
@@ -917,7 +1016,19 @@ DownloadManagerStateImpl
 	public void
 	clearTrackerResponseCache()
 	{
-		setTrackerResponseCache( new HashMap());
+		Map map = new HashMap<>();
+		
+		setTrackerResponseCache( map );
+		
+		if ( download_manager != null ){
+		
+			TRTrackerAnnouncer tc = download_manager.getTrackerClient();
+			
+			if ( tc != null ){
+			
+				tc.clearTrackerResponseCache();
+			}
+		}
 	}
 
 	@Override
@@ -984,7 +1095,7 @@ DownloadManagerStateImpl
 	@Override
 	public void
 	setResumeData(
-		Map	data )
+		Map	new_data )
 	{
 		boolean changed = false;
 
@@ -993,15 +1104,17 @@ DownloadManagerStateImpl
 
 			// System.out.println( "setting download state/resume data for '" + new String(torrent.getName()));
 			
-			Map existing = torrent.getAdditionalMapProperty(RESUME_KEY  );
+			Map existing_data = torrent.getAdditionalMapProperty(RESUME_KEY  );
+			
+			boolean existing_was_valid = existing_data != null && DiskManagerFactory.isTorrentResumeDataValid( this );
 			
 			long new_resume_state;
 			
-			if ( data == null ){
+			if ( new_data == null ){
 
 				new_resume_state = 1;
 								
-				if ( existing != null ){
+				if ( existing_data != null ){
 				
 					torrent.removeAdditionalProperty( RESUME_KEY );
 
@@ -1009,9 +1122,9 @@ DownloadManagerStateImpl
 				}
 			}else{
 
-				changed = !BEncoder.mapsAreIdentical( existing, data );
+				changed = !BEncoder.mapsAreIdentical( existing_data, new_data );
 
-				torrent.setAdditionalMapProperty( RESUME_KEY, data );
+				torrent.setAdditionalMapProperty( RESUME_KEY, new_data );
 				
 				boolean complete = DiskManagerFactory.isTorrentResumeDataComplete( this );
 
@@ -1027,6 +1140,60 @@ DownloadManagerStateImpl
 
 			if ( changed ){
 			
+				if ( existing_was_valid ){
+										
+					Map history = torrent.getAdditionalMapProperty( RESUME_HISTORY_KEY  );
+					
+					List<Long>	h_dates;
+					List<Map>	h_resumes;
+					
+					if ( history == null ){
+						
+						history = new HashMap();
+						
+						h_dates 	= new ArrayList<>();
+						h_resumes	= new ArrayList<>();
+						
+						history.put( "dates", h_dates );
+						
+						history.put( "resumes", h_resumes );
+						
+					}else{
+						
+						h_dates		= (List<Long>)history.get( "dates" );
+						
+						h_resumes	 = (List<Map>)history.get( "resumes" );
+					}
+					
+					boolean found = false;
+					
+					for ( Map m: h_resumes ){
+						
+						if ( BEncoder.mapsAreIdentical( existing_data, m )){
+							
+							found = true;
+							
+							break;
+						}
+					}
+					
+					if ( !found ){
+						
+						h_dates.add( SystemTime.getCurrentTime());
+						
+						h_resumes.add( existing_data );
+						
+						if ( h_dates.size() > 3 ){
+							
+							h_dates.remove( 0 );
+							
+							h_resumes.remove( 0 );
+						}
+						
+						torrent.setAdditionalMapProperty( RESUME_HISTORY_KEY, history  );
+					}
+				}
+				
 				setDirty( false );
 			}
 
@@ -1070,6 +1237,78 @@ DownloadManagerStateImpl
 
 			return( state == 2 );
 		}
+	}
+	
+	@Override
+	public List<ResumeHistory> 
+	getResumeDataHistory()
+	{
+		List<ResumeHistory> result = new ArrayList<>();
+
+		try{
+			this_mon.enter();
+						
+			Map history = torrent.getAdditionalMapProperty( RESUME_HISTORY_KEY  );
+			
+			List<Long>	h_dates;
+			List<Map>	h_resumes;
+			
+			if ( history != null ){
+					
+				h_dates		= (List<Long>)history.get( "dates" );
+				
+				h_resumes	 = (List<Map>)history.get( "resumes" );
+				
+				int pos = 0;
+				
+				Map existing_data = getResumeData();
+				
+				for ( Long date: h_dates ){
+					
+					Map resume = h_resumes.get( pos++ );
+					
+					if ( existing_data == null || !BEncoder.mapsAreIdentical( existing_data, resume )){
+					
+						result.add( new ResumeHistoryImpl( date, resume));
+					}
+				}
+			}			
+		}finally{
+
+			this_mon.exit();
+		}
+		
+		return( result );
+	}
+	
+	static class
+	ResumeHistoryImpl
+		implements ResumeHistory
+	{
+		final long 		date;
+		final Map		resume_data;
+		
+		ResumeHistoryImpl(
+			long	_date,
+			Map		_resume_data )
+		{
+			date		= _date;
+			resume_data	= _resume_data;
+		}
+		
+		public long 
+		getDate()
+		{
+			return( date );
+		}
+	}
+	
+	@Override
+	public void 
+	restoreResumeData(
+		ResumeHistory history)
+	{
+		download_manager.restoreResumeData( ((ResumeHistoryImpl)history).resume_data );
 	}
 
 	@Override
@@ -1119,7 +1358,7 @@ DownloadManagerStateImpl
 
 			File	existing_state_dir = FileUtil.newFile( ACTIVE_DIR, hash_str );
 
-			if ( existing_state_dir.exists()){
+			if ( FileUtil.exists( existing_state_dir )){
 
 				FileUtil.copyFileOrDirectory( existing_state_dir, target_dir );
 			}
@@ -1271,7 +1510,12 @@ DownloadManagerStateImpl
 
 			HashWrapper	wrapper = torrent.getHashWrapper();
 
-			state_map.remove( wrapper );
+			boolean removed = state_map.remove( wrapper ) != null;
+
+			if ( debug_on ){
+
+				FileUtil.log("deleteDownloadState: hash = " + (wrapper==null?"null":ByteFormatter.encodeString(wrapper.getBytes())) + ", removed=" + removed );
+			}
 
 	        TorrentUtils.delete( torrent );
 
@@ -1281,7 +1525,7 @@ DownloadManagerStateImpl
 			
 			File	target_state_file 	= FileUtil.newFile( ACTIVE_DIR, state_file );
 
-			if ( target_state_file.exists()){
+			if ( FileUtil.exists( target_state_file )){
 
 				if ( !target_state_file.delete()){
 
@@ -1293,7 +1537,7 @@ DownloadManagerStateImpl
 			
 			File	dir = FileUtil.newFile( ACTIVE_DIR, hash_str );
 
-			if ( dir.exists() && dir.isDirectory()){
+			if ( FileUtil.exists( dir ) && dir.isDirectory()){
 
 				FileUtil.recursiveDelete( dir );
 			}
@@ -1435,6 +1679,31 @@ DownloadManagerStateImpl
 	getTransientFlags()
 	{
 		return( transient_flags );
+	}
+	
+	@Override
+	public Object 
+	getTransientAttribute(
+		String name )
+	{
+		synchronized( transient_attributes ){
+			
+			return( transient_attributes.get( name ));
+		}
+	}
+	
+	@Override
+	public void 
+	setTransientAttribute(
+		String 	name, 
+		Object 	value)
+	{
+		synchronized( transient_attributes ){
+			
+			transient_attributes.put( name, value );
+		}
+		
+		// informWritten( name ); // not needed yet...
 	}
 	
 	@Override
@@ -1765,9 +2034,13 @@ DownloadManagerStateImpl
     }
 
 	@Override
-	public DiskManagerFileInfo getPrimaryFile() {
+	public DiskManagerFileInfo 
+	getPrimaryFile() 
+	{	
 		int primaryIndex = -1;
+		
 		DiskManagerFileInfo[] fileInfo = download_manager.getDiskManagerFileInfoSet().getFiles();
+		
 		if (hasAttribute(AT_PRIMARY_FILE_IDX)) {
 			primaryIndex = getIntAttribute(AT_PRIMARY_FILE_IDX);
 		}
@@ -1792,29 +2065,45 @@ DownloadManagerStateImpl
 				}
 			}
 			if (primaryIndex >= 0) {
-				setPrimaryFile(fileInfo[primaryIndex]);
+				setIntAttribute(AT_PRIMARY_FILE_IDX, primaryIndex );
 			}
 		}
 
-		if (primaryIndex >= 0) {
-			return fileInfo[primaryIndex];
+		if ( primaryIndex >= 0 ){
+			
+			DiskManagerFileInfo res = fileInfo[primaryIndex];
+			
+			if (!hasAttribute( AT_PRIMARY_FILE_PATH )){
+				
+				setAttribute( AT_PRIMARY_FILE_PATH, res.getFile( true ).getAbsolutePath());
+			}
+			
+			return( res );
 		}
 		return null;
 	}
 
-	/**
-	 * @param dmfi
-	 */
 	@Override
-	public void setPrimaryFile(DiskManagerFileInfo dmfi) {
-		setIntAttribute(AT_PRIMARY_FILE_IDX, dmfi.getIndex());
+	public String 
+	getPrimaryFilePath()
+	{
+		String path = getAttribute( AT_PRIMARY_FILE_PATH );
+		
+		if ( path == null ){
+			
+			getPrimaryFile();
+				
+			path = getAttribute( AT_PRIMARY_FILE_PATH );
+		}
+		
+		return( path );
 	}
-
+	
 	@Override
 	public String[]
 	getNetworks()
 	{
-		List	values = getListAttributeSupport( AT_NETWORKS );
+		List	values = getListAttributeSupport( AT_NETWORKS, true );
 
 		List	res = new ArrayList();
 
@@ -1843,9 +2132,12 @@ DownloadManagerStateImpl
 	}
 
 	  @Override
-	  public boolean isNetworkEnabled(
-	      String network) {
-	    List	values = getListAttributeSupport( AT_NETWORKS );
+	  public boolean 
+	  isNetworkEnabled(
+	      String network) 
+	  {
+	    List	values = getListAttributeSupport( AT_NETWORKS, true );
+	    
 	    return values.contains(network);
 	  }
 
@@ -1871,7 +2163,7 @@ DownloadManagerStateImpl
 	  setNetworkEnabled(
 	      String network,
 	      boolean enabled) {
-	    List	values = getListAttributeSupport( AT_NETWORKS );
+	    List	values = getListAttributeSupport( AT_NETWORKS, true );
 	    boolean alreadyEnabled = values.contains(network);
 
 	    if(enabled && !alreadyEnabled) {
@@ -1893,7 +2185,7 @@ DownloadManagerStateImpl
 	public String[]
 	getPeerSources()
 	{
-		List	values = getListAttributeSupport( AT_PEER_SOURCES );
+		List	values = getListAttributeSupport( AT_PEER_SOURCES, true );
 
 		List	res = new ArrayList();
 
@@ -1926,7 +2218,7 @@ DownloadManagerStateImpl
 	isPeerSourceEnabled(
 		String peerSource )
 	{
-		List	values = getListAttributeSupport( AT_PEER_SOURCES );
+		List	values = getListAttributeSupport( AT_PEER_SOURCES, true );
 
 		return values.contains(peerSource);
 	}
@@ -1957,7 +2249,7 @@ DownloadManagerStateImpl
 			}
 		}
 
-		List	values = getListAttributeSupport( AT_PEER_SOURCES_DENIED );
+		List	values = getListAttributeSupport( AT_PEER_SOURCES_DENIED, true );
 
 		if ( values != null ){
 
@@ -1989,7 +2281,7 @@ DownloadManagerStateImpl
 			setPeerSourceEnabled( peerSource, false );
 		}
 
-		List	values = getListAttributeSupport( AT_PEER_SOURCES_DENIED );
+		List	values = getListAttributeSupport( AT_PEER_SOURCES_DENIED, true );
 
 		if ( values == null ){
 
@@ -2055,7 +2347,7 @@ DownloadManagerStateImpl
 			  return;
 		  }
 
-		  List	values = getListAttributeSupport( AT_PEER_SOURCES );
+		  List	values = getListAttributeSupport( AT_PEER_SOURCES, true );
 		  boolean alreadyEnabled = values.contains(source);
 
 		  if(enabled && !alreadyEnabled) {
@@ -2085,7 +2377,7 @@ DownloadManagerStateImpl
 	{
 		LinkFileMap	links = getFileLinks();
 
-		File	existing = (File)links.get( source_index, link_source);
+		File	existing = (File)links.get( source_index );
 
 		if ( link_destination == null ){
 
@@ -2093,29 +2385,19 @@ DownloadManagerStateImpl
 
 				return;
 			}
-		}else if ( existing != null && existing.getAbsolutePath().equals( link_destination.getAbsolutePath())){
+		}else if ( existing != null && FileUtil.areFilePathsIdentical( existing, link_destination )){
 			
 			return;
 		}
-
-		links.put( source_index, link_source, link_destination );
-
-		List	list = new ArrayList();
-
-		Iterator<LinkFileMap.Entry>	it = links.entryIterator();
-
-		while( it.hasNext()){
-
-			LinkFileMap.Entry	entry = it.next();
-
-			int		index	= entry.getIndex();
-			File	source 	= entry.getFromFile();
-			File	target 	= entry.getToFile();
-
-			String	str = index + "\n" + source + "\n" + (target==null?"":target.toString());
-
-			list.add( str );
+ 
+		int pi = getIntAttribute( AT_PRIMARY_FILE_IDX );
+		
+		if ( pi == source_index ){
+			
+			setAttribute( AT_PRIMARY_FILE_PATH, null );
 		}
+		
+		links.put( source_index, new StringInterner.FileKey( link_source), link_destination==null?null:new StringInterner.FileKey( link_destination ));
 
 		//System.out.println( "setFileLink: " + link_source + " -> " + link_destination );
 
@@ -2124,7 +2406,7 @@ DownloadManagerStateImpl
 			file_link_cache = new WeakReference<>(links);
 		}
 
-		setListAttribute( AT_FILE_LINKS2, list );
+		setBEncodableAttribute( AT_FILE_LINKS2, links, false );
 		
 		download_manager.informLocationChange( source_index );
 	}
@@ -2133,20 +2415,22 @@ DownloadManagerStateImpl
 	public void
 	setFileLinks(
 		List<Integer>	source_indexes,
-		List<File>		link_sources,
+		List<File>		link_sources_may_have_nulls,
 		List<File>		link_destinations )
 	{
 		LinkFileMap	links = getFileLinks();
 
 		boolean changed = false;
 
-		for ( int i=0;i<link_sources.size();i++){
+		int pi = getIntAttribute( AT_PRIMARY_FILE_IDX );
 
-			int		source_index		= source_indexes.get( i );
-			File	link_source 		= link_sources.get(i);
-			File	link_destination 	= link_destinations.get(i);
+		for ( int i=0;i<link_sources_may_have_nulls.size();i++){
 
-			File	existing = links.get( source_index, link_source);
+			int		source_index			= source_indexes.get( i );
+			File	link_source_maybe_null 	= link_sources_may_have_nulls.get(i);
+			File	link_destination 		= link_destinations.get(i);
+
+			File	existing = links.get( source_index );
 
 			if ( link_destination == null ){
 
@@ -2154,48 +2438,37 @@ DownloadManagerStateImpl
 
 					continue;
 				}
-			}else if ( existing != null && existing.getAbsolutePath().equals( link_destination.getAbsolutePath())){
+			}else if ( existing != null && FileUtil.areFilePathsIdentical( existing, link_destination )){
 
 				continue;
 			}
 
-			links.put( source_index, link_source, link_destination );
+			if ( pi == source_index ){
+				
+				setAttribute( AT_PRIMARY_FILE_PATH, null );
+			}
+			
+			links.put( 
+				source_index, 
+				link_source_maybe_null==null?null:new StringInterner.FileKey( link_source_maybe_null ),
+				link_destination==null?null:new StringInterner.FileKey( link_destination ));
 
 			changed = true;
 		}
 
-		if ( !changed ){
+		if ( changed ){
 
-			return;
-		}
+			//System.out.println( "setFileLinks: " + links.getString());
 
-		//System.out.println( "setFileLinks: " + links.getString());
+			synchronized( this ){
 
-		List	list = new ArrayList();
+				file_link_cache = new WeakReference<>(links);
+			}
 
-		Iterator<LinkFileMap.Entry>	it = links.entryIterator();
-
-		while( it.hasNext()){
-
-			LinkFileMap.Entry	entry = it.next();
-
-			int		index	= entry.getIndex();
-			File	source 	= entry.getFromFile();
-			File	target 	= entry.getToFile();
-
-			String	str = index + "\n" + source + "\n" + (target==null?"":target.toString());
-
-			list.add( str );
-		}
-
-		synchronized( this ){
-
-			file_link_cache = new WeakReference<>(links);
-		}
-
-		setListAttribute( AT_FILE_LINKS2, list );
+			setBEncodableAttribute( AT_FILE_LINKS2, links, false );
 		
-		download_manager.informLocationChange( null );
+			download_manager.informLocationChange( null );
+		}
 	}
 
 	@Override
@@ -2204,38 +2477,18 @@ DownloadManagerStateImpl
 	{
 		LinkFileMap	links = getFileLinks();
 
-		List	list = new ArrayList();
+		if ( links.size() > 0 ){
 
-		Iterator<LinkFileMap.Entry>	it = links.entryIterator();
-
-		boolean	changed = false;
-
-		while( it.hasNext()){
-
-			LinkFileMap.Entry	entry = it.next();
-
-			int		index	= entry.getIndex();
-			File	source 	= entry.getFromFile();
-			File	target 	= entry.getToFile();
-
-			if ( target != null ){
-
-				changed = true;
-			}
-
-			String	str = index + "\n" + source + "\n";
-
-			list.add( str );
-		}
-
-		if ( changed ){
-
+			links.clear();
+			
+			setAttribute( AT_PRIMARY_FILE_PATH, null );
+			
 			synchronized( this ){
 
-				file_link_cache = null;
+				file_link_cache = new WeakReference<>( links );
 			}
 
-			setListAttribute( AT_FILE_LINKS2, list );
+			setBEncodableAttribute( AT_FILE_LINKS2, links, false );
 			
 			download_manager.informLocationChange( null );
 		}
@@ -2244,8 +2497,7 @@ DownloadManagerStateImpl
 	@Override
 	public File
 	getFileLink(
-		int		source_index,
-		File	link_source )
+		int		source_index )
 	{
 		LinkFileMap map = null;
 
@@ -2266,12 +2518,50 @@ DownloadManagerStateImpl
 			}
 		}
 
-		File res = map.get( source_index, link_source );
+		File res = map.get( source_index );
 
 		//System.out.println( "getFileLink: " + link_source + " -> " + res );
 
 		return( res );
 	}
+	
+	@Override
+	public FileKey
+	getFileLink(
+		int			source_index,
+		FileKey		def )
+	{
+		LinkFileMap map = null;
+
+		WeakReference<LinkFileMap> ref = file_link_cache;
+
+		if ( ref != null ){
+
+			map = ref.get();
+		}
+
+		if ( map == null ){
+
+			map = getFileLinks();
+
+			synchronized( this ){
+
+				file_link_cache = new WeakReference<>(map);
+			}
+		}
+
+		LinkFileMap.Entry entry = map.getEntry( source_index );
+		
+		if ( entry == null ){
+			
+			return( def );
+			
+		}else{
+			
+			return( entry.getToFile());
+		}
+	}
+	
 
 	@Override
 	public LinkFileMap
@@ -2299,65 +2589,47 @@ DownloadManagerStateImpl
 		return( map );
 	}
 
+	@Override
+	public int 
+	resolveFile(
+		String file)
+	{
+		for ( DiskManagerFileInfo fi: download_manager.getDiskManagerFileInfoSet().getFiles()){
+			
+			if ( fi.getFile( false ).getAbsolutePath().equals( file )){
+			
+				setDirty( false );
+				
+				return( fi.getIndex());
+			}
+		}
+		
+		return( -1 );
+	}
+	
 	private LinkFileMap
 	getFileLinksSupport()
 	{
-		LinkFileMap	res = new LinkFileMap();
+		BEncodableObject obj = getBencodableAttribute( AT_FILE_LINKS2 );
+		
+		if ( obj != null ){
+			
+			return((LinkFileMap)obj);
+		}
+		
+		LinkFileMap	res = new LinkFileMap( this );
 
-		List	new_values = getListAttributeSupport( AT_FILE_LINKS2 );
+		List<String>	new_values = getListAttributeSupport( AT_FILE_LINKS2, false );
 
 		if ( new_values.size() > 0 ){
 
-			for (int i=0;i<new_values.size();i++){
-
-				String	entry = (String)new_values.get(i);
-
-				String[] bits = entry.split( "\n" );
-
-				if ( bits.length >= 2 ){
-
-					try{
-						int		index 	= Integer.parseInt( bits[0].trim());
-						File	source	= FileUtil.newFile(bits[1]);
-						File	target	= bits.length<3?null:FileUtil.newFile(bits[2]);
-
-						if( index >= 0 ){
-
-							res.put( index, source, target );
-
-						}else{
-
-								// can get here when partially resolved link state is saved and then re-read
-
-							res.putMigration( source, target );
-						}
-					}catch( Throwable e ){
-
-						Debug.out( e );
-					}
-				}
-			}
-		}else{
-
-			List	old_values = getListAttributeSupport( AT_FILE_LINKS_DEPRECATED );
-
-			for (int i=0;i<old_values.size();i++){
-
-				String	entry = (String)old_values.get(i);
-
-				int	sep = entry.indexOf( "\n" );
-
-				if ( sep != -1 ){
-
-					File target = (sep == entry.length()-1)?null:FileUtil.newFile( entry.substring( sep+1 ));
-
-					res.putMigration( FileUtil.newFile( entry.substring(0,sep)), target );
-				}
-			}
+			res.fromBencodeObject( new_values );
 		}
 
 		//System.out.println( "getFileLinks: " + res.getString());
-
+					
+		setBEncodableAttribute( AT_FILE_LINKS2, res, true );
+		
 		return( res );
 	}
 
@@ -2497,6 +2769,11 @@ DownloadManagerStateImpl
 		if ( changed ){
 
 			informWritten( attribute_name );
+			
+			if ( attribute_name.equals( AT_CANONICAL_SD_DMAP )){
+			
+				setAttribute( AT_PRIMARY_FILE_PATH, null );
+			}
 		}
 	}
 
@@ -2576,7 +2853,7 @@ DownloadManagerStateImpl
 					
 				boolean	set_dirty = true;
 				
-				boolean is_scrape_cache = attribute_name == DownloadManagerState.AT_SCRAPE_CACHE ;
+				boolean is_scrape_cache = attribute_name == DownloadManagerState.AT_SCRAPE_CACHE;
 				
 				if ( is_scrape_cache && download_manager.getGlobalManager().isStopping()){
 					
@@ -2588,7 +2865,8 @@ DownloadManagerStateImpl
 				
 				if ( set_dirty ){
 				
-					setDirty( is_scrape_cache );
+					setDirty(	is_scrape_cache || 
+								attribute_name == DownloadManagerState.AT_LAST_SCRAPE_TIME );	// no rush to save this
 				}
 			}
 		}finally{
@@ -2664,7 +2942,7 @@ DownloadManagerStateImpl
 
 		}else{
 
-			List	l = getListAttributeSupport( attribute_name );
+			List	l = getListAttributeSupport( attribute_name, true );
 
 			if ( l == null ){
 
@@ -2687,9 +2965,10 @@ DownloadManagerStateImpl
 		}
 	}
 
-	protected List
+	protected List<String>
 	getListAttributeSupport(
-		String	attribute_name )
+		String		attribute_name,
+		boolean		intern )
 	{
 		informWillRead( attribute_name );
 
@@ -2698,7 +2977,7 @@ DownloadManagerStateImpl
 
 			List	values = (List)attributes.get( attribute_name );
 
-			List	res = new ArrayList(values != null ? values.size() : 0);
+			List<String>	res = new ArrayList<>(values != null ? values.size() : 0);
 
 			if ( values != null ){
 
@@ -2709,14 +2988,21 @@ DownloadManagerStateImpl
 					if ( o instanceof byte[] ){
 
 						byte[]	bytes = (byte[])o;
-						String s = StringInterner.intern(new String(bytes, Constants.DEFAULT_ENCODING_CHARSET));
+						
+						String s = new String(bytes, Constants.DEFAULT_ENCODING_CHARSET);
 
+						if ( intern ){
+						
+							s = StringInterner.intern( s );
+						}
+						
 						res.add(s);
+						
 						values.set(i, s);
 
 					}else if ( o instanceof String ){
 
-						res.add( o );
+						res.add((String)o );
 					}
 				}
 			}
@@ -2751,7 +3037,7 @@ DownloadManagerStateImpl
 				}
 			}else{
 
-				List old_value = getListAttributeSupport( attribute_name );
+				List old_value = getListAttributeSupport( attribute_name, true );
 
 				if ( old_value == null || old_value.size() != attribute_value.size()){
 
@@ -2789,6 +3075,60 @@ DownloadManagerStateImpl
 		}
 	}
 
+	private BEncodableObject
+	getBencodableAttribute(
+		String				attribute_name )
+	{
+		try{
+			this_mon.enter();
+		
+			Object obj = attributes.get( attribute_name );
+			
+			if ( obj instanceof BEncodableObject ){
+				
+				return((BEncodableObject)obj);
+			}
+		}finally{
+
+			this_mon.exit();
+		}
+		
+		return( null );
+	}
+	
+	/**
+	 * Assumption is that the value has changed so we don't check for that
+	 * @param attribute_name
+	 * @param attribute_value
+	 */
+	
+	private void
+	setBEncodableAttribute(
+		String				attribute_name,
+		BEncodableObject	attribute_value,
+		boolean				cache_only )
+	{
+		try{
+			this_mon.enter();
+			
+			if ( !cache_only ){
+			
+				setDirty( false );
+			}
+			
+			attributes.put( attribute_name, attribute_value );
+			
+		}finally{
+
+			this_mon.exit();
+		}
+		
+		if ( !cache_only ){
+		
+			informWritten( attribute_name );
+		}
+	}
+	
 	@Override
 	public Map
 	getMapAttribute(
@@ -2885,7 +3225,6 @@ DownloadManagerStateImpl
 		String name )
 	{
 		try{
-
 			this_mon.enter();
 
 			if ( attributes == null) {return false;}
@@ -2898,6 +3237,35 @@ DownloadManagerStateImpl
 		}
 	}
 
+	@Override
+	public void
+	removeAttribute(
+		String attribute_name )
+	{
+		boolean changed = false;
+		
+		try{
+
+			this_mon.enter();
+
+			if ( attributes != null ){
+
+				if ( attributes.remove( attribute_name ) != null ){
+					
+					changed = true;
+				}
+			}
+		}finally{
+
+			this_mon.exit();
+		}
+		
+		if ( changed ){
+
+			informWritten( attribute_name );
+		}
+	}
+	
 	// These methods just use long attributes to store data into.
 
 	@Override
@@ -3067,7 +3435,8 @@ DownloadManagerStateImpl
 	@Override
 	public void
 	generateEvidence(
-		IndentWriter writer)
+		IndentWriter	writer,
+		boolean			full )
 	{
 		writer.println( "DownloadManagerState" );
 
@@ -3078,7 +3447,11 @@ DownloadManagerStateImpl
 			writer.println( "flags=" + getFlags());
 			DiskManagerFileInfo primaryFile = getPrimaryFile();
 			if (primaryFile != null) {
-				writer.println("primary file=" + Debug.secretFileName(primaryFile.getFile(true).getAbsolutePath()));
+				String prim = primaryFile.getFile(true).getAbsolutePath();
+				if ( !full ){
+					prim = Debug.secretFileName( prim );
+				}
+				writer.println("primary file=" + prim );
 			}
 
 		}finally{
@@ -3119,7 +3492,7 @@ DownloadManagerStateImpl
 
 		@Override
 		public File
-		getStateFile( )
+		getStateDir()
 		{
 			return( null );
 		}
@@ -3164,6 +3537,20 @@ DownloadManagerStateImpl
 			return( false );
 		}
 
+		@Override
+		public List<ResumeHistory> 
+		getResumeDataHistory()
+		{
+			return( Collections.emptyList());
+		}
+		
+		@Override
+		public void 
+		restoreResumeData(
+			ResumeHistory history)
+		{
+		}
+		
 		@Override
 		public void
 		clearTrackerResponseCache()
@@ -3225,6 +3612,21 @@ DownloadManagerStateImpl
 		getTransientFlags()
 		{
 			return( 0 );
+		}
+		
+		public Object 
+		getTransientAttribute(
+			String name )
+		{
+			return( null );
+		}
+		
+		@Override
+		public void 
+		setTransientAttribute(
+			String 	name, 
+			Object 	value)
+		{
 		}
 		
 		@Override
@@ -3362,6 +3764,8 @@ DownloadManagerStateImpl
 		@Override
 		public boolean hasAttribute(String name) {return false;}
 		@Override
+		public void removeAttribute(String name){}
+		@Override
 		public int getIntAttribute(String name) {return 0;}
 		@Override
 		public long getLongAttribute(String name) {return 0L;}
@@ -3471,7 +3875,7 @@ DownloadManagerStateImpl
 	    public void
 		setFileLinks(
 			List<Integer>	source_indexes,
-			List<File>		link_sources,
+			List<File>		link_sources_may_have_nulls,
 			List<File>		link_destinations )
 	    {
 	    }
@@ -3485,17 +3889,25 @@ DownloadManagerStateImpl
 		@Override
 		public File
 		getFileLink(
-			int		source_index,
-			File	link_source )
+			int		source_index )
 		{
 			return( null );
 		}
 
 		@Override
+		public FileKey
+		getFileLink(
+			int			source_index,
+			FileKey		def )
+		{
+			return( def );
+		}
+		
+		@Override
 		public LinkFileMap
 		getFileLinks()
 		{
-			return( new LinkFileMap());
+			return( new LinkFileMap( null ));
 		}
 
 		@Override
@@ -3565,7 +3977,8 @@ DownloadManagerStateImpl
 		@Override
 		public void
 		generateEvidence(
-			IndentWriter writer)
+			IndentWriter 	writer,
+			boolean			full )
 		{
 			writer.println( "DownloadManagerState: broken torrent" );
 		}
@@ -3582,18 +3995,16 @@ DownloadManagerStateImpl
 			return false;
 		}
 
-		// @see com.biglybt.core.download.DownloadManagerState#getPrimaryFile()
 		@Override
 		public DiskManagerFileInfo getPrimaryFile() {
-			// TODO Auto-generated method stub
+		
 			return null;
 		}
-
-		// @see com.biglybt.core.download.DownloadManagerState#setPrimaryFile(com.biglybt.core.disk.DiskManagerFileInfo)
+		
 		@Override
-		public void setPrimaryFile(DiskManagerFileInfo dmfi) {
-			// TODO Auto-generated method stub
-
+		public String getPrimaryFilePath(){
+		
+			return null;
 		}
 	}
 
@@ -3619,9 +4030,12 @@ DownloadManagerStateImpl
 
 		Integer		torrent_type;
 		Boolean		simple_torrent;
+		byte[]		torrent_name;
+		String		torrent_utf8_name;
 		long		size;
 		Boolean		is_private;
 		int			file_count;
+		Long		creation_date;
 
 		URL								announce_url;
 		cacheGroup						announce_group;
@@ -3696,6 +4110,8 @@ DownloadManagerStateImpl
 				is_private = l_priv.longValue() != 0;
 			}
 			
+			creation_date = (Long)cache.get( "cd" );
+			
 			byte[]	au = (byte[])cache.get( "au" );
 
 			if ( au != null ){
@@ -3738,6 +4154,7 @@ DownloadManagerStateImpl
 			cache.put( "createdby", state.getCreatedBy());
 			cache.put( "size", new Long( state.getSize()));
 			cache.put( "priv", new Long( state.getPrivate()?1:0));
+			cache.put( "cd", state.getCreationDate());
 			
 			cache.put( "encoding", state.getAdditionalStringProperty( "encoding" ));
 			cache.put( "torrent filename", state.getAdditionalStringProperty( "torrent filename" ));
@@ -3970,19 +4387,6 @@ DownloadManagerStateImpl
     			}
            	}
 
-           	@Override
-            public TOTorrentAnnounceURLSet
-           	createAnnounceURLSet(
-           		URL[]	urls )
-           	{
-           		if ( fixup()){
-
-    				return( delegate.getAnnounceURLGroup().createAnnounceURLSet( urls ));
-    			}
-
-           		return( null );
-           	}
-
            	protected class
            	cacheSet
            		implements TOTorrentAnnounceURLSet
@@ -4048,7 +4452,7 @@ DownloadManagerStateImpl
 
 								throw( fixup_failure );
 							}
-
+							
 							delegate = loadRealState();
 
 							if ( discard_fluff ){
@@ -4152,7 +4556,7 @@ DownloadManagerStateImpl
 
 			File	saved_file = getStateFile( torrent_hash_wrapper.getBytes() );
 
-			if ( saved_file.exists()){
+			if ( FileUtil.exists( saved_file )){
 
 				try{
 
@@ -4174,7 +4578,7 @@ DownloadManagerStateImpl
 
 			boolean	was_corrupt = false;
 			
-			if ( saved_file.exists()){
+			if ( FileUtil.exists( saved_file )){
 
 				try{
 					return( TorrentUtils.readDelegateFromFile( saved_file, discard_pieces ));
@@ -4210,19 +4614,30 @@ DownloadManagerStateImpl
 		public byte[]
     	getName()
 		{
+			if ( torrent_name != null ){
+				
+				return( torrent_name );
+			}
+			
 			Map	c = cache;
 
 			if ( c != null ){
 
 				byte[] name = (byte[])c.get( "name" );
-				if (name != null) {
+				
+				if ( name != null){
+					
+					torrent_name = name;
+					
 					return name;
 				}
 			}
 
 	   		if ( fixup()){
 
-				return( delegate.getName());
+	   			torrent_name = delegate.getName();
+	   			
+	   			return( torrent_name );
 			}
 
 	   		// Does grabbing the nested exception message always give us something useful?
@@ -4231,7 +4646,21 @@ DownloadManagerStateImpl
     	}
 
 		@Override
-		public String getUTF8Name() {
+		public String 
+		getUTF8Name() 
+		{
+			if ( torrent_utf8_name != null ){
+				
+				if ( torrent_utf8_name.isEmpty()){
+					
+					return( null );
+					
+				}else{
+					
+					return( torrent_utf8_name );
+				}
+			}
+			
 			Map	c = cache;
 
 			if ( c != null ){
@@ -4247,12 +4676,21 @@ DownloadManagerStateImpl
 					if (utf8name.length() == 0) {
 						return null;
 					}
+					
+					torrent_utf8_name = utf8name;
+					
 					return utf8name;
 				}
 			}
 
 			if (fixup()) {
-				return delegate.getUTF8Name();
+				String res = delegate.getUTF8Name();
+				if ( res == null ){
+					torrent_utf8_name = "";
+				}else{
+					torrent_utf8_name = res;
+				}
+				return( res );
 			}
 			return null;
 		}
@@ -4358,9 +4796,16 @@ DownloadManagerStateImpl
 	    public long
     	getCreationDate()
        	{
-	   		if ( fixup()){
+    		if ( creation_date != null ){
+    			
+    			return( creation_date );
+    		}
+	   		
+    		if ( fixup()){
 
-				return( delegate.getCreationDate());
+    			creation_date = delegate.getCreationDate();
+    			
+    			return( creation_date );
 			}
 
 	   		return( 0 );
@@ -4371,6 +4816,8 @@ DownloadManagerStateImpl
     	setCreationDate(
     		long		date )
        	{
+    		creation_date = date;
+    		
 	   		if ( fixup()){
 
 				delegate.setCreationDate( date );
@@ -4405,18 +4852,6 @@ DownloadManagerStateImpl
 
 				delegate.setCreatedBy( cb );
 			}
-    	}
-
-    	@Override
-	    public boolean
-    	isCreated()
-       	{
-	   		if ( fixup()){
-
-				return( delegate.isCreated());
-			}
-
-	   		return( false );
     	}
 
     	@Override
@@ -4678,6 +5113,39 @@ DownloadManagerStateImpl
     		throw( new TOTorrentException( "Not supported", TOTorrentException.RT_HASH_FAILS ));
     	}
 
+    	@Override
+    	public TOTorrent
+    	setSimpleTorrentDisabled(
+    		boolean	disabled )
+    	
+    		throws TOTorrentException
+    	{
+    		if ( fixup()){
+    			
+    			return( delegate.setSimpleTorrentDisabled( disabled ));
+    			
+    		}else{
+    			
+    			throw( new TOTorrentException( "fixup failed", TOTorrentException.RT_CREATE_FAILED ));
+    		}	
+    	}
+    	
+    	@Override
+    	public boolean
+    	isSimpleTorrentDisabled()
+    	
+    		throws TOTorrentException
+    	{
+    		if ( fixup()){
+    			
+    			return( delegate.isSimpleTorrentDisabled());
+    			
+    		}else{
+    			
+    			throw( new TOTorrentException( "fixup failed", TOTorrentException.RT_CREATE_FAILED ));
+    		}
+    	}
+    	
     	@Override
 	    public boolean
     	hasSameHashAs(

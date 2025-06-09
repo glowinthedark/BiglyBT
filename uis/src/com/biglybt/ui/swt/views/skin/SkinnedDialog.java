@@ -20,6 +20,7 @@
 
 package com.biglybt.ui.swt.views.skin;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -30,6 +31,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.*;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Shell;
 
 import com.biglybt.core.util.AERunnable;
@@ -110,9 +112,21 @@ public class SkinnedDialog
 
 		shell.addTraverseListener(new TraverseListener() {
 			@Override
-			public void keyTraversed(TraverseEvent e) {
-				if (e.detail == SWT.TRAVERSE_ESCAPE) {
-					shell.close();
+			public void 
+			keyTraversed(TraverseEvent e) 
+			{
+				if ( e.detail == SWT.TRAVERSE_ESCAPE ){
+					
+					Control c = shell.getDisplay().getFocusControl();
+					
+					if ( c != null && c.getData("BubbleTextBox::hasContent") != null ){
+						
+						e.doit = false;
+						
+					}else {
+					
+						shell.close();
+					}
 				}
 			}
 		});
@@ -154,11 +168,15 @@ public class SkinnedDialog
 	}
 
 	public void openUnadjusted() {
-		skin.setAutoSizeOnLayout(false);
+		skin.setAutoSizeOnLayout(false,false);
 		open("none", true);
 	}
 
 	public void open(String idShellMetrics, boolean bringToFront ) {
+		open( idShellMetrics, bringToFront, null );
+	}
+	
+	public void open(String idShellMetrics, boolean bringToFront, Shell moveBelow ) {
 		if (disposed) {
 			Debug.out("can't opened disposed skinnedialog");
 			return;
@@ -178,7 +196,17 @@ public class SkinnedDialog
 		}
 
 		shell.setData( "bringToFront", bringToFront );
-		shell.open();
+		
+		if ( moveBelow == null ){
+			
+			shell.open();
+			
+		}else{
+
+			shell.moveBelow(moveBelow);
+
+			shell.setVisible(true);
+		}
 	}
 
 	public SWTSkin getSkin() {

@@ -58,6 +58,7 @@ import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
+import com.biglybt.core.lws.LightWeightSeedManager;
 import com.biglybt.core.nat.NATTraverser;
 import com.biglybt.core.networkmanager.NetworkManager;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
@@ -71,6 +72,7 @@ import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.peer.PEPeerSource;
 import com.biglybt.core.peermanager.PeerManager;
 import com.biglybt.core.peermanager.nat.PeerNATTraverser;
+import com.biglybt.core.proxy.AEProxyFactory;
 import com.biglybt.core.proxy.AEProxySelectorFactory;
 import com.biglybt.core.security.BGSpongy;
 import com.biglybt.core.security.CryptoManager;
@@ -225,7 +227,7 @@ CoreImpl
 	
 	private boolean					ll_started;
 	
-	private final List<CoreOperationListener>				operation_listeners		= new ArrayList<>();
+	private final CopyOnWriteList<CoreOperationListener>	operation_listeners		= new CopyOnWriteList<>();
 	private final CopyOnWriteList<CoreOperation>			operations				= new CopyOnWriteList<>();
 	
 	private final CopyOnWriteList<PowerManagementListener>	power_listeners = new CopyOnWriteList<>();
@@ -349,6 +351,8 @@ CoreImpl
 	
 			PeerManager.getSingleton();
 	
+			LightWeightSeedManager.getSingleton();
+			
 			if (DEBUG_STARTUPTIME) {
 				logTime("Init PeerManager");
 			}
@@ -361,6 +365,8 @@ CoreImpl
 				logTime("Init PluginInitializer");
 			}
 	
+			AEProxyFactory.initialise( this );
+			
 			BGSpongy.initialize( this );
 
 			instance_manager =
@@ -779,6 +785,7 @@ CoreImpl
 	
 			BackupManagerFactory.getManager( this );
 	
+			AEDiagnostics.postStartup( this );
 	
 			if (DEBUG_STARTUPTIME) {
 				logTime("BackupManagerFactory,NATTraverser");
@@ -1632,8 +1639,12 @@ CoreImpl
 
 			return;
 		}
+		
+		int stall_mins = Math.max( 2, COConfigurationManager.getIntParameter( ConfigKeys.StartupShutdown.ICFG_STOP_FORCE_TERMINATE_AFTER ));
+		
+		long stall_millis = stall_mins * 60 * 1000;
 
-		final AtomicLong last_progress = new AtomicLong( SystemTime.getMonotonousTime());
+		AtomicLong last_progress = new AtomicLong( SystemTime.getMonotonousTime() );
 		
 		SimpleTimer.addEvent(
 			"ShutFail",
@@ -1654,12 +1665,10 @@ CoreImpl
 					
 						Logger.setClosingTakingTooLong();
 					}
-					
-					last_progress.set( SystemTime.getMonotonousTime());
-					
+										
 						// hang around while things are making progress
 					
-					while( SystemTime.getMonotonousTime() - last_progress.get() < 30*1000 ){
+					while( SystemTime.getMonotonousTime() - last_progress.get() < stall_millis ){
 						
 						try{
 							Thread.sleep(5000);
@@ -1813,6 +1822,8 @@ CoreImpl
 							int percent)
 						{
 							callback.setProgress( p_start + ((p_end-p_start)*percent)/100 );
+							
+							last_progress.set( SystemTime.getMonotonousTime());
 						}
 						
 						@Override
@@ -1821,6 +1832,8 @@ CoreImpl
 							String currentTask )
 						{
 							callback.setSubTaskName( currentTask );
+							
+							last_progress.set( SystemTime.getMonotonousTime());
 						}
 					});
 			}
@@ -2237,6 +2250,13 @@ CoreImpl
             }
         });
 	}
+	
+	@Override
+	public boolean 
+	isStopping()
+	{
+		return( stopped );
+	}
 
 	@Override
 	public boolean
@@ -2439,6 +2459,7 @@ CoreImpl
 			new String[]{
 					"On Downloading Complete Do",
 					"On Seeding Complete Do",
+					ConfigKeys.StartupShutdown.ICFG_STOP_DATE_TIME,
 					"Auto Restart When Idle"
 			},
 			new ParameterListener()
@@ -2452,6 +2473,8 @@ CoreImpl
 				{
 					String	dl_act = COConfigurationManager.getStringParameter( "On Downloading Complete Do" );
 					String	se_act = COConfigurationManager.getStringParameter( "On Seeding Complete Do" );
+
+					long	close_timer = COConfigurationManager.getLongParameter( ConfigKeys.StartupShutdown.ICFG_STOP_DATE_TIME );
 										
 					int		restart_after = COConfigurationManager.getIntParameter( "Auto Restart When Idle" );
 
@@ -2470,7 +2493,7 @@ CoreImpl
 							ca_last_time_seeding	= -1;
 						}
 
-						if ( dl_nothing && se_nothing && restart_after == 0 ){
+						if ( dl_nothing && se_nothing && close_timer <= 0 &&  restart_after == 0 ){
 
 							if ( timer_event != null ){
 
@@ -2765,13 +2788,16 @@ CoreImpl
 										String.valueOf( restart_after ),
 									});
 
-						UIFunctions ui_functions = UIFunctionsManager.getUIFunctions();
-
-						if ( ui_functions != null ){
-
-							ui_functions.forceNotify( UIFunctions.STATUSICON_NONE, null, message, null, new Object[0], -1 );
+						if ( COConfigurationManager.getBooleanParameter( ConfigKeys.StartupShutdown.BCFG_AUTO_RESTART_WHEN_IDLE_PROMPT )){
+							
+							UIFunctions ui_functions = UIFunctionsManager.getUIFunctions();
+	
+							if ( ui_functions != null ){
+	
+								ui_functions.forceNotify( UIFunctions.STATUSICON_NONE, null, message, null, new Object[0], -1 );
+							}
 						}
-
+						
 						Logger.log(
 							new LogAlert(
 								LogAlert.UNREPEATABLE,
@@ -2916,7 +2942,7 @@ CoreImpl
 
 			if ( ca_last_time_downloading >= 0 && !is_downloading && now - ca_last_time_downloading >= 30*1000 ){
 
-				executeInternalCloseAction( true, true, dl_act, null );
+				executeInternalCloseAction( true, TT_DOWNLOADING, dl_act, null );
 			}
 		}
 
@@ -2926,8 +2952,22 @@ CoreImpl
 
 			if ( ca_last_time_seeding >= 0 && !is_seeding && now - ca_last_time_seeding >= 30*1000 ){
 
-				executeInternalCloseAction( true, false, se_act, null );
+				executeInternalCloseAction( true, TT_SEEDING, se_act, null );
 			}
+		}
+		
+		long	close_timer = COConfigurationManager.getLongParameter( ConfigKeys.StartupShutdown.ICFG_STOP_DATE_TIME );
+
+		if ( close_timer > 0 && close_timer <= SystemTime.getCurrentTime()){
+			
+				// always reset as if the user aborts we don't want to be immediately 
+				// re-triggering
+			
+			COConfigurationManager.setParameter( ConfigKeys.StartupShutdown.ICFG_STOP_DATE_TIME, 0 );
+			
+			String	ti_act = COConfigurationManager.getStringParameter( ConfigKeys.StartupShutdown.SCFG_STOP_DATE_TIME_DO );
+			
+			executeInternalCloseAction( true, TT_TIMER, ti_act, null );
 		}
 	}
 
@@ -2937,13 +2977,13 @@ CoreImpl
 		String		action,
 		String		reason )
 	{
-		executeInternalCloseAction( false, false, action, reason );
+		executeInternalCloseAction( false, TT_INTERNAL, action, reason );
 	}
 
 	private void
 	executeInternalCloseAction(
 		final boolean	obey_reset,
-		final boolean	download_trigger,
+		final int		trigger_type,
 		final String	action,
 		final String	reason )
 	{
@@ -2952,7 +2992,7 @@ CoreImpl
 		ca_last_time_downloading	= -1;
 		ca_last_time_seeding		= -1;
 
-		String type_str		= reason==null?MessageText.getString( download_trigger?"core.shutdown.dl":"core.shutdown.se"):reason;
+		String type_str		= reason==null?MessageText.getString( TT_RES_IDS[trigger_type]):reason;
 		String action_str 	= MessageText.getString( "ConfigView.label.stop." + action );
 
 		String message =
@@ -2997,13 +3037,25 @@ CoreImpl
 			}
 		}
 
-		executeCloseActionSupport( obey_reset, download_trigger, action, reason );
+		executeCloseActionSupport( obey_reset, trigger_type, action, reason );
 	}
 
+	static final int TT_DOWNLOADING	= 0;
+	static final int TT_SEEDING		= 1;
+	static final int TT_TIMER		= 2;
+	static final int TT_INTERNAL	= 3;
+	
+	static final String[] TT_RES_IDS = {
+			"core.shutdown.dl",
+			"core.shutdown.se",
+			"core.shutdown.ti",
+			"core.shutdown.in" 
+	};
+			
 	private void
 	executeCloseActionSupport(
 		final boolean	obey_reset,
-		final boolean	download_trigger,
+		final int		trigger_type,
 		final String	action,
 		final String	reason )
 	{
@@ -3016,11 +3068,11 @@ CoreImpl
 
 		if ( reset ){
 
-			if ( download_trigger ){
+			if ( trigger_type ==  TT_DOWNLOADING ){
 
 				COConfigurationManager.setParameter( "On Downloading Complete Do", "Nothing" );
 
-			}else{
+			}else if (  trigger_type ==  TT_SEEDING ){
 
 				COConfigurationManager.setParameter( "On Seeding Complete Do", "Nothing" );
 			}
@@ -3035,7 +3087,22 @@ CoreImpl
 				public void
 				runSupport()
 				{
-					Logger.log( new LogEvent(LOGID, "Executing close action '" + action + "' due to " + (download_trigger?"downloading":"seeding") + " completion" ));
+					String trigger_str;
+					
+					if ( trigger_type == TT_TIMER ){
+						
+						trigger_str = "timer expiry";
+						
+					}else if ( trigger_type == TT_INTERNAL ){
+						
+						trigger_str = "internal event";
+						
+					}else{
+					
+						trigger_str = (trigger_type==TT_DOWNLOADING?"downloading":"seeding") + " completion";
+					}
+					
+					Logger.log( new LogEvent(LOGID, "Executing close action '" + action + "' due to " + trigger_str ));
 
 						// quit vuze -> quit
 						// shutdown computer -> quit vuze + shutdown
@@ -3068,16 +3135,24 @@ CoreImpl
 
 						String script;
 
-						if ( download_trigger ){
+						if ( trigger_type ==  TT_DOWNLOADING ){
 
 							script = COConfigurationManager.getStringParameter( "On Downloading Complete Script", "" );
 
-						}else{
+						}else if (  trigger_type ==  TT_SEEDING ){
 
 							script = COConfigurationManager.getStringParameter( "On Seeding Complete Script", "" );
+							
+						}else if (  trigger_type ==  TT_TIMER ){
+							
+							script = COConfigurationManager.getStringParameter( ConfigKeys.StartupShutdown.SCFG_STOP_DATE_TIME_SCRIPT, "" );
+							
+						}else{
+							
+							script = "";
 						}
 
-						executeScript( script, action, download_trigger );
+						executeScript( script, action, trigger_type );
 
 					}else{
 
@@ -3093,7 +3168,7 @@ CoreImpl
 	executeScript(
 		String		script,
 		String		action,
-		boolean		download_trigger )
+		int			trigger_type )
 	{
 		String script_type = "";
 
@@ -3168,7 +3243,7 @@ CoreImpl
 
 						bindings.put( "intent", intent );
 
-						bindings.put( "is_downloading_complete", download_trigger);
+						bindings.put( "is_downloading_complete", (trigger_type==TT_DOWNLOADING ));
 
 						p.eval( script, bindings );
 
@@ -3206,7 +3281,7 @@ CoreImpl
 		CoreOperationTask 		task )
 	{
 		CoreOperation op =
-				new CoreOperation()
+				new CoreOperation.CoreOperationAdapter()
 				{
 					@Override
 					public int
@@ -3245,7 +3320,20 @@ CoreImpl
 	
 			if ( run_it ){
 	
-				task.run( op );
+				while( true ){
+				
+					if ( task.runOperation( op )){
+						
+						break;
+					}
+					
+					try{
+						Thread.sleep( 50 );
+						
+					}catch( Throwable e ){
+						
+					}
+				}
 			}
 		}finally{
 			
@@ -3261,7 +3349,15 @@ CoreImpl
 	addOperation(
 		CoreOperation		op )
 	{
-		operations.add( op );
+		synchronized( operations ){
+			
+			if ( op.isRemoved()){
+				
+				return;
+			}
+
+			operations.add( op );
+		}
 		
 		for ( CoreOperationListener l: operation_listeners ){
 			
@@ -3280,7 +3376,16 @@ CoreImpl
 	removeOperation(
 		CoreOperation		op )
 	{
-		if ( operations.remove( op )){
+		boolean was_added;
+		
+		synchronized( operations ){
+			
+			was_added = operations.remove( op );
+				
+			op.setRemoved();
+		}
+		
+		if ( was_added ){
 		
 			for ( CoreOperationListener l: operation_listeners ){
 				

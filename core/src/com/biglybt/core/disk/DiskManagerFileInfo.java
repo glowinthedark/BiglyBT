@@ -58,11 +58,11 @@ DiskManagerFileInfo
 	
 	public boolean
 	setLink(
-		File	link_destination );
+		File	link_destination, boolean no_delete );
 
-	public boolean setLinkAtomic(File link_destination);
+	public boolean setLinkAtomic(File link_destination, boolean no_delete);
 
-	public boolean setLinkAtomic(File link_destination, FileUtil.ProgressListener pl );
+	public boolean setLinkAtomic(File link_destination, boolean no_delete, FileUtil.ProgressListener pl );
 
 		// gets the current link, null if none
 
@@ -77,6 +77,24 @@ DiskManagerFileInfo
 		 * {@link DiskManagerFileInfo#ST_REORDER},
 		 * {@link DiskManagerFileInfo#ST_REORDER_COMPACT}
 		 */
+	
+	public default boolean
+	isLinked()
+	{
+		File link = getLink();
+		
+		if ( link != null ){
+			
+			File file = getFile( false );
+			
+			if ( !FileUtil.areFilePathsIdentical( link, file )){
+				
+				return( true );
+			}
+		}
+		
+		return( false );
+	}
 	
 	public default boolean setStorageType(int type ){ return( setStorageType( type, false )); }
 	
@@ -141,6 +159,8 @@ DiskManagerFileInfo
 	 */
 	public boolean isSkipped();
 
+	public Boolean isSkipping();
+	
 		/**
 		 * Checks that the linked file exists (always returns true for pad files)
 		 * @return

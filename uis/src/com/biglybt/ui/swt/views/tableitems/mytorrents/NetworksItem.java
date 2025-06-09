@@ -23,7 +23,7 @@
 package com.biglybt.ui.swt.views.tableitems.mytorrents;
 
 import com.biglybt.core.download.DownloadManager;
-
+import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.ui.tables.TableCell;
 import com.biglybt.pif.ui.tables.TableCellRefreshListener;
@@ -60,16 +60,36 @@ public class NetworksItem
 
   @Override
   public void refresh(TableCell cell) {
-    String networks = "";
+    String	networks = "";
+    long	sort = 0;
+    
     DownloadManager dm = (DownloadManager)cell.getDataSource();
     if (dm != null) {
-      String[] nets = dm.getDownloadState().getNetworks();
+		String[] nets = dm.getDownloadState().getNetworks();
 
-      for (int i=0;i<nets.length;i++){
+		String[] order = AENetworkClassifier.AT_NETWORKS;
 
-      	networks += (i==0?"":",") + nets[i];
-      }
+		if ( nets.length == order.length ){
+			
+			sort = Long.MAX_VALUE;
+			
+			for ( String net: order ){
+				networks += (networks.isEmpty()?"":",") + net;
+			}
+		}else{
+			
+			for ( int i=0; i<order.length; i++ ){
+				for ( int j=0;j<nets.length;j++){
+					if ( order[i] == nets[j] ){
+						sort = ( sort << 4 ) + i+1;
+						networks += (networks.isEmpty()?"":",") + order[i];
+						break;
+					}
+				}
+			}
+		}
     }
+    cell.setSortValue(sort);
     cell.setText(networks);
   }
 }

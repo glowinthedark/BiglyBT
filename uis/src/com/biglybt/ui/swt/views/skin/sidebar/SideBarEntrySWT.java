@@ -66,7 +66,7 @@ public class SideBarEntrySWT
 {
 	private static final boolean DARK_MODE = Utils.isDarkAppearanceNative();
 	
-	private static final boolean PAINT_BG = !Constants.isUnix;
+	private static final boolean PAINT_BG = true; // !Constants.isUnix;
 
 	private static final boolean DO_OUR_OWN_TREE_INDENT = true;
 		
@@ -191,7 +191,7 @@ public class SideBarEntrySWT
 			@Override
 			public void runSupport() {
 				SWTSkinProperties skinProperties = skin.getSkinProperties();
-				bg = skinProperties.getColor("color.sidebar.bg");
+				bg = sidebar.getBackground();
 				fg = skinProperties.getColor("color.sidebar."
 						+ (isSelectable() ? "text" : "header"));
 				bgSel = skinProperties.getColor("color.sidebar.selected.bg");
@@ -216,7 +216,7 @@ public class SideBarEntrySWT
 
 			ImageLoader imageLoader = ImageLoader.getInstance();
 			imgClose = imageLoader.getImage("image.sidebar.closeitem");
-			imgCloseSelected = imageLoader.getImage("image.sidebar.closeitem-selected");
+			imgCloseSelected = imageLoader.getImage("image.sidebar.closeitem.selected");
 
 			treeItem.addDisposeListener(e -> closeView());
 
@@ -406,6 +406,7 @@ public class SideBarEntrySWT
 
 		//System.out.println(id + " destroyEntry " + swtItem + "; " + Debug.getCompressedStackTrace());
 		if (swtItem == null) {
+			triggerCloseListeners( userInitiated );
 			destroyEntryAlways();
 			return;
 		}
@@ -450,7 +451,10 @@ public class SideBarEntrySWT
 		}
 		buildonSWTItemSet = false;
 
-		if (getSkinObject() != null) {
+		SWTSkinObject so = getSkinObject();
+		
+		if ( so != null && !so.isDisposed()){
+			
 			return true;
 		}
 
@@ -541,7 +545,12 @@ public class SideBarEntrySWT
 
 		if (control != null && !control.isDisposed()) {
 			control.setData("BaseMDIEntry", this);
-			control.addDisposeListener(e -> closeView());
+			
+			/* XXX Removed this because we can dispose of the control and still
+			  want the sidebar entry (ie. destroy on focus lost, rebuild on focus gain)
+
+			  control.addDisposeListener(e -> closeView());
+			 */
 		} else {
 			return false;
 		}
@@ -586,8 +595,10 @@ public class SideBarEntrySWT
 
 		Tree tree = swtItem.getParent();
 		
-		tree.select(swtItem);
+			// show before select required, on Linux at least, to work if item collapsed
+		
 		tree.showItem(swtItem);
+		tree.select(swtItem);
 
 		if ( Constants.isOSX ){
 			tree.redraw();	// issue up to at least 4934r6 whereby tree is not being repainted after being scrolled via 'showItem'
@@ -600,7 +611,7 @@ public class SideBarEntrySWT
 	public void hide() {
 		// if we defer the show above then we should defer the hide similarly to ensure that a caller trying
 		// to show a new view before hiding the old (to avoid an intermediate blank view) ends up executing things
-		// in teh desired order
+		// in the desired order
 		Utils.execSWTThreadLater(0, new AERunnable() {
 			@Override
 			public void runSupport() {
@@ -622,15 +633,31 @@ public class SideBarEntrySWT
 			drawBounds = event.getBounds();
 		}
 		Rectangle treeArea = treeItem.getParent().getClientArea();
+		
 		if (Utils.isGTK3) {
-			// workaround bug
-  		if (treeArea.width > itemBounds.width) {
-  			itemBounds.width = treeArea.width;
-  		}
-  		if (treeArea.x < itemBounds.x) {
-  			itemBounds.x = treeArea.x;
-  		}
-  		drawBounds = itemBounds;
+				// workaround bug
+	  		if (treeArea.width > itemBounds.width) {
+	  			itemBounds.width = treeArea.width;
+	  		}
+	  		if (treeArea.x < itemBounds.x) {
+	  			itemBounds.x = treeArea.x;
+	  		}
+	  		itemBounds.y		= drawBounds.y;
+	  		itemBounds.height	= drawBounds.height;
+	  		
+	  		drawBounds = itemBounds;
+	  		
+		}else if ( Constants.isOSX ){
+			
+			if ( drawBounds.height > itemBounds.height ){
+				
+					// -1 needed on parg's old test setup for some reason otherwise drag-over
+					// causes cheesing
+				
+				itemBounds.height	= drawBounds.height-1;
+				
+				drawBounds = itemBounds;
+			}
 		}
 
 		String text = getTitle();
@@ -888,6 +915,8 @@ public class SideBarEntrySWT
 			imageLeft = getImageLeft(null);
 		}
 		
+		treeItem.setData("contentStartOffset", x0IndicatorOfs);
+		
 		if ( IMAGELEFT_HIDDEN ){
 			
 		}else if (imageLeft != null ) {
@@ -1072,11 +1101,18 @@ public class SideBarEntrySWT
 			gc.setAntialias(SWT.ON);
 			Color oldBG = gc.getBackground();
 			gc.setBackground(Colors.getSystemColor(event.display, SWT.COLOR_LIST_FOREGROUND));
+			
 			int baseX = DO_EXPANDO_INDENT?itemBounds.x:EXPANDO_INDENT_INITIAL;
+			
+			int xStart = EXPANDO_WIDTH;
+			
+			int arrowSize = 8;
+
+			int yStart = itemBounds.height - (itemBounds.height + arrowSize) / 2;
+			
+			treeItem.setData( "expandoRHS", baseX - xStart + arrowSize );
+			
 			if (treeItem.getExpanded()) {
-				int xStart = EXPANDO_WIDTH;
-				int arrowSize = 8;
-				int yStart = itemBounds.height - (itemBounds.height + arrowSize) / 2;
 				gc.fillPolygon(new int[] {
 					baseX - xStart,
 					itemBounds.y + yStart,
@@ -1086,9 +1122,6 @@ public class SideBarEntrySWT
 					itemBounds.y + yStart + arrowSize,
 				});
 			} else {
-				int xStart = EXPANDO_WIDTH;
-				int arrowSize = 8;
-				int yStart = itemBounds.height - (itemBounds.height + arrowSize) / 2;
 				gc.fillPolygon(new int[] {
 					baseX - xStart,
 					itemBounds.y + yStart,
@@ -1111,7 +1144,11 @@ public class SideBarEntrySWT
 		Color fgText = Colors.black;
 		boolean selected = (detail & SWT.SELECTED) > 0;
 		//boolean focused = (detail & SWT.FOCUSED) > 0;
-		boolean hot = (detail & SWT.HOT) > 0;
+		
+		boolean isDragging = sidebar.draggingOver == this;
+		boolean isHovering = sidebar.mousingOver == this;
+		
+		boolean hot = isHovering;// || (detail & SWT.HOT) > 0;
 		if (selected) {
 			attention_start = -1;
 		}else{
@@ -1124,37 +1161,59 @@ public class SideBarEntrySWT
   			//gc.fillRectangle(drawBounds.x, drawBounds.y, drawBounds.width, drawBounds.height);
   			fgText = gc.getForeground();
 			} else {
-  			//System.out.println("gmmm" + drawBounds + ": " + Debug.getCompressedStackTrace());
+				//System.out.println("gmmm" + drawBounds + ": " + Debug.getCompressedStackTrace());
 				Utils.setClipping(gc, (Rectangle) null);
-  			if (fgSel != null) {
-  				fgText = fgSel;
-  			}
-  			if (bgSel != null) {
-  				gc.setBackground(bgSel);
-  			}
-  			Color color1;
-  			Color color2;
-  			if (sidebar.getTree().isFocusControl()) {
-  				color1 = ColorCache.getSchemedColor(gc.getDevice(), "#166688");
-  				color2 = ColorCache.getSchemedColor(gc.getDevice(), "#1c2458");
-  			} else {
-  				color1 = ColorCache.getSchemedColor(gc.getDevice(), "#447281");
-  				color2 = ColorCache.getSchemedColor(gc.getDevice(), "#393e58");
-  			}
-
-  			gc.setBackground(color1);
-  			gc.fillRectangle(drawBounds.x, drawBounds.y, drawBounds.width, 4);
-
-  			gc.setForeground(color1);
-  			gc.setBackground(color2);
-  			Rectangle itemBounds = swt_getBounds();
-  			if (itemBounds == null) {
-  				return fgText;
-  			}
-  			// always need to start gradient at the same Y position
-  			// +3 is to start gradient off 3 pixels lower
-  			gc.fillGradientRectangle(drawBounds.x, itemBounds.y + 3,
-  					drawBounds.width, itemBounds.height - 3, true);
+				if (fgSel != null) {
+					fgText = fgSel;
+				}
+				if (bgSel != null) {
+					gc.setBackground(bgSel);
+				}
+				if ( Utils.isDarkAppearanceNativeWindows()){
+					
+					if (sidebar.getTree().isFocusControl()) {
+						
+						gc.setBackground( Colors.getSystemColor( gc.getDevice(), SWT.COLOR_WIDGET_HIGHLIGHT_SHADOW ));
+						
+					}else{
+						
+						gc.setBackground( Colors.getSystemColor( gc.getDevice(), SWT.COLOR_WIDGET_LIGHT_SHADOW ));
+					}
+					
+					gc.fillRectangle(drawBounds.x, drawBounds.y, drawBounds.width, drawBounds.height);
+					
+				}else{
+					Color color1;
+					Color color2;
+					if (sidebar.getTree().isFocusControl()) {
+						color1 = ColorCache.getSchemedColor(gc.getDevice(), "#166688");
+						color2 = ColorCache.getSchemedColor(gc.getDevice(), "#1c2458");
+					} else {
+						color1 = ColorCache.getSchemedColor(gc.getDevice(), "#447281");
+						color2 = ColorCache.getSchemedColor(gc.getDevice(), "#393e58");
+					}
+	
+					gc.setBackground(color1);
+					gc.fillRectangle(drawBounds.x, drawBounds.y, drawBounds.width, 4);
+	
+					Rectangle itemBounds = swt_getBounds();
+					if (itemBounds == null) {
+						return fgText;
+					}
+					
+					if ( Utils.gradientFillSelection()){
+						gc.setForeground(color1);
+						gc.setBackground(color2);
+						
+						// always need to start gradient at the same Y position
+						// +3 is to start gradient off 3 pixels lower
+						gc.fillGradientRectangle(drawBounds.x, itemBounds.y + 3,
+								drawBounds.width, itemBounds.height - 3, true);
+					}else{
+						gc.fillRectangle(drawBounds.x, itemBounds.y + 3,
+			  					drawBounds.width, itemBounds.height - 3);
+					}
+				}
 			}
 		} else {
 
@@ -1164,9 +1223,24 @@ public class SideBarEntrySWT
 			if (bg != null) {
 				gc.setBackground(bg);
 			}
-
-			if (this == sidebar.draggingOver || hot) {
-				Color c = skin.getSkinProperties().getColor("color.sidebar.drag.bg");
+			
+			if ( isDragging || hot) {
+				Color c;
+				
+				if ( Utils.isDarkAppearanceNativeWindows()){
+					
+					if ( isDragging ){
+						c = Colors.getSystemColor( gc.getDevice(), SWT.COLOR_WIDGET_NORMAL_SHADOW );
+					}else{
+						c = skin.getSkinProperties().getColor("color.sidebar.hover.bg");
+					}
+				}else{					
+					if ( isDragging ){
+						c = skin.getSkinProperties().getColor("color.sidebar.drag.bg");
+					}else{
+						c = skin.getSkinProperties().getColor("color.sidebar.hover.bg");
+					}
+				}
 				gc.setBackground(c);
 			}
 
@@ -1174,7 +1248,23 @@ public class SideBarEntrySWT
 				gc.fillRectangle(drawBounds);
 			}
 
-			if (this == sidebar.draggingOver) {
+			if ( sidebar.getMenuEntry( true ) == this ){
+				
+				Color c;
+				if ( Utils.isDarkAppearanceNativeWindows()){
+					c = Colors.getSystemColor( gc.getDevice(), SWT.COLOR_WIDGET_HIGHLIGHT_SHADOW );
+				}else{
+					c = ColorCache.getSchemedColor(gc.getDevice(), "#166688");
+				}
+				gc.setForeground(c);
+				final int line_width = 1;
+				gc.setLineWidth(line_width);
+				gc.setLineStyle( SWT.LINE_DASH);
+				Rectangle temp = new Rectangle( drawBounds.x, drawBounds.y, drawBounds.width-1, drawBounds.height-1);
+				
+				gc.drawRectangle(temp);
+				
+			}else if ( isDragging ) {
 				Color c = skin.getSkinProperties().getColor("color.sidebar.drag.fg");
 				gc.setForeground(c);
 				final int line_width = 2;
@@ -1264,12 +1354,14 @@ public class SideBarEntrySWT
 	@Override
 	protected void setToolbarVisibility(boolean visible) {
 		if (toolBarInfoBar != null) {
-			if (visible) {
-				toolBarInfoBar.show();
-			} else {
-				toolBarInfoBar.hide(false);
-			}
-			return;
+			if ( !toolBarInfoBar.getParentSkinObject().isDisposed()){
+				if (visible) {
+					toolBarInfoBar.show();
+				} else {
+					toolBarInfoBar.hide(false);
+				}
+				return;
+		}
 		}
 		SWTSkinObject soMaster = getSkinObjectMaster();
 		if (soMaster == null) {
@@ -1280,7 +1372,7 @@ public class SideBarEntrySWT
 			return;
 		}
 		SWTSkinObject soToolbar = skin.getSkinObject(SkinConstants.VIEWID_VIEW_TOOLBAR, soMaster);
-		if (soToolbar == null && visible) {
+		if (soToolbar == null && visible) {			
 			toolBarInfoBar = new InfoBarUtil(so, SO_ID_TOOLBAR, true, "", "") {
 				@Override
 				public boolean allowShow() {

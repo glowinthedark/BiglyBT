@@ -27,9 +27,11 @@ import java.util.List;
 import java.util.Map;
 
 import com.biglybt.core.dht.DHT;
+import com.biglybt.core.util.Debug;
 
 public interface
 DHTPluginInterface
+	extends DHTPluginBasicInterface
 {
 	public static final byte		FLAG_SINGLE_VALUE	= DHT.FLAG_SINGLE_VALUE;
 	public static final byte		FLAG_DOWNLOADING	= DHT.FLAG_DOWNLOADING;
@@ -40,21 +42,21 @@ DHTPluginInterface
 	public static final byte		FLAG_PRECIOUS		= DHT.FLAG_PRECIOUS;
 	public static final byte		FLAG_BRIDGED		= DHT.FLAG_BRIDGED;
 
+	public static final short		FLAG_PUT_AND_FORGET	= DHT.FLAG_PUT_AND_FORGET;
+
 	public static final int			MAX_VALUE_SIZE		= DHT.MAX_VALUE_SIZE;
 
+	public String
+	getNetwork();
 
-
-	public boolean
-	isEnabled();
-
+	public default String
+	getAENetwork()
+	{
+		return( getNetwork());
+	}
+	
 	public boolean
 	isExtendedUseAllowed();
-
-	public boolean
-	isInitialising();
-
-	public boolean
-	isSleeping();
 
 	public DHTPluginContact
 	getLocalAddress();
@@ -74,9 +76,6 @@ DHTPluginInterface
 		return( new InetSocketAddress[]{ getConnectionOrientedEndpoint()});
 	}
 	
-	public String
-	getNetwork();
-
 	public DHTPluginKeyStats
 	decodeStats(
 		DHTPluginValue		value );
@@ -101,41 +100,31 @@ DHTPluginInterface
 		InetSocketAddress				address,
 		byte							version );
 
+	/**
+	 **@deprecated use {@link #importContact(InetSocketAddress, byte, int)}
+	 */
+	
 	public DHTPluginContact
 	importContact(
 		InetSocketAddress				address,
 		byte							version,
 		boolean							is_cvs );
 
+	public default DHTPluginContact
+	importContact(
+		InetSocketAddress				address,
+		byte							version,
+		int								preferred_net )
+	{
+			// migration until deprecated version above is removed
+		
+		return( importContact( address, version, preferred_net==DHT.NW_AZ_CVS ));
+	}
+	
 	public DHTPluginContact
 	importContact(
 		Map<String,Object>				map );
-
-	public void
-	get(
-		byte[]								original_key,
-		String								description,
-		byte								flags,
-		int									max_values,
-		long								timeout,
-		boolean								exhaustive,
-		boolean								high_priority,
-		DHTPluginOperationListener			original_listener );
-
-	public void
-	put(
-		byte[]						key,
-		String						description,
-		byte[]						value,
-		byte						flags,
-		DHTPluginOperationListener	listener);
-
-	public DHTInterface[]
-	getDHTInterfaces();
-
-	public List<DHTPluginValue>
-	getValues();
-
+	
 	public List<DHTPluginValue>
 	getValues(
 		byte[]		key );
@@ -145,6 +134,21 @@ DHTPluginInterface
 		byte[]						key,
 		String						description,
 		DHTPluginOperationListener	listener );
+
+	public default void
+	remove(
+		byte[]						key,
+		String						description,
+		short						flags,
+		DHTPluginOperationListener	listener )
+	{
+		if ( flags != 0 ){
+			
+			Debug.out( "Flag loss!" );
+		}
+		
+		remove( key, description, listener );
+	}
 
 	public void
 	remove(

@@ -71,7 +71,7 @@ public class VirtualChannelSelectorImpl {
 
 				if ( os_type != null && os_type.equals( "FreeBSD" )){
 
-					String os_version = System.getProperty( "os.version", "" );
+					String os_version = Constants.OSVersion;
 
 					String	digits = "";
 
@@ -297,7 +297,7 @@ public class VirtualChannelSelectorImpl {
     private static final int WRITE_SELECTOR_DEBUG_CHECK_PERIOD	= 10000;
     private static final int WRITE_SELECTOR_DEBUG_MAX_TIME		= 20000;
 
-    private long last_write_select_debug;
+    private long last_write_select_debug = -1;
     private long last_select_debug;
 
     private long last_reopen_attempt = SystemTime.getMonotonousTime();
@@ -463,7 +463,7 @@ public class VirtualChannelSelectorImpl {
     	if (( key.interestOps() & INTEREST_OP ) == 0 ){
      	   RegistrationData data = (RegistrationData)key.attachment();
 
-     	   data.last_select_success_time 	= SystemTime.getCurrentTime();
+     	   data.last_select_success_mono_time 	= SystemTime.getMonotonousTime();
      	   data.non_progress_count			= 0;
     	}
         key.interestOps( key.interestOps() | INTEREST_OP );
@@ -580,13 +580,15 @@ public class VirtualChannelSelectorImpl {
 
 
 
-    public int select( long timeout ) {
+    public int 
+    select( 
+    	final long timeout ) 
+    {  
+      if ( selector == null ){
+    	  
+        long mono_now = SystemTime.getMonotonousTime();
 
-      long select_start_time = SystemTime.getCurrentTime();
-      
-      if( selector == null ) {
-    	long mono_now = SystemTime.getMonotonousTime();
-    	if (( mono_now - last_reopen_attempt > 60*1000 ) && !destroyed){
+     	if (( mono_now - last_reopen_attempt > 60*1000 ) && !destroyed){
     		last_reopen_attempt = mono_now;
     		selector = openNewSelector();
     	}
@@ -726,23 +728,25 @@ public class VirtualChannelSelectorImpl {
 
       selector_guard.markPreSelectTime();
 
+      long select_start_mono_now = SystemTime.getMonotonousTime();
+
+      long start_hpc = SystemTime.getHighPrecisionCounter();
+      
       try{
     	  count = selector.select( timeout );
 
     	  consec_select_fails = 0;
 
-      }catch (Throwable t) {
-
-       	  long	now = SystemTime.getMonotonousTime();
+      }catch( Throwable t ){
 
     	  consec_select_fails++;
 
     	  if ( consec_select_fails == 1 ){
 
-    		  consec_select_fails_start = now;
+    		  consec_select_fails_start = select_start_mono_now;
     	  }
 
-    	  if ( consec_select_fails > 20 && consec_select_fails_start - now > 16*1000 ){
+    	  if ( consec_select_fails > 20 && consec_select_fails_start - select_start_mono_now > 16*1000 ){
 
     		  consec_select_fails = 0;
 
@@ -757,9 +761,9 @@ public class VirtualChannelSelectorImpl {
     		  return( 0 );
     	  }
 
-    	  if ( now - last_select_debug > 5000 ){
+    	  if ( select_start_mono_now - last_select_debug > 5000 ){
 
-    		  last_select_debug = now;
+    		  last_select_debug = select_start_mono_now;
 
     		  String msg = t.getMessage();
 
@@ -768,8 +772,17 @@ public class VirtualChannelSelectorImpl {
     			  Debug.out( "Caught exception on selector.select() op: " +msg, t );
     		  }
     	  }
-    	  try {  Thread.sleep( timeout );  }catch(Throwable e) { e.printStackTrace(); }
+    	  
+    	  try{  
+    		  Thread.sleep( timeout );
+    		  
+    	  }catch(Throwable e){ 
+    		  
+    		  e.printStackTrace(); 
+    	  }
       }
+
+      long select_hpc_elapsed_ms = ( SystemTime.getHighPrecisionCounter() - start_hpc ) / 1000000L;
 
       	// do this after the select so that any pending cancels (prior to destroy) are processed
       	// by the selector before we kill it
@@ -843,8 +856,6 @@ public class VirtualChannelSelectorImpl {
       int	progress_made_key_count	= 0;
       int	total_key_count			= 0;
 
-      long	now = SystemTime.getCurrentTime();
-
       	//notification of ready keys via listener callback
 
       	// debug handling for channels stuck pending write select for long periods
@@ -853,10 +864,10 @@ public class VirtualChannelSelectorImpl {
 
       if ( INTEREST_OP == VirtualChannelSelector.OP_WRITE ){
 
-    	  if ( 	now < last_write_select_debug ||
-    			now - last_write_select_debug > WRITE_SELECTOR_DEBUG_CHECK_PERIOD ){
+    	  if ( 	last_write_select_debug == -1 || 
+    			  select_start_mono_now - last_write_select_debug > WRITE_SELECTOR_DEBUG_CHECK_PERIOD ){
 
-    		  last_write_select_debug = now;
+    		  last_write_select_debug = select_start_mono_now;
 
     		  non_selected_keys = new HashSet<>(selector.keys());
     	  }
@@ -917,7 +928,7 @@ public class VirtualChannelSelectorImpl {
         	non_selected_keys.remove( key );
         }
 
-        data.last_select_success_time = now;
+        data.last_select_success_mono_time = select_start_mono_now;
         // int	rm_type;
 
         if( key.isValid() ) {
@@ -1072,40 +1083,33 @@ public class VirtualChannelSelectorImpl {
     	    	  continue;
     	      }
 
-    	      long	stall_time = now - data.last_select_success_time;
+    	      long	stall_time = select_start_mono_now - data.last_select_success_mono_time;
 
-    	      if ( stall_time < 0 ){
+    	      if ( stall_time > WRITE_SELECTOR_DEBUG_MAX_TIME ){
 
-    	    	  data.last_select_success_time	= now;
+    	    	  Logger.log(
+    	    		new LogEvent(LOGID,LogEvent.LT_WARNING,"Write select for " + key.channel() + " stalled for " + stall_time ));
 
-    	      }else{
+    	    	  	// hack - trigger a dummy write select to see if things are still OK
 
-	    	      if ( stall_time > WRITE_SELECTOR_DEBUG_MAX_TIME ){
+    	          if( key.isValid() ) {
 
-	    	    	  Logger.log(
-	    	    		new LogEvent(LOGID,LogEvent.LT_WARNING,"Write select for " + key.channel() + " stalled for " + stall_time ));
+	        		  if( pause_after_select ) {
 
-	    	    	  	// hack - trigger a dummy write select to see if things are still OK
+	        			  key.interestOps( key.interestOps() & ~INTEREST_OP );
+	        		  }
 
-	    	          if( key.isValid() ) {
+	        		  if ( parent.selectSuccess( data.listener, data.channel, data.attachment )){
 
-    	        		  if( pause_after_select ) {
+	        			  data.non_progress_count = 0;
+	        		  }
+    	          }else{
 
-    	        			  key.interestOps( key.interestOps() & ~INTEREST_OP );
-    	        		  }
+    	        	  key.cancel();
 
-    	        		  if ( parent.selectSuccess( data.listener, data.channel, data.attachment )){
-
-    	        			  data.non_progress_count = 0;
-    	        		  }
-	    	          }else{
-
-	    	        	  key.cancel();
-
-	    	        	  parent.selectFailure( data.listener, data.channel, data.attachment, new Throwable( "key is invalid" ) );
-	    	          }
-	    	      }
-	    	  }
+    	        	  parent.selectFailure( data.listener, data.channel, data.attachment, new Throwable( "key is invalid" ) );
+    	          }
+    	      }
     	  }
       }
 
@@ -1114,11 +1118,18 @@ public class VirtualChannelSelectorImpl {
       	// spinning
 
       if ( total_key_count == 0 || progress_made_key_count != total_key_count ){
+	      
+	      if ( select_hpc_elapsed_ms < timeout/2 ){  
 
-	      long time_diff = SystemTime.getCurrentTime() - select_start_time;
-
-	      if( time_diff < timeout && time_diff >= 0 ) {  //ensure that it always takes at least 'timeout' time to complete the select op
-	      	try {  Thread.sleep( timeout - time_diff );  }catch(Throwable e) { e.printStackTrace(); }
+	    	  //ensure that it always takes at least 'timeout' time to complete the select op
+	    	  
+	      	try{  
+	      		Thread.sleep( timeout - select_hpc_elapsed_ms );
+	      		
+	      	}catch( Throwable e ){
+	      		
+	      		e.printStackTrace(); 
+	      	}
 	      }
       }else{
     	  /*
@@ -1202,14 +1213,14 @@ public class VirtualChannelSelectorImpl {
         protected final Object attachment;
 
         protected int 	non_progress_count;
-        protected long	last_select_success_time;
+        protected long	last_select_success_mono_time;
 
       	RegistrationData( AbstractSelectableChannel _channel, VirtualChannelSelector.VirtualAbstractSelectorListener _listener, Object _attachment ) {
       		channel 		= _channel;
       		listener		= _listener;
       		attachment 		= _attachment;
 
-      		last_select_success_time	= SystemTime.getCurrentTime();
+      		last_select_success_mono_time	= SystemTime.getMonotonousTime();
       	}
       }
 

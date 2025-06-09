@@ -83,6 +83,7 @@ WebPlugin
 	public static final String	PR_ENABLE_I2P				= "EnableI2P";					// Boolean
 	public static final String	PR_ENABLE_TOR				= "EnableTor";					// Boolean
 	public static final String	PR_ENABLE_UPNP				= "EnableUPNP";					// Boolean
+	public static final String	PR_REVERSE_PROXY			= "ReverseProxy";				// Boolean
 
 	public static final String	PROPERTIES_MIGRATED		= "Properties Migrated";
 	//public static final String	CONFIG_MIGRATED			= "Config Migrated";
@@ -125,6 +126,9 @@ WebPlugin
 	public static final String	CONFIG_UPNP_ENABLE				= "UPnP Enable";
 	public 				boolean	CONFIG_UPNP_ENABLE_DEFAULT		= true;
 
+	public static final String	CONFIG_REVERSE_PROXY			= "Reverse Proxy";
+	public 				boolean	CONFIG_REVERSE_PROXY_DEFAULT	= false;
+	
 	public static final String 	CONFIG_HOME_PAGE				= PR_HOME_PAGE;
 	public  		 String 	CONFIG_HOME_PAGE_DEFAULT		= "index.html";
 
@@ -171,6 +175,7 @@ WebPlugin
 	private InfoParameter			param_tor_dest;
 
 	private BooleanParameter		p_upnp_enable;
+	private BooleanParameter		p_reverse_proxy;
 
 	private BooleanParameter		pw_enable;
 	private StringParameter			p_user_name;
@@ -312,6 +317,13 @@ WebPlugin
 			CONFIG_UPNP_ENABLE_DEFAULT	= pr_enable_upnp.booleanValue();
 		}
 
+		Boolean	pr_reverse_proxy = (Boolean)properties.get(PR_REVERSE_PROXY);
+
+		if ( pr_reverse_proxy != null ){
+
+			CONFIG_REVERSE_PROXY_DEFAULT = pr_reverse_proxy.booleanValue();
+		}
+		
 		Boolean	pr_hide_resource_config = (Boolean)properties.get( PR_HIDE_RESOURCE_CONFIG );
 
 		log = (LoggerChannel)properties.get( PR_LOG );
@@ -367,7 +379,7 @@ WebPlugin
 					Throwable	error )
 				{
 					log( str + "\n" );
-					log( error.toString() + "\n" );
+					log( Debug.getNestedExceptionMessage( error ) + "\n" );
 				}
 				
 				private void
@@ -583,17 +595,17 @@ WebPlugin
 							"webui.upnpenable",
 							CONFIG_UPNP_ENABLE_DEFAULT );
 
-		p_upnp_enable.addListener(
-			new ParameterListener()
-			{
-				@Override
-				public void
-				parameterChanged(
-					Parameter param )
-				{
-					setupUPnP();
-				}
-			});
+		p_upnp_enable.addListener((p)->setupUPnP());
+			
+		p_reverse_proxy =
+				config_model.addBooleanParameter2(
+								CONFIG_REVERSE_PROXY,
+								"webui.reverse.proxy",
+								CONFIG_REVERSE_PROXY_DEFAULT );
+	
+		p_reverse_proxy.setMinimumRequiredUserMode( Parameter.MODE_INTERMEDIATE );
+		
+		p_reverse_proxy.addListener( update_server_listener );
 
 		plugin_interface.addListener(
 				new PluginListener()
@@ -703,7 +715,7 @@ WebPlugin
 		config_model.createGroup(
 			"ConfigView.section.server",
 			new Parameter[]{
-				param_port, param_bind, param_protocol, param_i2p_dest, param_tor_dest, p_upnp_enable,
+				param_port, param_bind, param_protocol, param_i2p_dest, param_tor_dest, p_upnp_enable, p_reverse_proxy,
 			});
 
 		param_home 		= config_model.addStringParameter2(	CONFIG_HOME_PAGE, "webui.homepage", CONFIG_HOME_PAGE_DEFAULT );
@@ -894,7 +906,7 @@ WebPlugin
 					parameterChanged(
 						Parameter param )
 					{
-						updatePairing( p_sid );
+						updatePairing( p_sid, "Parameter '" + param.getLabelText() + "' changed" );
 
 						setupUPnP();
 					}
@@ -1042,9 +1054,7 @@ WebPlugin
 		PairingManager pm = PairingManagerFactory.getSingleton();
 
 		URL url = pm.getServiceURL();
-		
-		url = UrlUtils.setProtocol( url, "http" );
-	
+			
 		String res = url.toExternalForm() + "/web/test?sid=" + sid;
 
 		if ( pm.isEnabled()){
@@ -1196,9 +1206,10 @@ WebPlugin
 
 		if ( !file_root.exists()){
 
-			String	error = "WebPlugin: root dir '" + file_root + "' doesn't exist";
-
-			log.log( LoggerChannel.LT_ERROR, error );
+			// assume resource coming from jar, not an error
+			
+			// String	error = "WebPlugin: root dir '" + file_root + "' doesn't exist";
+			// log.log( LoggerChannel.LT_ERROR, error );
 
 		}else if ( !file_root.isDirectory()){
 
@@ -1213,6 +1224,8 @@ WebPlugin
 
 			welcome_files[i] = FileUtil.newFile( file_root, welcome_pages[i] );
 		}
+		
+		initStage(2);
 	}
 
 	private void
@@ -1286,6 +1299,12 @@ WebPlugin
 					( ip_ranges==null?
 						(ip_range_all?"all":"local"):
 						(ip_ranges_str)));
+	}
+	
+	protected boolean
+	verifyReferrer()
+	{
+		return( true );
 	}
 
 	protected void
@@ -1375,6 +1394,20 @@ WebPlugin
 				}
 			}
 
+			Map<String,Object>		tc_properties = new HashMap<>();
+
+			Boolean prop_non_blocking = (Boolean)properties.get( PR_NON_BLOCKING );
+
+			if ( prop_non_blocking != null && prop_non_blocking ){
+
+				tc_properties.put( Tracker.PR_NON_BLOCKING, true );
+			}
+			
+			if ( p_reverse_proxy.getValue()){
+					
+				tc_properties.put( Tracker.PR_REVERSE_PROXY, true );
+			}
+			
 			if ( tracker_context != null ){
 
 				URL	url = tracker_context.getURLs()[0];
@@ -1383,9 +1416,12 @@ WebPlugin
 				int			existing_port		= url.getPort()==-1?url.getDefaultPort():url.getPort();
 				InetAddress existing_bind_ip 	= tracker_context.getBindIP();
 
+				Map<String,Object> existing_properties = tracker_context.getProperties();
+				
 				if ( 	( existing_port == requested_port || requested_port == 0 ) &&
 						existing_protocol.equalsIgnoreCase( protocol_str ) &&
-						sameAddress( bind_ip, existing_bind_ip )){
+						sameAddress( bind_ip, existing_bind_ip ) && 
+						tc_properties.equals( existing_properties )){
 
 					return;
 				}
@@ -1397,21 +1433,13 @@ WebPlugin
 
 			int	protocol = protocol_str.equalsIgnoreCase( "HTTP")?Tracker.PR_HTTP:Tracker.PR_HTTPS;
 
-			Map<String,Object>		tc_properties = new HashMap<>();
-
-			Boolean prop_non_blocking = (Boolean)properties.get( PR_NON_BLOCKING );
-
-			if ( prop_non_blocking != null && prop_non_blocking ){
-
-				tc_properties.put( Tracker.PR_NON_BLOCKING, true );
-			}
-
 			log.log( 	LoggerChannel.LT_INFORMATION,
 						"Server initialisation: port=" + requested_port +
 						(bind_ip == null?"":(", bind=" + bind_str + "->" + bind_ip + ")")) +
 						", protocol=" + protocol_str +
 						(root_dir.length()==0?"":(", root=" + root_dir )) +
-						(properties.size()==0?"":(", props=" + properties )));
+						(properties.size()==0?"":(", props=" + properties ))+
+						(tc_properties.size()==0?"":(", tc_props=" + tc_properties )));
 
 			tracker_context =
 				plugin_interface.getTracker().createWebContext(
@@ -1435,6 +1463,13 @@ WebPlugin
 
 							options.put( AEProxyFactory.SP_PORT, server_port );
 
+							InetAddress bind = NetworkAdmin.getSingleton().getSingleHomedServiceBindAddress();
+							
+							if ( bind != null && !bind.isAnyLocalAddress()){
+								
+								options.put( AEProxyFactory.SP_BIND, bind.getHostAddress());
+							}
+
 							Map<String,Object> reply =
 									AEProxyFactory.getPluginServerProxy(
 										plugin_interface.getPluginName(),
@@ -1454,7 +1489,7 @@ WebPlugin
 
 									if ( p_sid != null ){
 
-										updatePairing( p_sid );
+										updatePairing( p_sid, "I2P destination" );
 									}
 								}
 							}
@@ -1477,6 +1512,13 @@ WebPlugin
 
 							options.put( AEProxyFactory.SP_PORT, server_port );
 
+							InetAddress bind = NetworkAdmin.getSingleton().getSingleHomedServiceBindAddress();
+							
+							if ( bind != null && !bind.isAnyLocalAddress()){
+								
+								options.put( AEProxyFactory.SP_BIND, bind.getHostAddress());
+							}
+
 							Map<String,Object> reply =
 									AEProxyFactory.getPluginServerProxy(
 										plugin_interface.getPluginName(),
@@ -1496,7 +1538,7 @@ WebPlugin
 
 									if ( p_sid != null ){
 
-										updatePairing( p_sid );
+										updatePairing( p_sid, "Tor destination" );
 									}
 								}
 							}
@@ -1655,6 +1697,8 @@ WebPlugin
 					{
 						boolean	result;
 
+						String error = null;
+
 						boolean	auto_auth =  param_auto_auth != null && param_auto_auth.getValue();
 
 						if ( !pw_enable.getValue()){
@@ -1704,95 +1748,158 @@ WebPlugin
 										}
 									}
 								}
-																
-								result = false;
+									
+								String client_net = AENetworkClassifier.categoriseAddress( client_address );
 								
+								result = false;
+																
 								String msg	= "";
 								
-								if ( this_server_port != server_port ){
+								boolean port_ok = false;
+								
+								String[] allowed = whitelist.split( "," );
+
+								for ( String a: allowed ){
+								
+									a = a.trim();
+									
+									if ( a.equalsIgnoreCase( "I2P" )){
+									
+											// allow all I2P
+											// if you have specific I2P client addresses then add them to whitelist explicitly (with explicit port of 80)
+										
+										if ( client_net == AENetworkClassifier.AT_I2P ){
+										
+											result = true;
+										
+											break;
+										}
+									}else if ( a.equalsIgnoreCase( "Tor" )){
+										
+										// no idea of the client's identity as we just get a local connection on localhost/bind address
+										// so authorise these via localhost/bind address details...
+										
+										// result = true;
+										
+										// break;
+									}
+									
+									int explicit_port = -1;
+									
+									int port_pos = a.lastIndexOf( ":" );
+									
+									if ( port_pos > 0 ){
+										
+										int b_pos = a.lastIndexOf( "]" );
+										
+										if ( b_pos == -1 || port_pos > b_pos ){
+											
+											try{
+												explicit_port = Integer.parseInt( a.substring( port_pos + 1 ));
+												
+												a = a.substring( 0, port_pos );
+												
+											}catch( Throwable e ){
+											}
+										}
+									}
+									
+									port_ok = false;
+									
+									if ( explicit_port > 0 ){
+										
+										if ( this_server_port == explicit_port ){
+											
+											port_ok = true;
+											
+										}else{
+											
+											continue;
+										}
+									}else if ( this_server_port != server_port ){
+										
+										continue;
+									}
+									
+									if ( a.equals( "*" )){
+										
+										result = true;
+										
+										break;
+										
+									}else if ( a.equals( "$" )){
+									
+										InetAddress bind = getServerBindIP();
+										
+										if ( bind != null ){
+											
+											if ( bind instanceof Inet6Address ){
+												
+												a = "[" + bind.getHostAddress() + "]";
+												
+											}else{
+												
+												a = bind.getHostAddress();
+											}
+										}
+									}
+									
+									if ( client_address.equals( a.trim())){
+										
+										result = true;
+										
+										break;
+									}
+
+									String aTrimmed = a.trim();
+
+										// Support ranges (copied from code in setupAccess)
+									
+									IPRange ip_range	= plugin_interface.getIPFilter().createRange(aTrimmed.contains( ":" )?2:1, true);
+									
+									int	sep = aTrimmed.indexOf("-");
+
+									if ( sep == -1 ){
+
+										ip_range.setStartIP( aTrimmed );
+
+										ip_range.setEndIP( aTrimmed );
+
+									}else{
+
+										ip_range.setStartIP( aTrimmed.substring(0,sep).trim());
+
+										ip_range.setEndIP( aTrimmed.substring( sep+1 ).trim());
+									}
+
+									ip_range.checkValid();
+
+									if (ip_range.isValid() && ip_range.isInRange(client_address)){
+
+										result = true;
+
+										break;
+									}
+								}
+								
+								if ( result && !port_ok && this_server_port != server_port ){
+									
+									result = false;
 									
 									msg = "port mismatch: " + server_port + "/" + this_server_port;
 									
+								}else if ( !result ){
+									
+									msg = "host '" + client_address + "' not in whitelist";
+									
 								}else{
-								
-									String[] allowed = whitelist.split( "," );
-
-									for ( String a: allowed ){
 									
-										a = a.trim();
-										
-										if ( a.equals( "*" )){
-											
-											result = true;
-											
-											break;
-											
-										}else if ( a.equals( "$" )){
-										
-											InetAddress bind = getServerBindIP();
-											
-											if ( bind != null ){
-												
-												if ( bind instanceof Inet6Address ){
-													
-													a = "[" + bind.getHostAddress() + "]";
-													
-												}else{
-													
-													a = bind.getHostAddress();
-												}
-											}
-										}
-										
-										if ( client_address.equals( a.trim())){
-											
-											result = true;
-											
-											break;
-										}
-
-										String aTrimmed = a.trim();
-
-											// Support ranges (copied from code in setupAccess)
-										
-										IPRange ip_range	= plugin_interface.getIPFilter().createRange(aTrimmed.contains( ":" )?2:1, true);
-										
-										int	sep = aTrimmed.indexOf("-");
-
-										if ( sep == -1 ){
-
-											ip_range.setStartIP( aTrimmed );
-
-											ip_range.setEndIP( aTrimmed );
-
-										}else{
-
-											ip_range.setStartIP( aTrimmed.substring(0,sep).trim());
-
-											ip_range.setEndIP( aTrimmed.substring( sep+1 ).trim());
-										}
-
-										ip_range.checkValid();
-
-										if (ip_range.isValid() && ip_range.isInRange(client_address)){
-
-											result = true;
-
-											break;
-										}
-
-									}
-									
-									if ( !result ){
-										
-										msg = "host '" + client_address + "' not in whitelist";
-										
-									}else{
-										
-										if ( referrer != null ){
+									if ( referrer != null && verifyReferrer()){
+																				
+										if ( !port_ok ){
 											
 											result = false;
-											
+
 											try{
 												
 												URL url = new URL( referrer );
@@ -1810,7 +1917,7 @@ WebPlugin
 												}
 											}catch( Throwable e ){
 											}
-											
+										
 											if ( !result ){
 												
 												msg = "referrer mismatch: " + referrer;
@@ -1822,7 +1929,7 @@ WebPlugin
 								if ( !result ){
 									
 									
-									log.log( "Access denied: No password and " + msg + " (" + client_address + ")");
+									error = "Access denied: No password and " + msg + " (" + client_address + ")";
 								}
 							}
 						}else{
@@ -1836,7 +1943,7 @@ WebPlugin
 
 							if ( !user.equals( p_user_name.getValue())){
 
-								log.log( "Access denied: Incorrect user name: " + user + " (" + client_address + ")" );
+								error = "Access denied: Incorrect user name: " + user + " (" + client_address + ")";
 								
 								result = false;
 
@@ -1857,7 +1964,7 @@ WebPlugin
 								
 								if ( !result ){
 									
-									log.log( "Access denied: Incorrect password" + " (" + client_address + ")" );
+									error = "Access denied: Incorrect password" + " (" + client_address + ")";
 								}
 							}
 						}
@@ -1887,6 +1994,16 @@ WebPlugin
 							result = hasOurCookie( getHeaderField( headers, "Cookie" ));
 						}
 
+						if ( !result ){
+							
+							if ( error == null ){
+								
+								error = "Access denied";
+							}
+							
+							log.log( error );
+						}
+						
 						return( result );
 					}
 
@@ -2228,7 +2345,8 @@ WebPlugin
 
 	protected void
 	updatePairing(
-		String		sid )
+		String		sid,
+		String		reason )
 	{
 		PairingManager pm = PairingManagerFactory.getSingleton();
 
@@ -2238,7 +2356,7 @@ WebPlugin
 
 			PairingConnectionData cd = service.getConnectionData();
 
-			log( "Updating pairing information" );
+			log( "Updating pairing information - " + reason );
 
 			try{
 				updatePairing( cd );
@@ -2321,6 +2439,25 @@ WebPlugin
 		return( url.getPort()==-1?url.getDefaultPort():url.getPort());
 	}
 
+	protected String
+	getServerURL()
+	{
+		InetAddress bind_ip = getServerBindIP();
+
+		InetAddress address;
+		
+		if ( bind_ip.isAnyLocalAddress()){
+
+			address = NetworkAdmin.getSingleton().getLoopbackAddress();
+			
+		}else{
+
+			address = bind_ip;
+		}
+		
+		return( getProtocol().toLowerCase( Locale.US ) + "://" + UrlUtils.getURLForm( address, getPort()) + "/" );
+	}
+	
 	public int
 	getPort()
 	{

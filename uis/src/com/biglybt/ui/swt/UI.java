@@ -25,6 +25,7 @@ import java.util.Map;
 import com.biglybt.ui.common.UIConst;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Options;
+import org.eclipse.swt.SWT;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreComponent;
@@ -55,31 +56,50 @@ public class UI
 {
 	private static final LogIDs LOGID = LogIDs.GUI;
 
+	private static volatile boolean useSystemTheme;
+	
 	private static boolean isFirstUI;
 
+	
+	public static boolean
+	canUseSystemTheme()
+	{
+		return(	Constants.isOSX && SWT.getVersion() >= 4924 || // 4.12RC2
+				Constants.isWindows10OrHigher ); // actually mostly works with latest hacks && SWT.getVersion() >= 4948 );
+	}
+	
 	static{
-		
-		if ( Constants.isOSX ){
-			
-			COConfigurationManager.addAndFireParameterListener(
-				"Use System Theme",
-				(n)->{
 					
-					boolean ust = COConfigurationManager.getBooleanParameter( "Use System Theme" );
+		COConfigurationManager.addAndFireParameterListener(
+			"Use System Theme",
+			(n)->{
 				
-					try{
-						PlatformManagerFactory.getPlatformManager().setUseSystemTheme( ust );
-						
-					}catch( Throwable e ){
-						
-						ust = false;
-						
-						Debug.out( e );
-					}
+				useSystemTheme = COConfigurationManager.getBooleanParameter( "Use System Theme" );
+			
+				if ( useSystemTheme && !canUseSystemTheme()){
 					
-					System.setProperty( "org.eclipse.swt.display.useSystemTheme", ust?"true":"false" );
-				});
-	  	}
+					useSystemTheme = false;		
+					
+					COConfigurationManager.setParameter( "Use System Theme", false );
+					
+					return;
+				}
+				
+				try{
+					PlatformManagerFactory.getPlatformManager().setUseSystemTheme( useSystemTheme );
+					
+				}catch( Throwable e ){
+					
+					useSystemTheme = false;
+					
+					Debug.out( e );
+				}
+				
+				if ( Constants.isOSX ){
+
+					System.setProperty( "org.eclipse.swt.display.useSystemTheme", useSystemTheme?"true":"false" );
+				}
+			});
 	}
 	
 	protected final AEMonitor this_mon = new AEMonitor("swt.UI");
@@ -92,6 +112,12 @@ public class UI
 		super();
 	}
 
+	public static boolean
+	useSystemTheme()
+	{
+		return( useSystemTheme );
+	}
+	
 	protected static boolean isURI(String file_name) {
 		String file_name_lower = file_name.toLowerCase();
 
@@ -143,15 +169,21 @@ public class UI
 	}
 
 	@Override
-	public String[] processArgs(CommandLine commands, String[] args) {
-		boolean showMainWindow = args.length == 0
-				|| COConfigurationManager.getBooleanParameter(
-						"Activate Window On External Download");
+	public String[] 
+	processArgs(
+		CommandLine commands, String[] args )
+	{
+		boolean showMainWindow = args.length == 0;	// no args, always show
 
-		boolean open = true;
+		if ( commands.hasOption("closedown") || commands.hasOption("shutdown")){
 
-		if (commands.hasOption("closedown") || commands.hasOption("shutdown")) {
-
+				// Called by the installer to shutdown current instance. As installer window
+				// is probably on top of BiglyBT then we disable all the confirmation close
+				// dialogs that they probably won't see. They've asked to update BiglyBT anyway,
+				// they shouldn't be surprised if it closes on them
+			
+			UIExitUtilsSWT.setSkipCloseChecksForUpdate( true );
+			
 			// discard any pending updates as we need to shutdown immediately (this
 			// is called from installer to close running instance)
 
@@ -178,7 +210,7 @@ public class UI
 
 		}
 
-		if (commands.hasOption("restart")) {
+		if ( commands.hasOption("restart")){
 
 			UIFunctions uiFunctions = UIFunctionsManager.getUIFunctions();
 
@@ -190,13 +222,19 @@ public class UI
 			return null;
 		}
 
-		if (commands.hasOption("share")) {
+		boolean isOpen			= true;
+
+		if (commands.hasOption("share")){
+			
 			showMainWindow = true;
 
-			open = false;
+			isOpen = false;
 		}
 
-		if (commands.hasOption("open")) {
+		if (commands.hasOption("open")){
+			
+				// explicit open, force open regardless
+			
 			showMainWindow = true;
 		}
 		
@@ -295,7 +333,7 @@ public class UI
 
 					queued_torrents.add(new Object[] {
 						filename,
-						Boolean.valueOf(open),
+						Boolean.valueOf(isOpen),
 						save_path,
 					});
 
@@ -308,13 +346,20 @@ public class UI
 
 			if (!queued) {
 
-				handleFile(filename, open, save_path);
+				handleFile(filename, isOpen, save_path);
 			}
 		}
 
-		if (showMainWindow) {
-			showMainWindow();
+		if (	showMainWindow || 
+				COConfigurationManager.getBooleanParameter( "Activate Window On External Download" )){
+			
+			UIFunctions uiFunctions = UIFunctionsManager.getUIFunctions();
+			
+			if (uiFunctions != null) {
+				uiFunctions.bringToFront();
+			}
 		}
+		
 		return args;
 	}
 
@@ -377,13 +422,6 @@ public class UI
 			handleFile(file_name, open, save_path );
 		}
 		queued_torrents = null;
-	}
-
-	protected void showMainWindow() {
-		UIFunctions uiFunctions = UIFunctionsManager.getUIFunctions();
-		if (uiFunctions != null) {
-			uiFunctions.bringToFront();
-		}
 	}
 
 	public static boolean isFirstUI() {

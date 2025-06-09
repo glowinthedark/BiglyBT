@@ -20,6 +20,7 @@
 package com.biglybt.core.lws;
 
 import java.io.File;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ import com.biglybt.core.download.DownloadManagerStateAttributeListener;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.util.IndentWriter;
 import com.biglybt.core.util.LinkFileMap;
+import com.biglybt.core.util.StringInterner.FileKey;
 
 public class
 LWSDiskManagerState
@@ -66,7 +68,7 @@ LWSDiskManagerState
 
 	@Override
 	public File
-	getStateFile()
+	getStateDir()
 	{
 		return null;
 	}
@@ -105,6 +107,20 @@ LWSDiskManagerState
 		return( true );
 	}
 
+	@Override
+	public List<ResumeHistory> 
+	getResumeDataHistory()
+	{
+		return( Collections.emptyList());
+	}
+	
+	@Override
+	public void 
+	restoreResumeData(
+		ResumeHistory history)
+	{
+	}
+	
 	@Override
 	public void
 	clearTrackerResponseCache()
@@ -171,6 +187,21 @@ LWSDiskManagerState
 	getTransientFlags()
 	{
 		return( 0 );
+	}
+	
+	public Object 
+	getTransientAttribute(
+		String name )
+	{
+		return( null );
+	}
+	
+	@Override
+	public void 
+	setTransientAttribute(
+		String 		name, 
+		Object		value)
+	{
 	}
 	
 	@Override
@@ -275,7 +306,9 @@ LWSDiskManagerState
 	public boolean getBooleanAttribute(String name){ return( false ); }
 	@Override
 	public boolean hasAttribute(String name){ return( false );}
-
+	@Override
+	public void removeAttribute(String name){}
+	
 	@Override
 	public String
 	getTrackerClientExtensions()
@@ -346,19 +379,19 @@ LWSDiskManagerState
 	}
 
 	@Override
-	public void
-	setPrimaryFile(
-		DiskManagerFileInfo dmfi)
-	{
-	}
-
-	@Override
 	public DiskManagerFileInfo
 	getPrimaryFile()
 	{
 		return null;
 	}
 
+	@Override
+	public String 
+	getPrimaryFilePath()
+	{
+		return null;
+	}
+	
 	@Override
 	public String[]
 	getNetworks()
@@ -451,7 +484,7 @@ LWSDiskManagerState
     public void
 	setFileLinks(
 		List<Integer>	source_indexes,
-		List<File>		link_sources,
+		List<File>		link_sources_may_have_nulls,
 		List<File>		link_destinations )
     {
     }
@@ -481,17 +514,25 @@ LWSDiskManagerState
 	@Override
 	public File
 	getFileLink(
-		int		source_index,
-		File	link_source )
+		int		source_index )
 	{
 		return( null );
 	}
 
 	@Override
+	public FileKey
+	getFileLink(
+		int			source_index,
+		FileKey		def )
+	{
+		return( def );
+	}
+	
+	@Override
 	public LinkFileMap
 	getFileLinks()
 	{
-		return( new LinkFileMap());
+		return( new LinkFileMap( null ));
 	}
 
 	@Override
@@ -577,7 +618,7 @@ LWSDiskManagerState
 	@Override
 	public void
 	generateEvidence(
-		IndentWriter writer)
+		IndentWriter writer, boolean full )
 	{
 	}
 

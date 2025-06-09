@@ -95,6 +95,12 @@ public abstract class InfoBarUtil
 		});
 	}
 
+	public SWTSkinObject
+	getParentSkinObject()
+	{
+		return( forSO );
+	}
+	
 	protected void createInfoBar() {
 		Control control = forSO.getControl();
 		if (control == null || control.isDisposed()) {
@@ -105,9 +111,26 @@ public abstract class InfoBarUtil
 			return;
 		}
 		FormData fdForSO = (FormData) ldForSO;
-		SWTSkinObject parent = forSO.getParent();
-		soInfoBar = skin.createSkinObject(skintemplateid + (uniqueNo++), skintemplateid, parent);
+		SWTSkinObjectContainer parent = (SWTSkinObjectContainer)forSO.getParent();
 
+			// this isn't skinned in dark mode at the moment
+		
+		boolean disable_skinning = Utils.isDarkAppearanceNative();
+		
+		try{
+			if ( disable_skinning ){
+				
+				Utils.setSkinningEnabled( false );
+			}
+			
+			soInfoBar = skin.createSkinObject(skintemplateid + (uniqueNo++), skintemplateid, parent);
+		}finally{
+			
+			if ( disable_skinning ){
+				
+				Utils.setSkinningEnabled( true );
+			}
+		}
 		FormData fdInfoBar = (FormData) soInfoBar.getControl().getLayoutData();
 		if (fdInfoBar == null) {
 			fdInfoBar = Utils.getFilledFormData();
@@ -138,7 +161,7 @@ public abstract class InfoBarUtil
   		forSO.getControl().setLayoutData(fdForSO);
 		}
 
-		((SWTSkinObjectContainer) parent).getComposite().layout(true);
+		parent.getComposite().layout(true);
 
 		SWTSkinObject soClose = skin.getSkinObject("close", parent);
 		if (soClose != null) {
@@ -185,6 +208,19 @@ public abstract class InfoBarUtil
 		created(parent);
 
 		soInfoBar.setVisible(true);
+		
+		forSO.addListener(
+			new SWTSkinObjectListener(){
+				
+				@Override
+				public Object eventOccured(SWTSkinObject skinObject, int eventType, Object params){
+					if ( eventType == EVENT_DESTROY ){
+						soInfoBar.dispose();
+						skin.removeSkinObject(soInfoBar);
+					}
+					return( null );
+				}
+			});
 	}
 
 	/**

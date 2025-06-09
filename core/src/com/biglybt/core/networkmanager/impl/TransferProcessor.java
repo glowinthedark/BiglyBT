@@ -176,7 +176,8 @@ TransferProcessor
 	  
 	if ( connection.isClosed()){
 		
-		Debug.out( "Connection is closed" );
+		// happens sometimes when a connection is closed during the connect process
+		// Debug.out( "Connection is closed: " + connection.getString());
 		
 		return;
 	}
@@ -442,7 +443,7 @@ TransferProcessor
   {
 	  if ( connection.isClosed()){
 
-		  Debug.out( "Connection is closed" );
+		  // Debug.out( "Connection is closed" );
 
 		  return;
 	  }

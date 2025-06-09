@@ -26,6 +26,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 
 import com.biglybt.core.util.*;
+import com.biglybt.core.util.StringInterner.StringSupplier;
 import com.biglybt.ui.common.table.TableCellCore;
 import com.biglybt.ui.common.table.TableColumnCore;
 import com.biglybt.ui.common.table.TableRowCore;
@@ -40,7 +41,7 @@ import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.ui.swt.views.table.impl.TableCellSWTBase;
 import com.biglybt.ui.swt.views.table.impl.TableRowSWTBase;
 import com.biglybt.ui.swt.views.table.utils.TableColumnSWTUtils;
-
+import com.biglybt.ui.swt.views.table.TableViewSWT.ColorRequester;
 import com.biglybt.pif.ui.tables.TableCell;
 import com.biglybt.pif.ui.tables.TableColumn;
 
@@ -49,6 +50,8 @@ public class TableRowPainted
 {
 	private static final boolean DEBUG_SUBS = false;
 
+	private final boolean isFake;
+	
 	private Point drawOffset = new Point(0, 0);
 
 	private int numSubItems;
@@ -61,19 +64,21 @@ public class TableRowPainted
 
 	private int subRowsHeightUseAccessors;
 
-	private TableCellCore[] sortCells;
+	private TableCellSWTBase[] sortCells;
 
 	private int 	heightUseAccessors = 0;
 	private boolean	isHidden;
 	
 	private boolean initializing = true;
 
+	private boolean inPaintItem;
+	
 	private Color colorFG = null;
 
 	private Object			colorLock = new Object();
 	
-	private CopyOnWriteList<Object[]>	FGRequesters = new CopyOnWriteList<>(1);
-	private CopyOnWriteList<Object[]>	BGRequesters = new CopyOnWriteList<>(1);
+	private CopyOnWriteList<Object[]>	FGRequesters;
+	private CopyOnWriteList<Object[]>	BGRequesters;
 	
 	public TableRowPainted(TableRowCore parentRow, TableViewPainted tv,
 			Object dataSource, boolean triggerHeightChange) {
@@ -82,6 +87,9 @@ public class TableRowPainted
 		// calls the TableView and causes locks.  So, use the TableView's sync!
 
 		super(tv.getSyncObject(), parentRow, tv, dataSource);
+		
+		isFake = false;
+		
 		subRows_sync = tv.getSyncObject();
 
 		TableColumnCore[] sortColumns = tv.getSortColumns();
@@ -117,6 +125,45 @@ public class TableRowPainted
 		tv.rowCreated();
 	}
 
+		/**
+		 * FAKE row constructor
+		 * 
+		 * @param parentRow
+		 * @param tv
+		 * @param dataSource
+		 */
+	
+	public 
+	TableRowPainted(
+		TableRowCore 		parentRow, 
+		TableViewPainted 	tv,
+		Object 				dataSource )
+	{
+		super(tv.getSyncObject(), parentRow, tv, dataSource);
+		
+		isFake = true;
+				
+		subRows_sync = tv.getSyncObject();
+
+		isHidden = false;
+				
+		if ( dataSource instanceof TableRowSWTChildController ){
+			
+			TableRowSWTChildController c = (TableRowSWTChildController)dataSource;
+			
+			setExpanded( c.isExpanded(), false );
+			
+			Object[] kids = c.getChildDataSources();
+			
+			if ( kids != null && kids.length > 0 ){
+				
+				setSubItems( kids, false );
+			}
+		}
+		
+		initializing = false;
+	}
+	
 	public boolean
 	refilter()
 	{		
@@ -189,42 +236,60 @@ public class TableRowPainted
 		return( isHidden );
 	}
 	
+	@Override
+	public void invalidate(boolean mustRefersh) {
+		super.invalidate(mustRefersh);
+		synchronized (lock) {
+			if (sortCells != null) {
+				for (TableCellSWTBase sortCell : sortCells) {
+					sortCell.invalidate(mustRefersh);
+				}
+			}
+		}
+	}
+	
 	private void buildCells() {
 		//debug("buildCells " + Debug.getCompressedStackTrace());
 		TableColumnCore[] visibleColumns = getView().getVisibleColumns();
 		if (visibleColumns == null) {
 			return;
 		}
+		
+		TableViewPainted table = getViewPainted();
+		
 		synchronized (lock) {
 			mTableCells = new LinkedHashMap<>(visibleColumns.length, 1);
 
 			TableRowCore parentRow = getParentRowCore();
 			// create all the cells for the column
 			for (int i = 0; i < visibleColumns.length; i++) {
-				if (visibleColumns[i] == null) {
+				
+				TableColumnCore coreColumn = visibleColumns[i];
+				
+				if ( coreColumn == null) {
 					continue;
 				}
 
 				if (parentRow != null
-						&& !visibleColumns[i].handlesDataSourceType(getDataSource(false).getClass())) {
-					mTableCells.put(visibleColumns[i].getName(), null);
+						&& !coreColumn.handlesDataSourceType(getDataSource(false).getClass())) {
+					mTableCells.put(coreColumn.getName(), null);
 					continue;
 				}
 
 				//System.out.println(dataSource + ": " + tableColumns[i].getName() + ": " + tableColumns[i].getPosition());
-				TableCellCore cell = null;
+				TableCellSWTBase cell = null;
 				if (sortCells != null) {
-					for (TableCellCore sortCell : sortCells) {
-						if (visibleColumns[i].equals(sortCell.getTableColumnCore())) {
+					for (TableCellSWTBase sortCell : sortCells) {
+						if (coreColumn.equals(sortCell.getTableColumnCore())) {
 							cell = sortCell;
 						}
 					}
 				}
 				if (cell == null) {
-					cell = new TableCellPainted(this, visibleColumns[i], i);
+					cell = new TableCellPainted(this, table.getColumnPainted( coreColumn ), i);
 				}
 
-				mTableCells.put(visibleColumns[i].getName(), cell);
+				mTableCells.put(coreColumn.getName(), cell);
 				//if (i == 10) cell.bDebug = true;
 			}
 		}
@@ -295,10 +360,19 @@ public class TableRowPainted
 
 		Color altColor;
 		Color bg;
+		
+		boolean isAltColor 			= false;
+		boolean rowHasBackground	= false;
+		boolean rowHasForeground	= fg != null;
+		
 		if (isTableEnabled) {
-	  		altColor = Colors.alternatingColors[pos >= 0 ? pos % 2 : 0];
+			int altIndex = pos >= 0 ? pos % 2 : 0;
+			
+	  		altColor = Colors.alternatingColors[altIndex];
 	  		if (altColor == null) {
 	  			altColor = TablePaintedUtils.getColour( gc, SWT.COLOR_LIST_BACKGROUND );
+	  		}else{
+	  			isAltColor = altIndex==1;
 	  		}
 	  		if (isSelected) {
 	  			Color color;
@@ -312,6 +386,7 @@ public class TableRowPainted
 	  		if (bg == null) {
 	  			bg = gc.getBackground();
 	  		} else {
+	  			rowHasBackground = true;
 	  			gc.setBackground(bg);
 	  		}
 	
@@ -357,7 +432,7 @@ public class TableRowPainted
 			if (mTableCells != null) {
 				for (TableColumn tc : visibleColumns) {
 					
-					TableCellCore cell = mTableCells.get(tc.getName());
+					TableCellSWTBase cell = mTableCells.get(tc.getName());
 					
 					int w = tc.getWidth();
 					
@@ -384,10 +459,12 @@ public class TableRowPainted
 							gc.setBackground(bg);
 							gc.fillRectangle(r);
 							if (isSelected) {
-  							gc.setAlpha(80);
-  							gc.setForeground(altColor);
-  							gc.fillGradientRectangle(r.x, r.y, r.width, r.height, true);
-  							gc.setForeground(fg);
+								if ( Utils.gradientFillSelection()){
+									gc.setAlpha(80);
+									gc.setForeground(altColor);
+									gc.fillGradientRectangle(r.x, r.y, r.width, r.height, true);
+									gc.setForeground(fg);
+								}
 							}
 						}
 						gc.setAlpha(rowAlpha);
@@ -399,7 +476,7 @@ public class TableRowPainted
 							continue;
 						}
 						
-						if (swt_paintCell(gc, cellSWT.getBounds(), cellSWT, shadowColor)) {
+						if (swt_paintCell(gc, cellSWT.getBounds(), cellSWT, shadowColor, !( isSelected || rowHasBackground), !rowHasForeground, isAltColor)) {
 							// row color may have changed; this would update the color
 							// for all new cells.  However, setting color triggers a
 							// row redraw that will fix up the UI
@@ -445,10 +522,12 @@ public class TableRowPainted
   				} else {
   					gc.fillRectangle(r);
   					if (isSelected) {
-  						gc.setAlpha(80);
-  						gc.setForeground(altColor);
-  						gc.fillGradientRectangle(r.x, r.y, r.width, r.height, true);
-  						gc.setForeground(fg);
+  						if ( Utils.gradientFillSelection()){
+	  						gc.setAlpha(80);
+	  						gc.setForeground(altColor);
+	  						gc.fillGradientRectangle(r.x, r.y, r.width, r.height, true);
+	  						gc.setForeground(fg);
+  						}
   					}
   				}
   				gc.setAlpha(rowAlpha);
@@ -492,26 +571,85 @@ public class TableRowPainted
 		}
 	}
 	
-	private void swt_fakeRedraw( String col_name ) {
+	private static final Map<Integer,Object[]> fake_images = new HashMap<>();
+	
+	private static GC
+	getFakeImageGC(
+		Rectangle	bounds  )
+	{
+		int height = bounds.height;
 		
+		Object[] existing = fake_images.get( height );
+		
+		if ( existing != null ){
+			
+			return((GC)existing[0]);
+		}
+		
+		Image image = new Image(Utils.getDisplay(), bounds.width, height);
+		
+		GC gc = new GC(image);
+		
+		fake_images.put( height, new Object[]{ gc, image });
+		
+		SimpleTimer.addEvent(
+			"FakeImageDisposer", 
+			SystemTime.getOffsetTime(30*1000), 
+			(ev)->{					
+				Utils.execSWTThread(()->{
+			
+					Object[] entry = fake_images.remove( height );
+					
+					if ( entry == null ){
+						
+						Debug.out( "eh?" );
+						
+					}else{
+						
+						((GC)entry[0]).dispose();
+				
+						((Image)entry[1]).dispose();
+					}
+				});
+			});
+			
+		return( gc );
+	}
+	
+	private void 
+	swt_fakeRedraw( 
+		String col_name ) 
+	{
 		setShown( true, true );
 		
 		TableCellPainted cell = (TableCellPainted)getTableCellCore( col_name  );
 
 		if ( cell != null ){
-			if ( cell.getBoundsRaw() == null ){
+			
+			Rectangle bounds = new Rectangle( 0, 0, 9999, getHeight());
+			
+			if ( bounds.height <= 0 ){
 				
-				cell.setBoundsRaw( new Rectangle( 0, 0, 1000, getHeight() ));
+					// hidden, probably due to filter
+				
+				return;
 			}
 			
-			cell.refresh( true, true, true );
+			boolean boundsSet = false;
 			
-			Image image = new Image(Utils.getDisplay(), 1000, getHeight());
-			
-			GC gc = new GC(image);
+			if ( cell.getBoundsRaw() == null ){
+				
+				cell.setBoundsRaw( bounds );
+				
+				boundsSet = true;
+			}
 			
 			try{
-				swt_paintCell( gc, image.getBounds(), (TableCellSWTBase)cell, null );
+				cell.refresh( true, true, true );
+								
+				GC gc = getFakeImageGC( bounds );
+			
+				swt_paintCell( gc, bounds, (TableCellSWTBase)cell, null, false, false, false );
 			
 				if ( isExpanded()){
 					
@@ -528,23 +666,48 @@ public class TableRowPainted
 				}
 			}finally{
 				
-				gc.dispose();
-			
-				image.dispose();
+				if ( boundsSet ){
+					
+					cell.setBoundsRaw( null );
+				}
 			}
 		}
 	}
 	
+	@Override
+	public boolean 
+	isInPaintItem() 
+	{
+		return inPaintItem;
+	}
+	
 	private boolean swt_paintCell(GC gc, Rectangle cellBounds,
-			TableCellSWTBase cell, Color shadowColor) {
+			TableCellSWTBase cell, Color shadowColor, boolean enableColumnBG, boolean enableColumnFG, boolean isAltColor ) {
 		// Only called from swt_PaintGC, so we can assume GC, cell are valid
 		if (cellBounds == null) {
 			return false;
 		}
 
 		boolean gcChanged = false;
+		Rectangle oldClipping = null;
+		
 		try {
-
+			if ( Constants.IS_CVS_VERSION ){
+				// The cell bounds unfortunately includes the pixel on the right that is used to draw the column separators.
+				// It is a big job to amend things so that the width from cell.getBounds() returns an area excluding this so 
+				// at least clip things so that cells that try and use this "extra" pixel will see the problem...
+				
+				oldClipping = gc.getClipping();
+				int marginWidth		= cell.getMarginWidth();	// meh, some cells draw over their specified margin area (e.g. old progress-eta)
+				int marginHeight	= cell.getMarginHeight();
+				Utils.setClipping(gc, new Rectangle( cellBounds.x-marginWidth, cellBounds.y-marginHeight, cellBounds.width+marginWidth*2-1, cellBounds.height+marginHeight*2 ));
+			}
+			
+			if ( inPaintItem ){
+				Debug.out( "hmm");
+				return( false );
+			}
+			inPaintItem = true;
 			gc.setTextAntialias(SWT.DEFAULT);
 
 			TableViewSWT<?> view = (TableViewSWT<?>) getView();
@@ -574,9 +737,12 @@ public class TableRowPainted
 				//return;
 			}
 
-			String text = cell.getText();
+			StringSupplier textSupplier = cell.getTextSupplier();
 
 			Color fg = cell.getForegroundSWT();
+			if ( fg == null && enableColumnFG ){
+				fg = cell.getTableColumnSWT().getForeground();
+			}
 			if (fg != null) {
 				gcChanged = true;
 				if (isSelected()) {
@@ -585,10 +751,23 @@ public class TableRowPainted
 					gc.setForeground(fg);
 				}
 			}
+			
+			
 			Color bg = cell.getBackgroundSWT();
+			if ( bg == null && enableColumnBG ){
+				bg = cell.getTableColumnSWT().getBackground();
+			}
 			if (bg != null) {
 				gcChanged = true;
 				gc.setBackground(bg);
+				if ( !isAltColor ){
+					int alpha = gc.getAlpha();
+					gc.setAlpha(200 );
+					gc.fillRectangle(cellBounds);
+					gc.setAlpha( alpha );
+				}else{
+					gc.fillRectangle(cellBounds);
+				}
 			}
 
 			//if (cell.getTableColumn().getClass().getSimpleName().equals("ColumnUnopened")) {
@@ -631,7 +810,7 @@ public class TableRowPainted
 				cell.doPaint(gc);
 				gcChanged = true;
 			}
-			if (text.length() > 0) {
+			if ( !textSupplier.isEmpty()) {
 				int ofsx = 0;
 				Image image = cell.getIcon();
 				Rectangle imageBounds = null;
@@ -643,10 +822,6 @@ public class TableRowPainted
 					cellBounds.width -= ofs;
 				}
 				//System.out.println("PS " + getIndex() + ";" + cellBounds + ";" + cell.getText());
-				int style = TableColumnSWTUtils.convertColumnAlignmentToSWT(column.getAlignment());
-				if (cellBounds.height > 20) {
-					style |= SWT.WRAP;
-				}
 				int textOpacity = cell.getTextAlpha();
 				//gc.setFont(getRandomFont());
 				//textOpacity = 130;
@@ -673,9 +848,24 @@ public class TableRowPainted
 				cellBounds.y += 2;
 				cellBounds.height -= 4;
 				if (!cellBounds.isEmpty()) {
-					GCStringPrinter sp = new GCStringPrinter(gc, text, cellBounds, true,
-							cellBounds.height > 20, style);
+					
+					String text = textSupplier.get();
+					
+					int singleLineHeight = GCStringPrinter.stringExtent( gc, text ).y;
+										
+					boolean worthWrap = cellBounds.height >= singleLineHeight*2;
+					
+					int style = TableColumnSWTUtils.convertColumnAlignmentToSWT(column.getAlignment());
+					
+					if ( worthWrap ){
+						
+						style |= SWT.WRAP;
+					}
 
+					GCStringPrinter sp = new GCStringPrinter(gc, text, cellBounds, true, worthWrap, style);
+
+					sp.calculateMetrics();
+					
 					if (shadowColor != null) {
 						Color oldFG = gc.getForeground();
 						gc.setForeground(shadowColor);
@@ -700,7 +890,7 @@ public class TableRowPainted
 						cell.setDefaultToolTip(null);
 					} else {
 
-						cell.setDefaultToolTip(text);
+						cell.setDefaultToolTip(textSupplier);
 					}
 
 					Point psize = sp.getCalculatedPreferredSize();
@@ -753,6 +943,11 @@ public class TableRowPainted
 			}
 		} catch (Exception e) {
 			Debug.out(cell.getTableID() + ":" + cell.getTableColumn().getName(), e );
+		}finally{
+			if ( Constants.IS_CVS_VERSION ){
+				Utils.setClipping(gc, oldClipping);
+			}
+			inPaintItem = false;
 		}
 
 		return gcChanged;
@@ -824,6 +1019,9 @@ public class TableRowPainted
 		if (isRowDisposed()) {
 			return;
 		}
+		if ( isFake ){
+			return;
+		}
 		getViewPainted().redrawRow(this, immediateRedraw);
 
 		if (!doChildren) {
@@ -890,7 +1088,9 @@ public class TableRowPainted
 	 * @see com.biglybt.ui.swt.views.table.impl.TableRowSWTBase#heightChanged(int, int)
 	 */
 	public void heightChanged(int oldHeight, int newHeight) {
-		getViewPainted().rowHeightChanged(this, oldHeight, newHeight);
+		if ( !isFake ){
+			getViewPainted().rowHeightChanged(this, oldHeight, newHeight);
+		}
 		TableRowCore row = getParentRowCore();
 		if (row instanceof TableRowPainted) {
 			((TableRowPainted) row).subRowHeightChanged( oldHeight, newHeight);
@@ -1021,15 +1221,18 @@ public class TableRowPainted
 				((TableRowPainted) row).subRowHeightChanged( oldHeight, newHeight);
 			}
 			
-			TableViewPainted tvp = getViewPainted();
-
-			if ( triggerHeightListener ){
-					
-				tvp.rowHeightChanged(this, oldHeight, newHeight );
+			if ( !isFake ){
+				
+				TableViewPainted tvp = getViewPainted();
+	
+				if ( triggerHeightListener ){
+						
+					tvp.rowHeightChanged(this, oldHeight, newHeight );
+				}
+				
+				tvp.triggerListenerRowAdded(newSubRows);
 			}
 			
-			tvp.triggerListenerRowAdded(newSubRows);
-
 			subRows = newSubRows;
 		}
 	}
@@ -1051,6 +1254,7 @@ public class TableRowPainted
 	@Override
 	public void setSubItems(Object[] datasources) {
 		setSubItems( datasources, true );
+		getViewPainted().sortRows(true,true);
 	}
 	
 	private void setSubItems(Object[] datasources, boolean triggerHeightListeners) {
@@ -1174,15 +1378,16 @@ public class TableRowPainted
 					((TableRowPainted) row).subRowHeightChanged( oldHeight, newHeight);
 				}
 				
-				if ( triggerHeightChange ){
+				if ( !isFake ){
+					if ( triggerHeightChange ){
+						
+						getViewPainted().rowHeightChanged(this, oldHeight, newHeight);
+					}
 					
-					getViewPainted().rowHeightChanged(this, oldHeight, newHeight);
+					if (newSubRows != null) {
+						getViewPainted().triggerListenerRowAdded(newSubRows);
+					}
 				}
-				
-				if (newSubRows != null) {
-					getViewPainted().triggerListenerRowAdded(newSubRows);
-				}
-
 			}
 			
 			Object ds = getDataSource( true );
@@ -1192,17 +1397,20 @@ public class TableRowPainted
 				((TableRowSWTChildController)ds).setExpanded( b );
 			}
 			
-			TableViewPainted tvp = getViewPainted();
-
-			if ( triggerHeightChange ){
-			
-				tvp.tableMutated();
-			}
-			
-			if (isVisible()) {
-
-				tvp.visibleRowsChanged();
-				tvp.redrawTable();
+			if ( !isFake ){
+				
+				TableViewPainted tvp = getViewPainted();
+	
+				if ( triggerHeightChange ){
+				
+					tvp.tableMutated();
+				}
+				
+				if (isVisible()) {
+	
+					tvp.visibleRowsChanged();
+					tvp.redrawTable();
+				}
 			}
 		}
 	}
@@ -1220,37 +1428,17 @@ public class TableRowPainted
 		}
 	}
 
-	/* (non-Javadoc)
-	 * @see com.biglybt.ui.swt.views.table.impl.TableRowSWTBase#setForeground(org.eclipse.swt.graphics.Color)
-	 */
-	@Override
-	public boolean setForeground(Color color) {
-		if (isRowDisposed()) {
-			return false;
-		}
-		if (color == colorFG || (color != null && color.equals(colorFG))
-				|| (colorFG != null && colorFG.equals(color))) {
-			return false;
-		}
-
-		colorFG = color;
-		//delays redraw until after.  Could use execSWTThreadLater
-		Utils.getOffOfSWTThread(new AERunnable() {
-			@Override
-			public void runSupport() {
-				redraw(false, false);
-			}
-		});
-
-		return true;
-	}
-
 
 	@Override
 	public Color getForeground() {
 		if ( colorFG != null ){
 			
 			return( colorFG );
+		}
+		
+		if ( FGRequesters == null ){
+			
+			return( null );
 		}
 		
 		List<Object[]> list = FGRequesters.getList();
@@ -1267,6 +1455,11 @@ public class TableRowPainted
 	public Color 
 	getBackground() 
 	{
+		if ( BGRequesters == null ){
+			
+			return( null );
+		}
+
 		List<Object[]> list = BGRequesters.getList();
 		
 		if ( !list.isEmpty()){
@@ -1283,6 +1476,14 @@ public class TableRowPainted
 		ColorRequester 	requester,
 		Color			color )
 	{
+		synchronized( colorLock ){
+			
+			if ( FGRequesters == null ){
+				
+				FGRequesters = new CopyOnWriteList<>(1);
+			}
+		}
+		
 		requestColor( FGRequesters, requester, color );
 	}
 	
@@ -1292,6 +1493,14 @@ public class TableRowPainted
 		ColorRequester	requester,
 		Color			color )
 	{
+		synchronized( colorLock ){
+			
+			if ( BGRequesters == null ){
+				
+				BGRequesters = new CopyOnWriteList<>(1);
+			}
+		}
+		
 		requestColor( BGRequesters, requester, color );
 	}
 	
@@ -1400,7 +1609,30 @@ public class TableRowPainted
 	@Override
 	public boolean setHeight(int newHeight) {
 		TableRowCore parentRowCore = getParentRowCore();
-		boolean trigger = parentRowCore == null || parentRowCore.isExpanded();
+		boolean trigger;
+		
+		if ( parentRowCore == null ){
+			trigger = true;
+			
+		}else{
+			boolean expanded = parentRowCore.isExpanded();
+			
+			while( expanded ){
+				
+				parentRowCore = parentRowCore.getParentRowCore();
+				
+				if ( parentRowCore == null ){
+					
+					break;
+					
+				}else{
+					
+					expanded = parentRowCore.isExpanded();
+				}
+			}
+			
+			trigger = expanded;
+		}
 
 		return setHeight(newHeight, trigger);
 	}
@@ -1419,6 +1651,11 @@ public class TableRowPainted
 		}
 
 		return true;
+	}
+
+	@Override
+	public int getLineHeight() {
+		return getViewPainted().getLineHeight();
 	}
 
 	@Override
@@ -1445,6 +1682,14 @@ public class TableRowPainted
 	}
 
 	@Override
+	public TableCell 
+	getTableCell(
+		TableColumn column)
+	{
+		return( getTableCell( column.getName()));
+	}
+	
+	@Override
 	public TableCellSWT getTableCellSWT(String name) {
 		TableCellCore cell = getTableCellCore(name);
 		return (cell instanceof TableCellSWT) ? (TableCellSWT) cell : null;
@@ -1466,7 +1711,7 @@ public class TableRowPainted
 	public void setSortColumn(String... columnIDs) {
 		synchronized (lock) {
 
-			List<TableCellCore> list = new ArrayList<>();
+			List<TableCellSWTBase> list = new ArrayList<>();
 
 			if (mTableCells == null) {
 				if (sortCells != null) {
@@ -1477,6 +1722,8 @@ public class TableRowPainted
 					}
 				}
 
+				TableViewPainted table = getViewPainted();
+
 				for (String columnID : columnIDs) {
 					TableColumnCore sortColumn = (TableColumnCore) getView().getTableColumn(
 							columnID);
@@ -1485,20 +1732,20 @@ public class TableRowPainted
 					}
 					if (getParentRowCore() == null || sortColumn.handlesDataSourceType(
 							getDataSource(false).getClass())) {
-						list.add(new TableCellPainted(TableRowPainted.this, sortColumn,
+						list.add(new TableCellPainted(TableRowPainted.this, table.getColumnPainted( sortColumn ),
 								sortColumn.getPosition()));
 					}
 				}
 			} else {
 				for (String columnID : columnIDs) {
-					TableCellCore cell = mTableCells.get(columnID);
+					TableCellSWTBase cell = mTableCells.get(columnID);
 					if (cell != null) {
 						list.add(cell);
 					}
 				}
 			}
 
-			sortCells = list.toArray(new TableCellCore[0]);
+			sortCells = list.toArray(new TableCellSWTBase[0]);
 		}
 		
 		synchronized (subRows_sync) {
@@ -1514,7 +1761,10 @@ public class TableRowPainted
 	}
 	
 	@Override
-	public boolean sortSubRows(TableColumnCore col){
+	public boolean 
+	sortSubRows(
+		List<TableColumnCore> cols)
+	{
 		synchronized (subRows_sync) {
 			if ( subRows == null ){
 				return( false );
@@ -1531,16 +1781,21 @@ public class TableRowPainted
 					
 					if ( prev != null ){
 					
-						if ( col.compare( prev,  r ) > 0 ){
+						for ( TableColumnCore col: cols ){
 							
-							sorted = false;
+							if ( col.compare( prev,  r ) > 0 ){
+								
+								sorted = false;
+								
+								break;
+							}
 						}
 					}
 					
 					prev = r;
 				}
 				
-				if ( r.sortSubRows(col)){
+				if ( r.sortSubRows(cols)){
 					
 					changed = true;
 				}
@@ -1548,7 +1803,24 @@ public class TableRowPainted
 			
 			if ( !sorted ){
 			
-				Arrays.sort( subRows, col );
+				if ( cols.size() == 1 ){
+				
+					Arrays.sort( subRows, cols.get(0));
+					
+				}else{
+					
+					Arrays.sort(
+						subRows,
+						(o1, o2) -> {
+							for (TableColumnCore sortColumn : cols) {
+								int compare = sortColumn.compare(o1, o2);
+								if (compare != 0) {
+									return compare;
+								}
+							}
+							return 0;
+						});
+				}		
 				
 				for ( int i=0; i<subRows.length;i++){
 					subRows[i].setTableItem(i);

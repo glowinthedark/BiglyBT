@@ -27,7 +27,9 @@ import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.CoreOperation;
 import com.biglybt.core.CoreOperationTask;
-import com.biglybt.core.CoreOperationTask.ProgressCallback;
+import com.biglybt.core.CoreOperationTask.ProgressCallbackAdapter;
+import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.util.AERunnable;
@@ -44,7 +46,15 @@ DiskManagerAllocationScheduler
 	
 	private final List<AllocationInstance>	instances		= new ArrayList<>();
 
-
+	private static boolean alloc_smallest_first;
+	
+	static{
+		COConfigurationManager.addAndFireParameterListener(
+			ConfigKeys.File.BCFG_DISKMANAGER_ALLOC_SMALLESTFIRST, (n)->{
+				alloc_smallest_first = COConfigurationManager.getBooleanParameter(n);
+			});
+	}
+	
 	public AllocationInstance
 	register(
 		DiskManagerHelper	helper )
@@ -158,6 +168,7 @@ DiskManagerAllocationScheduler
 			CoreOperationTask task =
 				new CoreOperationTask()
 				{
+					@Override
 					public String
 					getName()
 					{
@@ -171,15 +182,24 @@ DiskManagerAllocationScheduler
 						return( helper.getDownload());
 					}
 					
+					@Override
 					public ProgressCallback
 					getProgressCallback()
 					{
 						return( progress );
 					}
+					
+					@Override
+					public boolean 
+					runOperation(
+						CoreOperation operation)
+					{
+						return( true );
+					}
 				};
 				
 			operation = 
-				new CoreOperation()
+				new CoreOperation.CoreOperationAdapter()
 				{
 					public int
 					getOperationType()
@@ -250,8 +270,15 @@ DiskManagerAllocationScheduler
 			extends CoreOperationTask.ProgressCallbackAdapter
 		{
 			final DownloadManager dm = helper.getDownload();
-
+			
 			boolean	cancelled;
+			
+			Callback()
+			{
+				super( 
+					alloc_smallest_first?ProgressCallbackAdapter.SORT_SIZE:ProgressCallbackAdapter.SORT_EXPLICIT_ORDER,
+					helper.getDownload().getDownloadState().getLongAttribute( DownloadManagerState.AT_FILE_ALLOC_ORDER ));	
+			}
 			
 			@Override
 			public int 

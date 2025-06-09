@@ -58,6 +58,7 @@ import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.pif.UISWTViewEventListener;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.pifimpl.UISWTViewImpl;
+import com.biglybt.ui.swt.shells.PopOutManager;
 import com.biglybt.ui.swt.skin.SWTSkinObject;
 import com.biglybt.ui.swt.skin.SWTSkinObjectContainer;
 import com.biglybt.ui.swt.skin.SWTSkinObjectTextbox;
@@ -141,31 +142,27 @@ public class SBC_LibraryTableView
 				"library-filter", soParent.getParent());
 		BubbleTextBox txtFilter = soFilter == null ? null : soFilter.getBubbleTextBox();
 
-		SWTSkinObjectContainer soCats = (SWTSkinObjectContainer) skin.getSkinObject(
-				"library-categories", soParent.getParent());
-		Composite cCats = soCats == null ? null : soCats.getComposite();
-
 		if (useBigTable) {
 			if (torrentFilterMode == SBC_LibraryView.TORRENTS_COMPLETE
 					|| torrentFilterMode == SBC_LibraryView.TORRENTS_INCOMPLETE
 					|| torrentFilterMode == SBC_LibraryView.TORRENTS_UNOPENED) {
 
-				swtViewListener = torrentView = new MyTorrentsView_Big(core, torrentFilterMode, initialDataSource, getColumnsSupport(), txtFilter, cCats);
+				swtViewListener = torrentView = new MyTorrentsView_Big(core, torrentFilterMode, initialDataSource, getColumnsSupport(), txtFilter);
 
 			} else {
-				swtViewListener = torrentView = new MyTorrentsView_Big(core, torrentFilterMode, initialDataSource, getColumnsSupport(), txtFilter, cCats);
+				swtViewListener = torrentView = new MyTorrentsView_Big(core, torrentFilterMode, initialDataSource, getColumnsSupport(), txtFilter);
 			}
 
 		} else {
 			String tableID = SB_Transfers.getTableIdFromFilterMode(	torrentFilterMode, false, initialDataSource );
 			if (torrentFilterMode == SBC_LibraryView.TORRENTS_COMPLETE) {
-				swtViewListener = torrentView = new MyTorrentsView(core, tableID, true, getColumnsSupport(), txtFilter, cCats,true);
+				swtViewListener = torrentView = new MyTorrentsView(core, tableID, true, getColumnsSupport(), txtFilter, true);
 
 			} else if (torrentFilterMode == SBC_LibraryView.TORRENTS_INCOMPLETE) {
-				swtViewListener = torrentView = new MyTorrentsView(core, tableID, false, getColumnsSupport(), txtFilter, cCats,true);
+				swtViewListener = torrentView = new MyTorrentsView(core, tableID, false, getColumnsSupport(), txtFilter, true);
 
 			} else if (torrentFilterMode == SBC_LibraryView.TORRENTS_UNOPENED) {
-				swtViewListener = torrentView = new MyTorrentsView(core, tableID, true, getColumnsSupport(), txtFilter,	cCats, true){
+				swtViewListener = torrentView = new MyTorrentsView(core, tableID, true, getColumnsSupport(), txtFilter,	 true){
 					@Override
 					public boolean isOurDownloadManager(DownloadManager dm) {
 						if (PlatformTorrentUtils.getHasBeenOpened(dm)) {
@@ -177,10 +174,10 @@ public class SBC_LibraryTableView
 			} else {
 				if ( Utils.getBaseViewID( tableID ).equals( TableManager.TABLE_MYTORRENTS_ALL_SMALL )){
 					
-					swtViewListener = torrentView = new MyTorrentsView_Small( core, torrentFilterMode, initialDataSource, getColumnsSupport(), txtFilter, cCats );
+					swtViewListener = torrentView = new MyTorrentsView_Small( core, torrentFilterMode, initialDataSource, getColumnsSupport(), txtFilter );
 					
 				}else{
-					swtViewListener = new MyTorrentsSuperView(txtFilter, cCats, initialDataSource ) {
+					swtViewListener = new MyTorrentsSuperView(txtFilter, initialDataSource ) {
 						@Override
 						public void initializeDone() {
 							MyTorrentsView seedingview = getSeedingview();
@@ -245,15 +242,6 @@ public class SBC_LibraryTableView
 		viewComposite.setLayout(gridLayout);
 
 		view.initialize(viewComposite);
-
-
-		SWTSkinObject soSizeSlider = skin.getSkinObject("table-size-slider", soParent.getParent());
-		if (soSizeSlider instanceof SWTSkinObjectContainer) {
-			SWTSkinObjectContainer so = (SWTSkinObjectContainer) soSizeSlider;
-			if (tv != null && !tv.enableSizeSlider(so.getComposite(), 16, 100)) {
-				so.setVisible(false);
-			}
-		}
 
 
 		if (torrentFilterMode == SBC_LibraryView.TORRENTS_ALL
@@ -354,7 +342,7 @@ public class SBC_LibraryTableView
 				ManagerUtils.open(dm, openMode);
 				return;
 			}
-		}else if (mode.equals("3") || mode.equals("4")){
+		}else if (mode.equals("3") || mode.equals("4") || mode.equals( "7" )){
 
 			// Launch
 			DiskManagerFileInfo file = DataSourceUtils.getFileInfo(ds);
@@ -371,7 +359,19 @@ public class SBC_LibraryTableView
 			}
 			DownloadManager dm = DataSourceUtils.getDM(ds);
 			if (dm != null) {
+				if ( mode.equals( "7" )){
+					DiskManagerFileInfo best = PlayUtils.getBestPlayableFile( dm );
+					
+					if ( best != null ){
+						
+						TorrentUtil.runDataSources(new Object[]{ best });
+						
+						return;
+					}
+				}
+					
 				TorrentUtil.runDataSources(new Object[]{ dm });
+				
 				return;
 			}
 		}else if (mode.equals("5")) {
@@ -383,6 +383,16 @@ public class SBC_LibraryTableView
 			DownloadManager dm = DataSourceUtils.getDM(ds);
 			if (dm != null) {
 				ManagerUtils.browse( dm );
+				return;
+			}
+		}else if (mode.equals("6")) {
+
+				// pop out detailed view
+	
+			if ( UIFunctionsManager.getUIFunctions().getMDI().popoutEntryByID( 
+					MultipleDocumentInterface.SIDEBAR_SECTION_TORRENT_DETAILS, 
+					ds, PopOutManager.OPT_MAP_ON_TOP)){
+	
 				return;
 			}
 		}

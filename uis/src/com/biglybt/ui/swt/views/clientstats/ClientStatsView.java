@@ -52,7 +52,6 @@ import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.mainwindow.ClipboardCopy;
-import com.biglybt.ui.swt.utils.FontUtils;
 import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
 import com.biglybt.ui.swt.views.table.impl.TableViewTab;
@@ -350,9 +349,6 @@ public class ClientStatsView
 			
 		
 		BubbleTextBox bubbleTextBox = new BubbleTextBox(cTop, SWT.BORDER | SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL | SWT.SINGLE);
-		Text bubbleTextWidget = bubbleTextBox.getTextWidget();
-		bubbleTextWidget.setMessage(MessageText.getString("Button.search") + "..." );
-		FontUtils.fontToWidgetHeight(bubbleTextWidget);
 
 		FormData fd = new FormData();
 		btnCopy.setLayoutData( fd );
@@ -364,8 +360,10 @@ public class ClientStatsView
 		
 		fd = Utils.getFilledFormData();
 		fd.width = 150;
+		fd.top = null;
 		fd.left = null;
-		bubbleTextBox.getMainWidget().setLayoutData(fd);
+
+		bubbleTextBox.setMessageAndLayout(MessageText.getString("Button.search") + "..." , fd);
 		
 		tv.enableFilterCheck(bubbleTextBox, this, true );
 
@@ -389,7 +387,7 @@ public class ClientStatsView
 	@Override
 	public TableViewSWT<ClientStatsDataSource> initYourTableView() {
 		tv = TableViewFactory.createTableViewSWT(ClientStatsDataSource.class,
-				TABLEID, getPropertiesPrefix(), new TableColumnCore[0],
+				TABLEID, getTextPrefixID(), new TableColumnCore[0],
 				ColumnCS_Count.COLUMN_ID, SWT.MULTI | SWT.FULL_SELECTION | SWT.VIRTUAL);
 		/*
 				tv.addTableDataSourceChangedListener(this, true);
@@ -571,13 +569,17 @@ public class ClientStatsView
 	@Override
 	public boolean
 	filterCheck(
-		ClientStatsDataSource ds, String filter, boolean regex )
+		ClientStatsDataSource ds, String filter, boolean regex, boolean confusable )
 	{
-
+		if ( confusable ){
+			
+			return( false );
+		}
+		
 		try {			
 			String name = ds.client;
 
-			String s = regex ? filter : "\\Q" + filter.replaceAll("[|;]", "\\\\E|\\\\Q") + "\\E";
+			String s = regex ? filter : RegExUtil.splitAndQuote( filter, "\\s*[|;]\\s*" );
 
 			boolean	match_result = true;
 
@@ -945,6 +947,9 @@ public class ClientStatsView
 			if (s.startsWith("HTTP Seed")) {
 				return "HTTP Seed";
 			}
+		}
+		if ( s.startsWith( "Unknown [" ) && s.length() >= 11){
+			s = s.substring( 0,11 )+ "]";
 		}
 		return s.replaceAll(" v?[0-9._]+", "");
 	}

@@ -35,6 +35,8 @@ import org.eclipse.swt.widgets.*;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.download.DownloadManager;
+import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.util.GeneralUtils;
 import com.biglybt.core.util.RegExUtil;
 import com.biglybt.pifimpl.local.PluginCoreUtils;
 import com.biglybt.pifimpl.local.PluginInitializer;
@@ -48,6 +50,7 @@ import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.TorrentUtil;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.columns.archivedls.*;
+import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.skin.SWTSkinObject;
 import com.biglybt.ui.swt.skin.SWTSkinObjectTextbox;
@@ -331,14 +334,17 @@ public class SBC_ArchivedDownloadsView
 			SWTSkinObjectTextbox soFilter = (SWTSkinObjectTextbox) getSkinObject(
 				"filterbox");
 			if (soFilter != null) {
-				tv.enableFilterCheck(soFilter.getBubbleTextBox(), this);
+				
+				BubbleTextBox filter = soFilter.getBubbleTextBox();
+				
+				tv.enableFilterCheck(filter, this);
+				
+				filter.setMessage( MessageText.getString( "Button.search2" ) );
 			}
 
 			tv.setRowDefaultHeightEM(1);
 
-			table_parent = new Composite(control, SWT.BORDER);
-
-			table_parent.setLayoutData(Utils.getFilledFormData());
+			table_parent = Utils.createSkinnedComposite(control, SWT.BORDER, Utils.getFilledFormData());
 
 			GridLayout layout = new GridLayout();
 
@@ -741,27 +747,45 @@ public class SBC_ArchivedDownloadsView
 	filterCheck(
 		DownloadStub 	ds,
 		String 			filter,
-		boolean 		regex)
+		boolean 		regex,
+		boolean			confusable )
 	{
-		if ( filter.toLowerCase( Locale.US ).startsWith( "f:" )){
+		if ( confusable ){
+		
+			filter = GeneralUtils.getConfusableEquivalent(filter,true);
+		}
+		
+		boolean do_files = filter.toLowerCase( Locale.US ).startsWith( "f:" );
+		
+		if ( do_files ){
 
 			filter = filter.substring(2).trim();
+		}
+		
+		boolean	match_result = true;
 
-			DownloadStubFile[] files = ds.getStubFiles();
-
-			String s = regex ? filter : "\\Q" + filter.replaceAll("\\s*[|;]\\s*", "\\\\E|\\\\Q") + "\\E";
-
-			boolean	match_result = true;
-
-			if ( regex && s.startsWith( "!" )){
-
-				s = s.substring(1);
+		String expr;
+		
+		if ( regex ){
+			
+			expr = filter;
+			
+			if ( expr.startsWith( "!" )){
+				
+				expr = expr.substring(1);
 
 				match_result = false;
 			}
+		}else{
+			
+			expr = RegExUtil.convertAndOrToExpr( filter );
+		}
 
-			Pattern pattern = RegExUtil.getCachedPattern( "archiveview:search", s, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
+		if ( do_files ){
 
+			DownloadStubFile[] files = ds.getStubFiles();
+
+			Pattern pattern = RegExUtil.getCachedPattern( "archiveview:search", expr, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
 
 			boolean result = !match_result;
 
@@ -771,6 +795,11 @@ public class SBC_ArchivedDownloadsView
 
 				String name = file.getFile().getName();
 
+				if ( confusable ){
+				
+					name = GeneralUtils.getConfusableEquivalent( name, false );
+				}
+				
 				if ( pattern.matcher( name ).find()){
 
 					result = match_result;
@@ -795,18 +824,12 @@ public class SBC_ArchivedDownloadsView
 
 			String name = ds.getName();
 
-			String s = regex ? filter : "\\Q" + filter.replaceAll("\\s*[|;]\\s*", "\\\\E|\\\\Q") + "\\E";
-
-			boolean	match_result = true;
-
-			if ( regex && s.startsWith( "!" )){
-
-				s = s.substring(1);
-
-				match_result = false;
+			if ( confusable ){
+			
+				name = GeneralUtils.getConfusableEquivalent( name, false );
 			}
-
-			Pattern pattern = RegExUtil.getCachedPattern( "archiveview:search", s, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
+			
+			Pattern pattern = RegExUtil.getCachedPattern( "archiveview:search", expr, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
 
 			return( pattern.matcher(name).find() == match_result );
 		}

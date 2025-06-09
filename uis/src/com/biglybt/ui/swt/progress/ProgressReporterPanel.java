@@ -30,10 +30,11 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
+
+import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.Constants;
-import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.FrequencyLimitedDispatcher;
 import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.twistie.ITwistieListener;
@@ -51,7 +52,8 @@ public class ProgressReporterPanel
 	extends Composite
 	implements IProgressReportConstants, IProgressReporterListener
 {
-
+	private final ProgressReporterWindow		window;
+	
 	private Color normalColor = null;
 
 	private Color errorColor = null;
@@ -121,18 +123,19 @@ public class ProgressReporterPanel
 	 * @param reporter the <code>IProgressReporter</code> to host
 	 * @param style one of the style bits listed above
 	 */
-	public ProgressReporterPanel(Composite parent, IProgressReporter reporter,
+	public ProgressReporterPanel(ProgressReporterWindow _window, Composite parent, IProgressReporter reporter,
 			int style) {
-		super(parent, ((style & BORDER) != 0 ? SWT.BORDER : SWT.NONE));
+		super(parent, ((style & BORDER) != 0 ? Utils.isDarkAppearanceNativeWindows()?SWT.NONE:SWT.BORDER : SWT.NONE));
 
 		if (null == reporter) {
 			throw new NullPointerException("IProgressReporter can not be null");//KN: should use resource?
 		}
 
+		this.window = _window;
 		this.pReporter = reporter;
 		this.style = style;
 
-		normalColor = Colors.blue;
+		normalColor = Utils.isDarkAppearanceNative()?Colors.blues[Colors.BLUES_DARKEST]:Colors.blue;
 		errorColor = Colors.colorError;
 
 		/*
@@ -344,7 +347,7 @@ public class ProgressReporterPanel
 	 * Below the panel, taking up the entire width of the window, is the detail section
 	 */
 	private void createDetailSection(IProgressReport pReport) {
-		Label separator = new Label(this, SWT.SEPARATOR | SWT.HORIZONTAL);
+		Control separator = Utils.createSkinnedLabelSeparator(this, SWT.HORIZONTAL);
 		separator.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
 
 		detailSection = new TwistieSection(this, TwistieLabel.NONE);
@@ -360,10 +363,52 @@ public class ProgressReporterPanel
 		sectionContent.setLayout(sectionLayout);
 		detailSection.setEnabled(false);
 
-		detailListWidget = new StyledText(sectionContent, SWT.BORDER | SWT.V_SCROLL
-				| SWT.WRAP);
+		if (( window.getStyle() & ProgressReporterWindow.STANDALONE ) != 0 ){
+		
+			if ( COConfigurationManager.getBooleanParameter( "com.biglybt.ui.swt.progress.details.expanded", false )){
+			
+				detailSection.setCollapsed( false );
+			}
+		}
+		
+		detailListWidget = new StyledText(sectionContent, SWT.BORDER | SWT.V_SCROLL | SWT.WRAP);
 		detailListWidget.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
+		detailListWidget.setEditable( false );
+		
+		detailListWidget.setIndent(4);
+		
+		detailListWidget.addListener(SWT.KeyDown, event -> {
+			int key = event.character;
+
+			if (key <= 26 && key > 0) {
+
+				key += 'a' - 1;
+			}
+
+			if (key == 'a' && event.stateMask == SWT.MOD1) {
+
+				event.doit = false;
+
+				detailListWidget.selectAll();
+			}
+		});
+		
+		if ( Utils.isDarkAppearanceNativeWindows()){
+			
+			// removed SWT.BORDER for this as pain in the arse to fix up the code, grr
+			
+			Control sep = 
+				Utils.createSkinnedLabelSeparator( 
+					this, 
+					SWT.HORIZONTAL,
+					Colors.getSystemColor(detailListWidget.getDisplay(), SWT.COLOR_WIDGET_LIGHT_SHADOW ));
+			
+			GridData setGD = new GridData( GridData.FILL_HORIZONTAL);
+			setGD.horizontalSpan = 2;
+			sep.setLayoutData(setGD);
+		}
+		
 		/*
 		 * Add a default message instead of an empty box if there is no history;
 		 * remove this later when a real detail message arrive
@@ -389,8 +434,14 @@ public class ProgressReporterPanel
 		detailSection.addTwistieListener(new ITwistieListener() {
 			@Override
 			public void isCollapsed(boolean value) {
+				
+				if (( window.getStyle() & ProgressReporterWindow.STANDALONE ) != 0 ){
+					
+					COConfigurationManager.setParameter( "com.biglybt.ui.swt.progress.details.expanded", !value );
+				}
+				
 				resizeDetailSection();
-				layout(true, true);
+				getParent().layout(true, true);
 			}
 
 		});

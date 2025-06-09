@@ -39,6 +39,7 @@ import com.biglybt.core.tracker.server.TRTrackerServerTorrentStats;
 import com.biglybt.core.util.AEMonitor;
 import com.biglybt.core.util.Average;
 import com.biglybt.core.util.Debug;
+import com.biglybt.core.util.SystemTime;
 
 public class
 TRHostTorrentHostImpl
@@ -275,6 +276,34 @@ TRHostTorrentHostImpl
 		return( passive );
 	}
 
+	@Override
+	public boolean
+	isExternal()
+	{
+		return( torrent instanceof TRHostExternalTorrent );
+	}
+	
+	protected boolean
+	isDead(
+		long	now )
+	{
+		TRTrackerServerTorrentStats stats = getStats();
+		
+		if ( stats != null && ( now - date_added > 5*60*1000 )){
+			
+			if (	stats.getSeedCount() == 0 &&
+					stats.getLeecherCount() == 0 &&
+					stats.getCompletedCount() == 0  &&
+					stats.getUploaded() == 0  &&
+					stats.getDownloaded() == 0 ){
+				
+				return( true );
+			}
+		}
+		
+		return( false );
+	}
+	
 	@Override
 	public void
 	setPassive(

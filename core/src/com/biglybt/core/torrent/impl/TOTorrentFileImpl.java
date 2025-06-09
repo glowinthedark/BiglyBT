@@ -27,7 +27,6 @@ import java.util.*;
 import com.biglybt.core.internat.LocaleTorrentUtil;
 import com.biglybt.core.internat.LocaleUtil;
 import com.biglybt.core.internat.LocaleUtilDecoder;
-import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentException;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.*;
@@ -36,10 +35,16 @@ public class
 TOTorrentFileImpl
 	implements TOTorrentFile
 {
+	private static final byte FLAG_BEP47_PAD			= 0x01;
+	private static final byte FLAG_OTHER_PAD			= 0x02;
+	private static final byte FLAG_OTHER_PAD_CHECKED	= 0x04;
+	
 	private final TOTorrentImpl	torrent;
 	
 	private final int		index;
 	private final long		file_length;
+	private final long		offset_in_torrent;
+	
 	private final byte[][]	path_components;
 	private final byte[][]	path_components_utf8;
 
@@ -50,9 +55,9 @@ TOTorrentFileImpl
 
 	private final boolean	is_utf8;
 
-	private boolean		attr_pad_file;
+	private byte			flags;
 
-	private final TOTorrentFileHashTreeImpl	hash_tree;
+	private TOTorrentFileHashTreeImpl	hash_tree;
 	private byte[]	root_hash;
 	
 	
@@ -66,9 +71,10 @@ TOTorrentFileImpl
 
 		throws TOTorrentException
 	{
-		torrent			= _torrent;
-		index			= _index;
-		file_length		= _len;
+		torrent				= _torrent;
+		index				= _index;
+		file_length			= _len;
+		offset_in_torrent	= _torrent_offset;
 
 		first_piece_number 	= (int)( _torrent_offset / torrent.getPieceLength());
 		last_piece_number	= (int)(( _torrent_offset + file_length - 1 ) /  torrent.getPieceLength());
@@ -120,6 +126,8 @@ TOTorrentFileImpl
 		torrent				= _torrent;
 		index				= _index;
 		file_length			= _len;
+		offset_in_torrent	= _torrent_offset;
+		
 		path_components		= _path_components;
 		path_components_utf8 = null;
 
@@ -162,6 +170,8 @@ TOTorrentFileImpl
 		torrent				= _torrent;
 		index				= _index;
 		file_length			= _len;
+		offset_in_torrent	= _torrent_offset;
+		
 		path_components		= _path_components;
 		path_components_utf8 = _path_components_utf8;
 
@@ -196,8 +206,10 @@ TOTorrentFileImpl
 					throw (new TOTorrentException("Torrent file contains illegal '..' component", TOTorrentException.RT_DECODE_FAILS));
 
 				// intern directories as they're likely to repeat
-				if(i < (pc.length - 1))
-					pc[i] = StringInterner.internBytes(pc[i]);
+				// parg - removed this, costly and simpler to do on a per-torrent file basis when
+				// decoding the file components
+				//if(i < (pc.length - 1))
+				//	pc[i] = StringInterner.internBytes(pc[i]);
 			}
 		}
 	}
@@ -223,6 +235,13 @@ TOTorrentFileImpl
 		return( file_length );
 	}
 
+	@Override
+	public long 
+	getOffsetInTorrent()
+	{
+		return( offset_in_torrent );
+	}
+	
 	public byte[][]
 	getPathComponentsBasic()
 	{
@@ -265,7 +284,10 @@ TOTorrentFileImpl
 			
 			String attr_str = new String((byte[])value, Constants.UTF_8 );
 			
-			attr_pad_file = attr_str.contains( "p" );
+			if ( attr_str.contains( "p" )){
+				
+				flags |= FLAG_BEP47_PAD;
+			}
 		}			
 	}
 
@@ -280,7 +302,7 @@ TOTorrentFileImpl
 	public byte[]
 	getRootHash()
 	{
-		if ( root_hash == null && !attr_pad_file ){
+		if ( root_hash == null && ( flags & FLAG_BEP47_PAD ) == 0 ){
 			
 			torrent.fixupRootHashes();
 		}
@@ -290,9 +312,11 @@ TOTorrentFileImpl
 	
 	protected void
 	setRootHash(
-		byte[]		h )
+		byte[]		_root_hash )
 	{
-		root_hash	= h;
+		root_hash	= _root_hash;
+		
+		hash_tree	= new TOTorrentFileHashTreeImpl( this, root_hash );
 	}
 	
 	@Override
@@ -326,12 +350,84 @@ TOTorrentFileImpl
 	@Override
 	public boolean 
 	isPadFile()
-	{
-		return( attr_pad_file );
+	{		
+		if (( flags & FLAG_BEP47_PAD ) != 0 ){
+			
+			return( true );
+		}
+		
+		if (( flags & FLAG_OTHER_PAD_CHECKED ) == 0 ){
+
+			byte[][] comps = path_components_utf8 == null ? path_components : path_components_utf8;
+			
+			byte[] last = comps[ comps.length-1];
+	
+				// "_____padding_file_0_" etc
+
+			byte	other_pad = 0;
+			
+			if ( last.length > 20 ){
+				
+				if ( 	last[0]  == '_' &&
+						last[1]  == '_' &&
+						last[2]  == '_' &&
+						last[3]  == '_' &&
+						last[4]  == '_' &&
+						last[5]  == 'p' &&
+						last[6]  == 'a' &&
+						last[7]  == 'd' &&
+						last[8]  == 'd' &&
+						last[9]  == 'i' &&
+						last[10] == 'n' &&
+						last[11] == 'g' &&
+						last[12] == '_' &&
+						last[13] == 'f' &&
+						last[14] == 'i' &&
+						last[15] == 'l' &&
+						last[16] == 'e' &&
+						last[17] == '_' ){
+						
+					int pos = 18;
+											
+					while( pos < last.length ){
+						
+						byte c = last[pos];
+						
+						if ( c < '0' || c > '9' ){
+							
+							break;
+							
+						}else{
+							
+							pos++;
+						}
+					}
+						
+					if ( pos > 18 && pos < last.length && last[pos] == '_' ){
+						
+						other_pad = FLAG_OTHER_PAD;
+					}
+				}
+			}
+			
+			flags |= ( FLAG_OTHER_PAD_CHECKED | other_pad );
+		}
+		
+		return( ( flags & FLAG_OTHER_PAD ) != 0 );
 	}
 	
 	@Override
-	public String getRelativePath() {
+	public String 
+	getRelativePath()
+	{
+		return( getRelativePath( null ));
+	}
+	
+	@Override
+	public String 
+	getRelativePath( 
+		LocaleUtilDecoder	decoder )
+	{
 		if (torrent == null) {
 			return "";
 		}
@@ -372,15 +468,20 @@ TOTorrentFileImpl
 			return sRelativePathSB==null?"":sRelativePathSB.toString();
 		}
 
-		LocaleUtilDecoder decoder = null;
-		try {
-			decoder = LocaleTorrentUtil.getTorrentEncodingIfAvailable(torrent);
-			if (decoder == null) {
-				LocaleUtil localeUtil = LocaleUtil.getSingleton();
-				decoder = localeUtil.getSystemDecoder();
+		if ( decoder == null ){
+			
+			try{
+				decoder = LocaleTorrentUtil.getTorrentEncodingIfAvailable(torrent);
+				
+				if (decoder == null) {
+					
+					LocaleUtil localeUtil = LocaleUtil.getSingleton();
+					
+					decoder = localeUtil.getSystemDecoder();
+				}
+			} catch (Exception e) {
+				// Do Nothing
 			}
-		} catch (Exception e) {
-			// Do Nothing
 		}
 
 		if (decoder != null) {

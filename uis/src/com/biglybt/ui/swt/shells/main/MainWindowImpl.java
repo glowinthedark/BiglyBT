@@ -22,13 +22,10 @@ import java.util.List;
 import java.util.*;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.dnd.Clipboard;
-import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.events.*;
 import org.eclipse.swt.graphics.*;
+import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
-import org.eclipse.swt.layout.FormLayout;
-import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.*;
 
 import com.biglybt.activities.ActivitiesManager;
@@ -225,7 +222,7 @@ public class MainWindowImpl
 					Logger.log(new LogAlert(false, "Error Initialize MainWindow", e));
 				}
 
-				while (!display.isDisposed() && display.readAndDispatch());
+				Utils.readAndDispatchUntilIdle();
 			}
 		});
 	}
@@ -368,7 +365,7 @@ public class MainWindowImpl
 
 	private void processStartupDMS() {
 		// must be in a new thread because we don't want to block
-		// initilization or any other add listeners
+		// initialization or any other add listeners
 		AEThread2 thread = new AEThread2("v3.mw.dmAdded", true) {
 			@Override
 			public void run() {
@@ -613,6 +610,8 @@ public class MainWindowImpl
 						return;
 					}
 					
+					Utils.setUIVisible( false );
+					
 					if (	COConfigurationManager.getBooleanParameter("Minimize To Tray") && 
 							( 	( systemTraySWT != null && COConfigurationManager.getBooleanParameter("Enable System Tray")) || 
 								COConfigurationManager.getBooleanParameter("System Tray Disabled Override"))){						
@@ -623,6 +622,8 @@ public class MainWindowImpl
 
 				@Override
 				public void shellDeiconified(ShellEvent e) {
+					Utils.setUIVisible( true );
+					
 					if (Constants.isOSX
 							&& COConfigurationManager.getBooleanParameter("Password enabled")) {
 						shell.setVisible(false);
@@ -636,6 +637,16 @@ public class MainWindowImpl
 			Utils.getDisplay().addFilter(SWT.KeyDown, new Listener() {
 				@Override
 				public void handleEvent(Event event) {
+					if ( event.keyCode == SWT.F9 ){
+						
+						event.doit = false;
+						event.keyCode = 0;
+						event.character = '\0';
+						flipVisibility( WINDOW_ELEMENT_RIGHTBAR );
+						
+						return;
+					}
+					
 					// Another window has control, skip filter
 					Control focus_control = event.display.getFocusControl();
 					if (focus_control != null && focus_control.getShell() != shell)
@@ -731,10 +742,16 @@ public class MainWindowImpl
 				configID)) {
 				COConfigurationManager.setBooleanDefault(configID, true);
 			}
+			
 			setVisible(WINDOW_ELEMENT_TOPBAR,
 					COConfigurationManager.getBooleanParameter(configID)
 							&& COConfigurationManager.getIntParameter("User Mode") > 1);
 
+			if ( !Utils.isAZ2UI()){
+				setVisible(WINDOW_ELEMENT_RIGHTBAR,
+						COConfigurationManager.getBooleanParameter( SkinConstants.VIEWID_RIGHTBAR + ".visible" ));
+			}
+			
 			setVisible(WINDOW_ELEMENT_TOOLBAR,
 					COConfigurationManager.getBooleanParameter("IconBar.enabled"));
 
@@ -1193,6 +1210,7 @@ public class MainWindowImpl
 			}
 		}
 
+		Utils.setUIVisible( !bStartMinimize );
 
 		if (delayedCore) {
 			// max 5 seconds of dispatching.  We don't display.sleep here because
@@ -1202,10 +1220,8 @@ public class MainWindowImpl
 			if (display == null) {
 				return;
 			}
-			try {
-  			long endSWTDispatchOn = SystemTime.getOffsetTime(5000);
-				while (SystemTime.getCurrentTime() < endSWTDispatchOn
-  					&& !display.isDisposed() && display.readAndDispatch());
+			try{
+				Utils.readAndDispatchUntilIdleFor( 5000 );
 			} catch (Exception e) {
 				Debug.out(e);
 			}
@@ -1445,6 +1461,7 @@ public class MainWindowImpl
 		Utils.execSWTThread(new AERunnable() {
 			@Override
 			public void runSupport() {
+				Utils.setUIVisible( visible );
 				boolean currentlyVisible = shell.getVisible() && !shell.getMinimized();
 				if (visible && !currentlyVisible) {
 					if (COConfigurationManager.getBooleanParameter("Password enabled")) {
@@ -1455,7 +1472,7 @@ public class MainWindowImpl
 					}
 				}
 
-				if (!isReady) {
+				if (!isReady && visible) {
 					return;
 				}
 
@@ -1531,6 +1548,8 @@ public class MainWindowImpl
 				shell.getMaximized());
 		shell.setVisible(false);
 
+		Utils.setUIVisible( false );
+		
 		ShellManager.sharedManager().performForShells(
 			new Listener()
 			{
@@ -1869,6 +1888,8 @@ public class MainWindowImpl
 
 		boolean DARK_MODE = Utils.isDarkAppearanceNative();
 		
+		/* doesn't appear to be needed anymore
+		 
 		if (Utils.isGTK3 || DARK_MODE) {
 			// TextBox on GTK3/SWT and OSX/Dark will expand box to fit it's hugeness
 			// Workaround by creating a composite in a fixed height composite
@@ -1887,10 +1908,27 @@ public class MainWindowImpl
 			c2.setLayoutData(filledFormData);
 			cArea= c2;
 		}
-
-		final Text text = new Text(cArea, DARK_MODE?SWT.BORDER:SWT.NONE);
+		*/
+		
+		final Text text = new Text(cArea, (DARK_MODE && !( Utils.isGTK3 ))?SWT.BORDER:SWT.NONE);
 		text.setMessage(MessageText.getString("v3.MainWindow.search.defaultText"));
 		FormData filledFormData = Utils.getFilledFormData();
+		
+			// not great but as of Dec 2021 seems to be the best way to make things actually look ok...
+		
+		if ( Utils.isGTK3 ){	
+			if ( DARK_MODE ){
+				filledFormData.height = 20;
+			}else {
+				filledFormData.height = 19;
+				filledFormData.bottom = new FormAttachment(100,-1);
+			}
+		}else if ( Constants.isOSX && DARK_MODE ){
+			filledFormData.height = 19;
+		}else if ( Constants.isWindows && DARK_MODE ){
+			filledFormData.height = 20;
+		}
+		
 		text.setLayoutData(filledFormData);
 
 		text.setData("ObfuscateImage", new ObfuscateImage() {
@@ -2090,6 +2128,13 @@ public class MainWindowImpl
 				}
 				break;
 			}
+			case WINDOW_ELEMENT_RIGHTBAR: {
+				SWTSkinObject skinObject = skin.getSkinObject(SkinConstants.VIEWID_RIGHTBAR);
+				if (skinObject != null) {
+					return skinObject.isVisible();
+				}
+				break;
+			}
 			case WINDOW_ELEMENT_QUICK_LINKS: {
 				SWTSkinObject skinObject = skin.getSkinObject(SkinConstants.VIEWID_QUICK_LINKS);
 				if (skinObject != null) {
@@ -2103,6 +2148,10 @@ public class MainWindowImpl
 			case WINDOW_ELEMENT_MENU:
 				//TODO:
 				break;
+			case WINDOW_ELEMENT_ALL:{
+
+				return( !shell.getMinimized());
+			}
 		}
 
 		return false;
@@ -2111,38 +2160,64 @@ public class MainWindowImpl
 	@Override
 	public void setVisible(int windowElement, boolean value) {
 		switch (windowElement) {
-			case WINDOW_ELEMENT_TOOLBAR:
+			case WINDOW_ELEMENT_TOOLBAR:{
 				SWTSkinUtils.setVisibility(skin, "IconBar.enabled",
 						SkinConstants.VIEWID_TOOLBAR, value, true);
 				break;
-			case WINDOW_ELEMENT_TOPBAR:
+			}
+			case WINDOW_ELEMENT_TOPBAR:{
 
 				SWTSkinUtils.setVisibility(skin, SkinConstants.VIEWID_PLUGINBAR
 						+ ".visible", SkinConstants.VIEWID_PLUGINBAR, value, true);
 
 				break;
-			case WINDOW_ELEMENT_QUICK_LINKS:
+			}
+			case WINDOW_ELEMENT_RIGHTBAR:{
+
+				SWTSkinUtils.setVisibility(skin, SkinConstants.VIEWID_RIGHTBAR
+						+ ".visible", SkinConstants.VIEWID_RIGHTBAR, value, true);
+
+				break;
+			}
+			case WINDOW_ELEMENT_QUICK_LINKS:{
 
 				SWTSkinUtils.setVisibilityRelaxed(skin, SkinConstants.VIEWID_QUICK_LINKS
 						+ ".visible", SkinConstants.VIEWID_QUICK_LINKS, value, true);
 
 				break;
+			}
 			case WINDOW_ELEMENT_STATUSBAR:
 				//TODO:
 				break;
 			case WINDOW_ELEMENT_MENU:
 				//TODO:
 				break;
+			case WINDOW_ELEMENT_ALL:{
+				
+				if ( !shell.isDisposed()){
+					
+					shell.setMinimized( true );
+				}
+				
+				break;
+			}
 		}
 
 	}
 
+	private void
+	flipVisibility(
+		int windowElement )
+	{
+		setVisible(windowElement, !isVisible(windowElement));
+	}
+	
 	@Override
 	public Rectangle getMetrics(int windowElement) {
 		switch (windowElement) {
 			case WINDOW_ELEMENT_TOOLBAR:
 				break;
-			case WINDOW_ELEMENT_TOPBAR:
+			case WINDOW_ELEMENT_TOPBAR:{
 
 				SWTSkinObject skinObject = skin.getSkinObject(SkinConstants.VIEWID_PLUGINBAR);
 				if (skinObject != null) {
@@ -2150,6 +2225,16 @@ public class MainWindowImpl
 				}
 
 				break;
+			}
+			case WINDOW_ELEMENT_RIGHTBAR:{
+
+				SWTSkinObject skinObject = skin.getSkinObject(SkinConstants.VIEWID_RIGHTBAR);
+				if (skinObject != null) {
+					return skinObject.getControl().getBounds();
+				}
+
+				break;
+			}
 			case WINDOW_ELEMENT_QUICK_LINKS:
 				break;
 			case WINDOW_ELEMENT_STATUSBAR:
@@ -2166,6 +2251,7 @@ public class MainWindowImpl
 				r.height -= getMetrics(WINDOW_ELEMENT_TOPBAR).height;
 				r.height -= getMetrics(WINDOW_ELEMENT_TOOLBAR).height;
 				r.height -= getMetrics(WINDOW_ELEMENT_STATUSBAR).height;
+				r.width  -= getMetrics(WINDOW_ELEMENT_RIGHTBAR).width;
 				return r;
 
 		}

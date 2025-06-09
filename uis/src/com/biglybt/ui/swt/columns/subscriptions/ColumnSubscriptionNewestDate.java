@@ -20,7 +20,6 @@ package com.biglybt.ui.swt.columns.subscriptions;
 
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.subs.Subscription;
-import com.biglybt.core.subs.SubscriptionResult;
 import com.biglybt.core.util.DisplayFormatters;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.ui.swt.views.table.utils.TableColumnCreator;
@@ -53,53 +52,28 @@ public class ColumnSubscriptionNewestDate
 	}
 
 	@Override
-	public void refresh(TableCell cell, long timestamp) {
+	public void 
+	refresh(
+		TableCell cell, 
+		long timestamp ) 
+	{
 		Subscription sub = (Subscription) cell.getDataSource();
-		if (sub == null) {
+		
+		if ( sub == null ){
+			
 			return;
 		}
 		
-		// SortVal will be: ((latest & 0x7FFFFFFFL) << 32) + (scanTime & 0xFFFFFFFFL) 
-
-		long scanTime = (sub.getHistory().getLastScanTime() / 1000) & 0xFFFFFFFFL;
-
-		if ( !cell.isSecondarySortEnabled()){
-			
-			scanTime = 0;	// remove from consideration
-		}
+		long latest = sub.getNewestUnreadResultTime();
 		
-		if (cell.isValid()) {
-			Comparable lastSortVal = cell.getSortValue();
-			if (lastSortVal instanceof Long) {
-				long lastScanTime = ((Long) lastSortVal) & 0xFFFFFFFFL;
-				if (lastScanTime == scanTime) {
-					return;
-				}
-			}
-		}
-
-		long latest = 0;
-		SubscriptionResult[] results = sub.getResults(true);
-		for (SubscriptionResult result : results) {
-			if (result.isDeleted() || result.getRead()) {
-				continue;
-			}
-			long timeFound = result.getTimeFound();
-			if (timeFound > latest) {
-				latest = timeFound;
-			}
-		}
-		
-		long sortVal = (((latest / 1000) & 0x7FFFFFFFL) << 32) + scanTime;
-
-		super.refresh(cell, latest, sortVal, null);
+		super.refresh(cell, latest, null);
 	}
 
 	@Override
 	public void cellHover(TableCell cell) {
 		Object ds = cell.getSortValue();
 		if (ds instanceof Number) {
-			long timestamp_secs = ((Number) ds).longValue() >> 32;
+			long timestamp_secs = ((Number) ds).longValue()/1000;
 
 			if ( timestamp_secs > 0 ){
 				long eta = (SystemTime.getCurrentTime() / 1000) - timestamp_secs;

@@ -20,10 +20,11 @@ package com.biglybt.ui.config;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
-import com.biglybt.core.torrent.impl.TorrentOpenOptions;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.DisplayFormatters;
+import com.biglybt.core.util.FileUtil;
 import com.biglybt.pifimpl.local.ui.config.BooleanParameterImpl;
+import com.biglybt.pifimpl.local.ui.config.InfoParameterImpl;
 import com.biglybt.pifimpl.local.ui.config.IntListParameterImpl;
 import com.biglybt.pifimpl.local.ui.config.IntParameterImpl;
 import com.biglybt.pifimpl.local.ui.config.LabelParameterImpl;
@@ -32,6 +33,8 @@ import com.biglybt.pif.ui.config.ConfigSection;
 import com.biglybt.pif.ui.config.Parameter;
 
 import static com.biglybt.core.config.ConfigKeys.File.*;
+
+import java.util.Date;
 
 public class ConfigSectionFilePerformance
 		extends ConfigSectionImpl {
@@ -77,8 +80,40 @@ public class ConfigSectionFilePerformance
 		recheck_max_active.setMinValue(0);
 		
 		add(new BooleanParameterImpl(
+				BCFG_DISKMANAGER_ALLOC_SMALLESTFIRST,
+				"ConfigView.section.file.alloc.smallestfirst"));
+		
+		add(new BooleanParameterImpl(
+				BCFG_DISKMANAGER_MOVE_SMALLESTFIRST,
+				"ConfigView.section.file.move.smallestfirst"));
+				
+		InfoParameterImpl param_fs_names = new InfoParameterImpl(null,	"label.current.file.systems", "{ " + MessageText.getString( "PeersView.state.pending" ) + "... }");
+		add( param_fs_names );	
+		
+		FileUtil.getFileStoreNames((names)->{
+			String fsStr = "";
+			
+			for ( String f: names ){
+				
+				fsStr += (fsStr.isEmpty()?"":", " ) + ( "\"" + f  + "\"" );
+			}
+			
+			param_fs_names.setValue(fsStr);
+		});
+		
+		
+		BooleanParameterImpl one_per_fs = 
+			add(new BooleanParameterImpl(
 				BCFG_DISKMANAGER_ONE_OP_PER_FS,
 				"ConfigView.section.file.one.op.per.fs"));	
+		
+		BooleanParameterImpl one_per_fs_conc_read = 
+				add(new BooleanParameterImpl(
+					BCFG_DISKMANAGER_ONE_OP_PER_FS_CONC_READ,
+					"ConfigView.section.file.one.op.per.fs.conc.read"));	
+		one_per_fs_conc_read.setIndent( 1, true );
+		
+		one_per_fs.addEnabledOnSelection(one_per_fs_conc_read);
 		
 		// diskmanager.perf.cache.enable
 

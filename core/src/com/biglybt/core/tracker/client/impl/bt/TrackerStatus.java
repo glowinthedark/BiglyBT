@@ -34,6 +34,7 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
+import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.networkmanager.impl.tcp.TCPNetworkManager;
 import com.biglybt.core.networkmanager.impl.udp.UDPNetworkManager;
 import com.biglybt.core.proxy.AEProxyFactory;
@@ -41,6 +42,7 @@ import com.biglybt.core.proxy.AEProxyFactory.PluginProxy;
 import com.biglybt.core.security.SESecurityManager;
 import com.biglybt.core.tracker.AllTrackersManager;
 import com.biglybt.core.tracker.AllTrackersManager.AllTrackers;
+import com.biglybt.core.tracker.AllTrackersManager.AllTrackersTracker;
 import com.biglybt.core.tracker.AllTrackersManager.ScrapeStats;
 import com.biglybt.core.tracker.client.TRTrackerAnnouncer;
 import com.biglybt.core.tracker.client.TRTrackerScraperClientResolver;
@@ -131,7 +133,9 @@ public class TrackerStatus {
 			});
 	}
 	
-	private final URL				tracker_url;
+	private final URL					tracker_url;
+	private final AllTrackersTracker	all_trackers_tracker;
+	
 	private boolean					az_tracker;
 	private boolean					enable_sni_hack;
 	private boolean 				internal_error_hack;
@@ -161,6 +165,8 @@ public class TrackerStatus {
 	scraper		= _scraper;
     tracker_url	= _tracker_url;
 
+    all_trackers_tracker = all_trackers.getTracker( tracker_url );
+    
     az_tracker = TRTrackerUtils.isAZTracker( tracker_url );
 
     bSingleHashScrapes	= COConfigurationManager.getBooleanParameter( "Tracker Client Scrape Single Only" );
@@ -174,38 +180,58 @@ public class TrackerStatus {
       String lc_trackerUrl = trackerUrl.toLowerCase(Locale.US);
 
       int position = trackerUrl.lastIndexOf('/');
-      if(	position >= 0 &&
-      		trackerUrl.length() >= position+9 &&
-      		trackerUrl.substring(position+1,position+9).equals("announce")) {
+      
+      List<String>	replaces = new ArrayList<>(2);
+      
+      replaces.add( "announce" );
+      
+   		// https://github.com/i2p/i2p.plugins.zzzot - accepts /a as well as /announce...
+      
+  	  if ( AENetworkClassifier.categoriseAddress( tracker_url.getHost()) == AENetworkClassifier.AT_I2P ){
+  		  
+  		replaces.add( "a" );
+  	  }
+  	  
+      for ( String rep: replaces ){
+    	  int repLen = rep.length();
+	      if(	position >= 0 &&
+	      		trackerUrl.length() >= position+repLen+1 &&
+	      		trackerUrl.substring(position+1,position+repLen+1).equals( rep )) {
+	
+	        scrapeURL = trackerUrl.substring(0,position+1) + "scrape" + trackerUrl.substring(position+repLen+1);
+	        // System.out.println( "url = " + trackerUrl + ", scrape =" + scrapeURL );
+	        
+	        break;
+	      }
+      }
 
-        this.scrapeURL = trackerUrl.substring(0,position+1) + "scrape" + trackerUrl.substring(position+9);
-        // System.out.println( "url = " + trackerUrl + ", scrape =" + scrapeURL );
-
-      }else if ( lc_trackerUrl.startsWith("udp:")){
-      		// UDP scrapes aren't based on URL rewriting, just carry on
-
-      	scrapeURL = trackerUrl;
-      }else if ( lc_trackerUrl.startsWith( "ws:" ) || lc_trackerUrl.startsWith( "wss:" )){
-
-    	  // websocket trackers
-
-    	  scrapeURL = trackerUrl;
-
-    	  bSingleHashScrapes = true;
-
-       }else if ( position >= 0 && trackerUrl.lastIndexOf('.') < position ){
-
-       		// some trackers support /scrape appended but don't have an /announce
-       		// don't do this though it the URL ends with .php (or infact .<anything>)
-
-       	scrapeURL = trackerUrl + (trackerUrl.endsWith("/")?"":"/") + "scrape";
-
-      } else {
-        if (!logged_invalid_urls.contains(trackerUrl)) {
-
-          logged_invalid_urls.add(trackerUrl);
-          // Error logging is done by the caller, since it has the hash/torrent info
-        }
+      if ( scrapeURL == null ){
+	      if ( lc_trackerUrl.startsWith("udp:")){
+	      		// UDP scrapes aren't based on URL rewriting, just carry on
+	
+	      	scrapeURL = trackerUrl;
+	      }else if ( lc_trackerUrl.startsWith( "ws:" ) || lc_trackerUrl.startsWith( "wss:" )){
+	
+	    	  // websocket trackers
+	
+	    	  scrapeURL = trackerUrl;
+	
+	    	  bSingleHashScrapes = true;
+	
+	       }else if ( position >= 0 && trackerUrl.lastIndexOf('.') < position ){
+	
+	       		// some trackers support /scrape appended but don't have an /announce
+	       		// don't do this though it the URL ends with .php (or infact .<anything>)
+	
+	       	scrapeURL = trackerUrl + (trackerUrl.endsWith("/")?"":"/") + "scrape";
+	
+	      } else {
+	        if (!logged_invalid_urls.contains(trackerUrl)) {
+	
+	          logged_invalid_urls.add(trackerUrl);
+	          // Error logging is done by the caller, since it has the hash/torrent info
+	        }
+	      }
       }
     } catch (Throwable e) {
     	Debug.printStackTrace( e );
@@ -400,8 +426,29 @@ public class TrackerStatus {
 
 			boolean original_bSingleHashScrapes = bSingleHashScrapes;
 
-			boolean disable_all_scrapes = !COConfigurationManager.getBooleanParameter("Tracker Client Scrape Enable");
-
+			boolean disable_scrapes = !COConfigurationManager.getBooleanParameter("Tracker Client Scrape Enable");
+				
+			Map<String,Object> options = all_trackers_tracker.getOptions();
+				
+			if ( options != null ){
+					
+				Number n = (Number)options.get( AllTrackersTracker.OPT_SCRAPE_LEVEL );
+				
+				if ( n != null ){
+					
+					int scrape_level = n.intValue();
+					
+					if ( scrape_level == 1 ){
+						
+						disable_scrapes = false;
+						
+					}else if ( scrape_level == 2 ){
+						
+						disable_scrapes = true;
+					}
+				}
+			}
+			
 			byte[]	scrape_reply = null;
 
 			List<HashWrapper> 					hashesInQuery 		= new ArrayList<>(allResponses.size());
@@ -412,6 +459,8 @@ public class TrackerStatus {
 
 			List<TRTrackerScraperResponseImpl> activeResponses = responsesInQuery;
 
+			URL reqUrl = null;
+			
 			try {
 				// if URL already includes a query component then just append our
 				// params
@@ -444,9 +493,7 @@ public class TrackerStatus {
 
 						scraper.scrapeReceived(response);
 
-					} else if ( (!force) &&
-									( 	disable_all_scrapes ||
-										!scraper.isTorrentScrapable(hash))){
+					} else if ( (!force) &&	( disable_scrapes || !scraper.isTorrentScrapable(hash))){
 
 						response.setNextScrapeStartTime(SystemTime.getCurrentTime()
 								+ FAULTY_SCRAPE_RETRY_INTERVAL);
@@ -464,7 +511,7 @@ public class TrackerStatus {
 						response.setStatus(TRTrackerScraperResponse.ST_SCRAPING,
 								MessageText.getString(SS + "scraping"));
 
-						// technically haven't recieved a scrape yet, but we need
+						// technically haven't received a scrape yet, but we need
 						// to notify listeners (the ones that display status)
 						scraper.scrapeReceived(response);
 
@@ -524,7 +571,7 @@ public class TrackerStatus {
 					request += "&azsf=" + flags + "&azver=" + TRTrackerAnnouncer.AZ_TRACKER_VERSION_CURRENT;
 				}
 
-				URL reqUrl = new URL( request );
+				reqUrl = new URL( request );
 
 				if (Logger.isEnabled())
 					Logger.log(new LogEvent(LOGID,
@@ -618,7 +665,15 @@ public class TrackerStatus {
 
 			  			activeResponses = responsesInQuery;
 
-			  			redirect_url = scrapeHTTP(hashesInQuery,reqUrl, message);
+			  			URL[] _reqUrl = { reqUrl };
+			  			
+			  			try{
+			  				redirect_url = scrapeHTTP(hashesInQuery,_reqUrl, message);
+			  				
+			  			}finally{
+			  			
+			  				reqUrl = _reqUrl[0];
+			  			}
 			  		}
 				}finally{
 
@@ -723,7 +778,7 @@ public class TrackerStatus {
 											+ new String(failure_reason_bytes,
 													Constants.DEFAULT_ENCODING_CHARSET));
 
-							// notifiy listeners
+							// notify listeners
 
 							scraper.scrapeReceived(response);
 						}
@@ -742,7 +797,7 @@ public class TrackerStatus {
 								response.setStatus(TRTrackerScraperResponse.ST_ERROR,
 										MessageText.getString(SS + "error")
 												+ MessageText.getString(SSErr + "invalid"));
-								// notifiy listeners
+								// notify listeners
 								scraper.scrapeReceived(response);
 							}
 						} else {
@@ -755,7 +810,7 @@ public class TrackerStatus {
 							response.setStatus(TRTrackerScraperResponse.ST_ERROR,
 									MessageText.getString(SS + "error")
 											+ MessageText.getString(SSErr + "nohash"));
-							// notifiy listeners
+							// notify listeners
 							scraper.scrapeReceived(response);
 						}
 					}
@@ -764,7 +819,7 @@ public class TrackerStatus {
 				}
 
 				/*
-				 * If we requested mutliple hashes, but only one was returned, revert
+				 * If we requested multiple hashes, but only one was returned, revert
 				 * to Single Hash Scrapes, but continue on to process the one has that
 				 * was returned (it may be a random one from the list)
 				 */
@@ -782,7 +837,7 @@ public class TrackerStatus {
 					// LGLogger.log( "decoding response #" +i+ ": " +
 					// ByteFormatter.nicePrint( response.getHash(), true ) );
 
-					// retrieve the scrape data for the relevent infohash
+					// retrieve the scrape data for the relevant infohash
 					Map scrapeMap = (Map) mapFiles.get(new String(response.getHash().getBytes(),
 							Constants.BYTE_ENCODING_CHARSET));
 
@@ -796,7 +851,7 @@ public class TrackerStatus {
 							response.setStatus(TRTrackerScraperResponse.ST_ERROR,
 									MessageText.getString(SS + "error")
 											+ MessageText.getString(SSErr + "nohash"));
-							// notifiy listeners
+							// notify listeners
 							scraper.scrapeReceived(response);
 						} else if ( scraper.isTorrentScrapable(response.getHash())) {
 							// This tracker doesn't support multiple hash requests.
@@ -835,7 +890,7 @@ public class TrackerStatus {
 								}
 
 							}
-							// notifiy listeners
+							// notify listeners
 							scraper.scrapeReceived(response);
 
 							// if this was the first scrape request in the list,
@@ -852,7 +907,7 @@ public class TrackerStatus {
 						Long l_peers 	= (Long)scrapeMap.get("incomplete");
 						Long l_comp 	= (Long)scrapeMap.get("downloaded");
 
-						int seeds 		= l_seeds==null?0:l_seeds.intValue();	// expected but deal with missing as some trackers ommit :(
+						int seeds 		= l_seeds==null?0:l_seeds.intValue();	// expected but deal with missing as some trackers omit :(
 						int peers 		= l_peers==null?0:l_peers.intValue();	// expected but deal with missing
 						int completed 	= l_comp==null?-1:l_comp.intValue();	// optional
 
@@ -916,7 +971,7 @@ public class TrackerStatus {
 						response.setStatus(TRTrackerScraperResponse.ST_ONLINE,
 								MessageText.getString(SS + "ok"));
 
-						// notifiy listeners
+						// notify listeners
 						scraper.scrapeReceived(response);
 
 						try{
@@ -954,7 +1009,7 @@ public class TrackerStatus {
 					response.setStatus(TRTrackerScraperResponse.ST_ERROR, MessageText
 							.getString(SS + "error")
 							+ ignoreSSL.getMessage());
-					// notifiy listeners
+					// notify listeners
 					scraper.scrapeReceived(response);
 				}
 			} catch (FileNotFoundException e) {
@@ -964,19 +1019,19 @@ public class TrackerStatus {
 					response.setStatus(TRTrackerScraperResponse.ST_ERROR, MessageText
 							.getString(SS + "error")
 							+ MessageText.getString("DownloadManager.error.filenotfound"));
-					// notifiy listeners
+					// notify listeners
 					scraper.scrapeReceived(response);
 				}
 			} catch (SocketException e) {
-				setAllError(activeResponses,e);
+				setAllError(reqUrl,activeResponses,e);
 			} catch (SocketTimeoutException e) {
-				setAllError(activeResponses,e);
+				setAllError(reqUrl,activeResponses,e);
 			} catch (UnknownHostException e) {
-				setAllError(activeResponses,e);
+				setAllError(reqUrl,activeResponses,e);
 			} catch (PRUDPPacketHandlerException e) {
-				setAllError(activeResponses,e);
+				setAllError(reqUrl,activeResponses,e);
 			} catch (BEncodingException e) {
-				setAllError(activeResponses,e);
+				setAllError(reqUrl,activeResponses,e);
 			} catch (Exception e) {
 
 				// for apache we can get error 414 - URL too long. simplest solution
@@ -993,7 +1048,7 @@ public class TrackerStatus {
 							|| error_message.contains(" 501 ")) {
 						// various errors that have a 99% chance of happening on
 						// any other scrape request
-						setAllError(activeResponses,e);
+						setAllError(reqUrl,activeResponses,e);
 						return;
 					}
 
@@ -1027,9 +1082,10 @@ public class TrackerStatus {
 
 					if (Logger.isEnabled()) {
 						HashWrapper hash = response.getHash();
+						
 						Logger.log(new LogEvent(TorrentUtils.getDownloadManager(hash), LOGID,
-								LogEvent.LT_ERROR, "Error from scrape interface " + scrapeURL
-										+ " : " + msg + " (" + e.getClass() + ")"));
+								LogEvent.LT_ERROR, formatScrapeErrorMessage( reqUrl, msg ))); 
+								
 					}
 
 					response.setNextScrapeStartTime(SystemTime.getCurrentTime()
@@ -1037,7 +1093,7 @@ public class TrackerStatus {
 					response.setStatus(TRTrackerScraperResponse.ST_ERROR, MessageText
 							.getString(SS + "error")
 							+ msg);
-					// notifiy listeners
+					// notify listeners
 					scraper.scrapeReceived(response);
 				}
 			}
@@ -1049,10 +1105,22 @@ public class TrackerStatus {
 		}
 	}
 
-  /**
-	 * @param e
-	 */
-	private void setAllError(List<TRTrackerScraperResponseImpl> responses, Exception e) {
+  	private String
+  	formatScrapeErrorMessage(
+  		URL			reqURL, 
+  		String		msg )
+  	{
+		if ( reqURL != null ){
+			
+				// tidy up message to remove any loopback bind mods
+			
+			msg = msg.replace(reqURL.toExternalForm(),scrapeURL);
+		}
+		
+  		return( "Error from scrape interface " + scrapeURL + " : " + msg );
+  	}
+  	
+	private void setAllError(URL reqURL, List<TRTrackerScraperResponseImpl> responses, Exception e) {
 
 		String msg;
 
@@ -1078,8 +1146,7 @@ public class TrackerStatus {
 			if (Logger.isEnabled()) {
 				HashWrapper hash = response.getHash();
 				Logger.log(new LogEvent(TorrentUtils.getDownloadManager(hash), LOGID,
-						LogEvent.LT_WARNING, "Error from scrape interface " + scrapeURL
-								+ " : " + msg));
+						LogEvent.LT_WARNING, formatScrapeErrorMessage( reqURL, msg )));
 				//e.printStackTrace();
 			}
 
@@ -1087,7 +1154,7 @@ public class TrackerStatus {
 					+ FAULTY_SCRAPE_RETRY_INTERVAL);
 			response.setStatus(TRTrackerScraperResponse.ST_ERROR,StringInterner.intern(
 					MessageText.getString(SS + "error") + msg ));
-			// notifiy listeners
+			// notify listeners
 			scraper.scrapeReceived(response);
 		}
 	}
@@ -1095,15 +1162,17 @@ public class TrackerStatus {
 	private URL
  	scrapeHTTP(
  		List<HashWrapper>		hashesInQuery,
- 		URL 					reqUrl,
+ 		URL[] 					_reqUrl,
  		ByteArrayOutputStream 	message )
 
  		throws Exception
  	{
+		URL reqUrl = _reqUrl[0];
+				
 		byte[]	example_hash = hashesInQuery.get(0).getBytes();
 
 		try{
-			return( scrapeHTTPSupport( reqUrl, example_hash, null, message ));
+			return( scrapeHTTPSupport( _reqUrl, example_hash, null, message ));
 
 		}catch( Exception e ){
 
@@ -1190,7 +1259,7 @@ public class TrackerStatus {
 
 					try{
 
-						URL result =  scrapeHTTPSupport( proxy.getURL(), example_hash, proxy.getProxy(), message );
+						URL result =  scrapeHTTPSupport( new URL[]{ proxy.getURL()}, example_hash, proxy.getProxy(), message );
 
 						ok = true;
 
@@ -1212,7 +1281,7 @@ public class TrackerStatus {
 
 	private URL
 	scrapeHTTPSupport(
-		URL 					reqUrl,
+		URL[] 					_reqUrl,
 		byte[]					example_hash,
 		Proxy					proxy,
 		ByteArrayOutputStream 	message )
@@ -1225,6 +1294,8 @@ public class TrackerStatus {
 
 			URL	redirect_url = null;
 
+			URL reqUrl = _reqUrl[0];
+			
 			TRTrackerUtils.checkForBlacklistedURLs( reqUrl );
 
 			reqUrl = TRTrackerUtils.adjustURLForHosting( reqUrl );
@@ -1257,6 +1328,8 @@ public class TrackerStatus {
 
 			reqUrl = (URL)http_properties.get( ClientIDGenerator.PR_URL );
 
+			_reqUrl[0] = reqUrl;
+			
 			InputStream is = null;
 
 			try{
@@ -1427,11 +1500,11 @@ public class TrackerStatus {
 						}
 					} catch (Exception e) {
 
-						if (Logger.isEnabled())
-							Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR,
-									"Error from scrape interface " + scrapeURL + " : "
-									+ Debug.getNestedExceptionMessage(e)));
-
+						if (Logger.isEnabled()){
+							String msg = Debug.getNestedExceptionMessage(e);
+							Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR,formatScrapeErrorMessage( reqUrl, msg )));
+						}
+						
 						return( null );
 					}
 				}
@@ -1508,7 +1581,15 @@ public class TrackerStatus {
 		throw( new IOException( "Shouldn't get here" ));
 	}
 
-  protected boolean scrapeUDP(URL reqUrl, ByteArrayOutputStream message, List hashes, boolean do_auth_test) throws Exception {
+  protected boolean 
+  scrapeUDP(
+		URL reqUrl, 
+		ByteArrayOutputStream message, 
+		List hashes, 
+		boolean do_auth_test )
+				
+		throws Throwable 
+  {
 		Map rootMap = new HashMap();
 		Map files = new ByteEncodedKeyHashMap();
 		rootMap.put("files", files);
@@ -1556,158 +1637,198 @@ public class TrackerStatus {
 			auth = SESecurityManager.getPasswordAuthentication( "UDP Tracker", reqUrl );
 		}
 
-		int port = UDPNetworkManager.getSingleton().getUDPNonDataListeningPortNumber();
+		int handler_port = UDPNetworkManager.getSingleton().getUDPNonDataListeningPortNumber();
 
-		PRUDPPacketHandler handler = PRUDPPacketHandlerFactory.getHandler( port );
+		List<InetSocketAddress>	url_addresses = UrlUtils.getURLAddresses( reqUrl );
 
-		InetSocketAddress destination = new InetSocketAddress(reqUrl.getHost(),reqUrl.getPort()==-1?80:reqUrl.getPort());
+		Throwable last_error = null;
 
-		handler = handler.openSession( destination );
+		boolean ipv6_enabled =  NetworkAdmin.getSingleton().isIPV6Enabled();
 
-		try{
-			String	failure_reason = null;
+		boolean all_skipped = true;
 
-			for (int retry_loop=0;retry_loop<PRUDPPacketTracker.DEFAULT_RETRY_COUNT;retry_loop++){
+		for ( InetSocketAddress destination: url_addresses ){
+
+			if ( destination.getAddress() instanceof Inet6Address && !ipv6_enabled ){
+
+				continue;
+			}
+			
+			all_skipped = false;
+			
+			try{
+				PRUDPPacketHandler handler = PRUDPPacketHandlerFactory.getHandler( handler_port );
+
+				handler = handler.openSession( destination );
 
 				try{
-					PRUDPPacket connect_request = new PRUDPPacketRequestConnect();
+					String	failure_reason = null;
 
-					PRUDPPacket reply = handler.sendAndReceive( auth, connect_request, destination );
+					for (int retry_loop=0;retry_loop<PRUDPPacketTracker.DEFAULT_RETRY_COUNT;retry_loop++){
 
-					if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_CONNECT ){
+						try{
+							PRUDPPacket connect_request = new PRUDPPacketRequestConnect();
 
-						PRUDPPacketReplyConnect connect_reply = (PRUDPPacketReplyConnect)reply;
+							PRUDPPacket reply = handler.sendAndReceive( auth, connect_request, destination );
 
-						long	my_connection = connect_reply.getConnectionId();
+							if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_CONNECT ){
 
-						PRUDPPacketRequestScrape scrape_request = new PRUDPPacketRequestScrape( my_connection, hashes );
+								PRUDPPacketReplyConnect connect_reply = (PRUDPPacketReplyConnect)reply;
 
-						reply = handler.sendAndReceive( auth, scrape_request, destination );
+								long	my_connection = connect_reply.getConnectionId();
 
-						if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_SCRAPE ){
+								PRUDPPacketRequestScrape scrape_request = new PRUDPPacketRequestScrape( my_connection, hashes );
 
-							auth_ok	= true;
+								reply = handler.sendAndReceive( auth, scrape_request, destination );
 
-							if ( PRUDPPacketTracker.VERSION == 1 ){
-								PRUDPPacketReplyScrape	scrape_reply = (PRUDPPacketReplyScrape)reply;
+								if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_SCRAPE ){
 
-								/*
-								int	interval = scrape_reply.getInterval();
+									auth_ok	= true;
 
-								if ( interval != 0 ){
+									if ( PRUDPPacketTracker.VERSION == 1 ){
+										PRUDPPacketReplyScrape	scrape_reply = (PRUDPPacketReplyScrape)reply;
 
-									map.put( "interval", new Long(interval ));
+										/*
+									int	interval = scrape_reply.getInterval();
+
+									if ( interval != 0 ){
+
+										map.put( "interval", new Long(interval ));
+									}
+										 */
+
+										byte[][]	reply_hashes 	= scrape_reply.getHashes();
+										int[]		complete 		= scrape_reply.getComplete();
+										int[]		downloaded 		= scrape_reply.getDownloaded();
+										int[]		incomplete 		= scrape_reply.getIncomplete();
+
+
+										for (int i=0;i<reply_hashes.length;i++){
+
+											Map	file = new HashMap();
+
+											byte[]	resp_hash = reply_hashes[i];
+
+											// System.out.println("got hash:" + ByteFormatter.nicePrint( resp_hash, true ));
+
+											files.put( new String(resp_hash, Constants.BYTE_ENCODING_CHARSET), file );
+
+											file.put( "complete", new Long(complete[i]));
+											file.put( "downloaded", new Long(downloaded[i]));
+											file.put( "incomplete", new Long(incomplete[i]));
+										}
+
+										byte[] data = BEncoder.encode( rootMap );
+
+										message.write( data );
+
+										return( true );
+										
+									}else{
+										
+										PRUDPPacketReplyScrape2	scrape_reply = (PRUDPPacketReplyScrape2)reply;
+
+										/*
+											int	interval = scrape_reply.getInterval();
+		
+											if ( interval != 0 ){
+		
+												map.put( "interval", new Long(interval ));
+											}
+										 */
+
+										int[]		complete 	= scrape_reply.getComplete();
+										int[]		downloaded 	= scrape_reply.getDownloaded();
+										int[]		incomplete 	= scrape_reply.getIncomplete();
+
+										int i=0;
+										for(Iterator it = hashes.iterator();it.hasNext() && i < complete.length;i++)
+										{
+											HashWrapper hash = (HashWrapper)it.next();
+											Map file = new HashMap();
+											file.put( "complete", new Long(complete[i]));
+											file.put( "downloaded", new Long(downloaded[i]));
+											file.put( "incomplete", new Long(incomplete[i]));
+											files.put( new String(hash.getBytes(), Constants.BYTE_ENCODING_CHARSET), file );
+										}
+
+										// System.out.println("got hash:" + ByteFormatter.nicePrint( resp_hash, true ));
+
+										byte[] data = BEncoder.encode( rootMap );
+
+										message.write( data );
+
+										return( true );
+									}
+								}else{
+
+									failure_reason = ((PRUDPPacketReplyError)reply).getMessage();
+
+									if (Logger.isEnabled())
+										Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR,
+												"Response from scrape interface "+ reqUrl +" : " + failure_reason));
+
+									break;
 								}
-								*/
-
-								byte[][]	reply_hashes 	= scrape_reply.getHashes();
-								int[]		complete 		= scrape_reply.getComplete();
-								int[]		downloaded 		= scrape_reply.getDownloaded();
-								int[]		incomplete 		= scrape_reply.getIncomplete();
-
-
-								for (int i=0;i<reply_hashes.length;i++){
-
-									Map	file = new HashMap();
-
-									byte[]	resp_hash = reply_hashes[i];
-
-									// System.out.println("got hash:" + ByteFormatter.nicePrint( resp_hash, true ));
-
-									files.put( new String(resp_hash, Constants.BYTE_ENCODING_CHARSET), file );
-
-									file.put( "complete", new Long(complete[i]));
-									file.put( "downloaded", new Long(downloaded[i]));
-									file.put( "incomplete", new Long(incomplete[i]));
-								}
-
-								byte[] data = BEncoder.encode( rootMap );
-
-								message.write( data );
-
-								return true;
 							}else{
-								PRUDPPacketReplyScrape2	scrape_reply = (PRUDPPacketReplyScrape2)reply;
 
+								failure_reason = ((PRUDPPacketReplyError)reply).getMessage();
 
-								/*
-								int	interval = scrape_reply.getInterval();
+								if (Logger.isEnabled())
+									Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR, "Response from scrape interface "+ reqUrl +" : "
+											+ ((PRUDPPacketReplyError) reply).getMessage()));
 
-								if ( interval != 0 ){
-
-									map.put( "interval", new Long(interval ));
-								}
-								*/
-
-								int[]		complete 	= scrape_reply.getComplete();
-								int[]		downloaded 	= scrape_reply.getDownloaded();
-								int[]		incomplete 	= scrape_reply.getIncomplete();
-
-								int i=0;
-								for(Iterator it = hashes.iterator();it.hasNext() && i < complete.length;i++)
-								{
-									HashWrapper hash = (HashWrapper)it.next();
-									Map file = new HashMap();
-									file.put( "complete", new Long(complete[i]));
-									file.put( "downloaded", new Long(downloaded[i]));
-									file.put( "incomplete", new Long(incomplete[i]));
-									files.put( new String(hash.getBytes(), Constants.BYTE_ENCODING_CHARSET), file );
-								}
-
-								// System.out.println("got hash:" + ByteFormatter.nicePrint( resp_hash, true ));
-
-								byte[] data = BEncoder.encode( rootMap );
-
-								message.write( data );
-
-								return true;
+								break;
 							}
-						}else{
 
-							failure_reason = ((PRUDPPacketReplyError)reply).getMessage();
+						}catch( PRUDPPacketHandlerException e ){
 
-							if (Logger.isEnabled())
-									Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR,
-											"Response from scrape interface "+ reqUrl +" : " + failure_reason));
+							if ( e.getMessage() == null || !e.getMessage().contains("timed out")){
 
-							break;
+								throw( e );
+							}
 						}
-					}else{
-
-						failure_reason = ((PRUDPPacketReplyError)reply).getMessage();
-
-						if (Logger.isEnabled())
-								Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR, "Response from scrape interface "+ reqUrl +" : "
-												+ ((PRUDPPacketReplyError) reply).getMessage()));
-
-						break;
 					}
 
-				}catch( PRUDPPacketHandlerException e ){
+					if ( failure_reason != null ){
 
-					if ( e.getMessage() == null || !e.getMessage().contains("timed out")){
+						rootMap.put( "failure reason", failure_reason.getBytes());
+						rootMap.remove("files");
 
-						throw( e );
+						byte[] data = BEncoder.encode( rootMap );
+						message.write( data );
+						
+						return( false );
 					}
+				}finally{
 
-					failure_reason	= "Timeout";
+					handler.closeSession();
 				}
+			}catch( Throwable e ){
+
+				last_error = e;
 			}
-
-			if ( failure_reason != null ){
-
-				rootMap.put( "failure reason", failure_reason.getBytes());
-				rootMap.remove("files");
-
-				byte[] data = BEncoder.encode( rootMap );
-				message.write( data );
-			}
-		}finally{
-
-			handler.closeSession();
 		}
 
-		return false;
+		if ( all_skipped ){
+
+			throw( new Exception( "IPv6 disabled" ));
+		}
+ 			
+		if ( last_error != null ){
+			
+			throw( last_error );
+		}
+		
+		rootMap.put( "failure reason", "Timeout".getBytes());
+		
+		rootMap.remove("files");
+
+		byte[] data = BEncoder.encode( rootMap );
+		
+		message.write( data );
+		
+		return( false );
 	}finally{
 		if ( auth != null ){
 
@@ -1772,7 +1893,7 @@ public class TrackerStatus {
   		hashes_mon.exit();
   	}
 
-  		//notifiy listeners
+  		//notify listeners
 
     scraper.scrapeReceived( response );
 

@@ -48,7 +48,9 @@ Peer
 	public final static Object PR_PROTOCOL				= new Object();
 	public final static Object PR_PROTOCOL_QUALIFIER	= new Object();
 	public final static Object PR_FORCE_CONNECTION		= new Object();
-
+	public final static Object PR_PREFER_UTP			= new Object();
+	public final static Object PR_PEER_SOURCE			= new Object();
+	
 	public void
 	bindConnection(
 		ConnectionStub		stub );
@@ -161,10 +163,10 @@ Peer
 
 	public void setOptimisticUnchoke( boolean is_optimistic );
 
-	public List
+	public List<PeerReadRequest>
 	getExpiredRequests();
 
-	public List
+	public List<PeerReadRequest>
 	getRequests();
 
 	public int
@@ -195,11 +197,12 @@ Peer
 	public void
 	close(
 		String 		reason,
+		int			reason_code,
 		boolean 	closedOnError,
 		boolean 	attemptReconnect );
 
-	public int
-	getPercentDoneOfCurrentIncomingRequest();
+	public int[]
+	getCurrentIncomingRequestProgress();
 
 	public int[]
 	getOutgoingRequestedPieceNumbers();
@@ -207,8 +210,8 @@ Peer
 	public int
 	getOutgoingRequestCount();
 
-	public int
-	getPercentDoneOfCurrentOutgoingRequest();
+	public int[]
+	getCurrentOutgoingRequestProgress();
 
 
 	/**
@@ -282,4 +285,7 @@ Peer
   public RateLimiter[]
   getRateLimiters(
    		 boolean	is_upload );
+  
+  public PeerDescriptor
+  getDescriptor();
 }

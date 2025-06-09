@@ -49,35 +49,37 @@ import com.biglybt.core.util.*;
 public class TCPConnectionManager {
   private static final LogIDs LOGID = LogIDs.NWMAN;
 
+  private static final int CONNECT_TIMEOUT_MIN	= 5000;
+  
   static int CONNECT_SELECT_LOOP_TIME			= 100;
   static int CONNECT_SELECT_LOOP_MIN_TIME		= 0;
 
-  static int MIN_SIMULTANIOUS_CONNECT_ATTEMPTS = 3;
-  public static int MAX_SIMULTANIOUS_CONNECT_ATTEMPTS;
+  static int MIN_SIMULTANEOUS_CONNECT_ATTEMPTS = 3;
+  public static int MAX_SIMULTANEOUS_CONNECT_ATTEMPTS;
 
   static int max_outbound_connections;
 
   static {
-    MAX_SIMULTANIOUS_CONNECT_ATTEMPTS = COConfigurationManager.getIntParameter( "network.max.simultaneous.connect.attempts" );
+    MAX_SIMULTANEOUS_CONNECT_ATTEMPTS = COConfigurationManager.getIntParameter( "network.max.simultaneous.connect.attempts" );
 
-    if( MAX_SIMULTANIOUS_CONNECT_ATTEMPTS < 1 ) { //should never happen, but hey
-   	 MAX_SIMULTANIOUS_CONNECT_ATTEMPTS = 1;
+    if( MAX_SIMULTANEOUS_CONNECT_ATTEMPTS < 1 ) { //should never happen, but hey
+   	 MAX_SIMULTANEOUS_CONNECT_ATTEMPTS = 1;
    	 COConfigurationManager.setParameter( "network.max.simultaneous.connect.attempts", 1 );
     }
 
-    MIN_SIMULTANIOUS_CONNECT_ATTEMPTS = MAX_SIMULTANIOUS_CONNECT_ATTEMPTS - 2;
+    MIN_SIMULTANEOUS_CONNECT_ATTEMPTS = MAX_SIMULTANEOUS_CONNECT_ATTEMPTS - 2;
 
-    if( MIN_SIMULTANIOUS_CONNECT_ATTEMPTS < 1 ) {
-      MIN_SIMULTANIOUS_CONNECT_ATTEMPTS = 1;
+    if( MIN_SIMULTANEOUS_CONNECT_ATTEMPTS < 1 ) {
+      MIN_SIMULTANEOUS_CONNECT_ATTEMPTS = 1;
     }
 
     COConfigurationManager.addParameterListener( "network.max.simultaneous.connect.attempts", new ParameterListener() {
       @Override
       public void parameterChanged(String parameterName ) {
-        MAX_SIMULTANIOUS_CONNECT_ATTEMPTS = COConfigurationManager.getIntParameter( "network.max.simultaneous.connect.attempts" );
-        MIN_SIMULTANIOUS_CONNECT_ATTEMPTS = MAX_SIMULTANIOUS_CONNECT_ATTEMPTS - 2;
-        if( MIN_SIMULTANIOUS_CONNECT_ATTEMPTS < 1 ) {
-          MIN_SIMULTANIOUS_CONNECT_ATTEMPTS = 1;
+        MAX_SIMULTANEOUS_CONNECT_ATTEMPTS = COConfigurationManager.getIntParameter( "network.max.simultaneous.connect.attempts" );
+        MIN_SIMULTANEOUS_CONNECT_ATTEMPTS = MAX_SIMULTANEOUS_CONNECT_ATTEMPTS - 2;
+        if( MIN_SIMULTANEOUS_CONNECT_ATTEMPTS < 1 ) {
+          MIN_SIMULTANEOUS_CONNECT_ATTEMPTS = 1;
         }
       }
     });
@@ -312,7 +314,7 @@ public class TCPConnectionManager {
   void
   addNewOutboundRequests()
   {
-	  while( pending_attempts.size() + pending_pp_attempts.size() < MIN_SIMULTANIOUS_CONNECT_ATTEMPTS ){
+	  while( pending_attempts.size() + pending_pp_attempts.size() < MIN_SIMULTANEOUS_CONNECT_ATTEMPTS){
 
 		  ConnectionRequest cr = null;
 
@@ -431,6 +433,10 @@ public class TCPConnectionManager {
 					  }
 				  }
 			  }catch( SocketException e ){
+
+				  if (Logger.isEnabled()){
+					  Logger.log(new LogEvent(LOGID, LogEvent.LT_ERROR, "Binding [" + request.address + "] to local IP address " + bindIP + ":" + local_bind_port + " failed: " + Debug.getNestedExceptionMessage(e)));
+				  }
 
 				  bind_failed = true;
 
@@ -579,47 +585,58 @@ public class TCPConnectionManager {
 		  }
 	  }catch( Throwable t ){
 
-		  String full = request.address.toString();
-		  String hostname = request.address.getHostName();
-		  int port = request.address.getPort();
-		  boolean unresolved = request.address.isUnresolved();
-		  InetAddress	inet_address = request.address.getAddress();
-		  String full_sub = inet_address==null?request.address.toString():inet_address.toString();
-		  String host_address = inet_address==null?request.address.toString():inet_address.getHostAddress();
+		  InetSocketAddress address = request.address;
+		  InetAddress	inet_address = address.getAddress();
 
-		  String msg = "ConnectDisconnectManager::address exception: full="+full+ ", hostname="+hostname+ ", port="+port+ ", unresolved="+unresolved+ ", full_sub="+full_sub+ ", host_address="+host_address;
+		  SocketChannel channel = request.channel;
 
-		  if( request.channel != null ) {
-			  String channel = request.channel.toString();
-			  Socket socket = request.channel.socket();
-			  String socket_string = socket.toString();
-			  InetAddress local_address = socket.getLocalAddress();
-			  String local_address_string = local_address == null ? "<null>" : local_address.toString();
-			  int local_port = socket.getLocalPort();
-			  SocketAddress ra = socket.getRemoteSocketAddress();
-			  String remote_address;
-			  if( ra != null )  remote_address = ra.toString();
-			  else remote_address = "<null>";
-			  int remote_port = socket.getPort();
-
-			  msg += "\n channel="+channel+ ", socket="+socket_string+ ", local_address="+local_address_string+ ", local_port="+local_port+ ", remote_address="+remote_address+ ", remote_port="+remote_port;
-		  }
-		  else {
-			  msg += "\n channel=<null>";
-		  }
-
-		  if (ipv6problem || t instanceof UnresolvedAddressException || t instanceof NoRouteToHostException ){
-
-			  Logger.log(new LogEvent(LOGID,LogEvent.LT_WARNING,msg));
-
+		  if ( inet_address instanceof Inet6Address && !NetworkAdmin.getSingleton().isIPV6Enabled()){
+			  
+			  	// don't log anything
+			  
 		  }else{
 
-			  Logger.log(new LogEvent(LOGID,LogEvent.LT_ERROR,msg,t));
+			  String full = address.toString();
+			  String hostname = address.getHostName();
+			  int port = address.getPort();
+			  boolean unresolved = address.isUnresolved();
+			  String full_sub = inet_address==null?address.toString():inet_address.toString();
+			  String host_address = inet_address==null?request.address.toString():inet_address.getHostAddress();
+	
+			  String msg = "ConnectDisconnectManager::address exception: full="+full+ ", hostname="+hostname+ ", port="+port+ ", unresolved="+unresolved+ ", full_sub="+full_sub+ ", host_address="+host_address;
+				  
+			  if( channel != null ) {
+				  String channel_str = channel.toString();
+				  Socket socket = channel.socket();
+				  String socket_string = socket.toString();
+				  InetAddress local_address = socket.getLocalAddress();
+				  String local_address_string = local_address == null ? "<null>" : local_address.toString();
+				  int local_port = socket.getLocalPort();
+				  SocketAddress ra = socket.getRemoteSocketAddress();
+				  String remote_address;
+				  if( ra != null )  remote_address = ra.toString();
+				  else remote_address = "<null>";
+				  int remote_port = socket.getPort();
+	
+				  msg += "\n channel="+channel_str+ ", socket="+socket_string+ ", local_address="+local_address_string+ ", local_port="+local_port+ ", remote_address="+remote_address+ ", remote_port="+remote_port;
+			  }
+			  else {
+				  msg += "\n channel=<null>";
+			  }
+	
+			  if (ipv6problem || t instanceof UnresolvedAddressException || t instanceof NoRouteToHostException ){
+	
+				  Logger.log(new LogEvent(LOGID,LogEvent.LT_WARNING,msg));
+	
+			  }else{
+	
+				  Logger.log(new LogEvent(LOGID,LogEvent.LT_ERROR,msg,t));
+			  }
 		  }
 
-		  if( request.channel != null ){
+		  if( channel != null ){
 
-			  closeConnection( request.channel );
+			  closeConnection( channel );
 		  }
 
 		  request.listener.connectFailure( t );
@@ -861,7 +878,7 @@ public class TCPConnectionManager {
     	//check if our connect queue is stalled, and expand if so
     
     if ( 	num_stalled_requests == pending_attempts.size() && 
-    		pending_attempts.size() + pending_pp_attempts.size() < MAX_SIMULTANIOUS_CONNECT_ATTEMPTS ){
+    		pending_attempts.size() + pending_pp_attempts.size() < MAX_SIMULTANEOUS_CONNECT_ATTEMPTS){
 
     	ConnectionRequest cr =null;
 
@@ -1137,27 +1154,31 @@ public class TCPConnectionManager {
   private static class
   ConnectionRequest
   {
-    final InetSocketAddress address;
-    final PluginProxy		plugin_proxy;
-    final ConnectListener listener;
-    final long request_start_time;
-    long connect_start_time;
-    int connect_timeout;
-    SocketChannel channel;
     private final short		rand;
-    final int		priority;
     private final long		id;
+
+    private final InetSocketAddress address;
+    private final PluginProxy		plugin_proxy;
+    private final ConnectListener 	listener;
+    private final long 				request_start_time;
+    private final int				priority;
+    	
+   
+    private long 			connect_start_time;
+    private int 			connect_timeout;
+    private SocketChannel 	channel;
 
     ConnectionRequest( long _id, InetSocketAddress _address, PluginProxy pp, ConnectListener _listener, int _connect_timeout, int _priority  ) {
 
-      id	= _id;
-      address = _address;
-      plugin_proxy = pp;
-      listener = _listener;
-      connect_timeout	= _connect_timeout;
-      request_start_time = SystemTime.getMonotonousTime();
-      rand = (short)( RandomUtils.nextInt( Short.MAX_VALUE ));
-      priority = _priority;
+      id					= _id;
+      address 				= _address;
+      plugin_proxy 			= pp;
+      listener 				= _listener;
+      request_start_time 	= SystemTime.getMonotonousTime();
+      rand 					= (short)( RandomUtils.nextInt( Short.MAX_VALUE ));
+      priority 				= _priority;
+
+      setConnectTimeout( _connect_timeout );
     }
 
     int
@@ -1168,9 +1189,20 @@ public class TCPConnectionManager {
 
     void
     setConnectTimeout(
-    	int		_ct )
+    	int		ct )
     {
-    	connect_timeout = _ct;
+        if ( ct < CONNECT_TIMEOUT_MIN ){
+            
+        	connect_timeout		= CONNECT_TIMEOUT_MIN;
+      	  
+        	if ( Constants.IS_CVS_VERSION ){
+        		
+        		Debug.out( "Connect timeout too small: " + ct );
+        	}
+        }else{
+      	  
+        	connect_timeout = ct;
+        }
     }
 
     long

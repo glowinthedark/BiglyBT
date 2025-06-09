@@ -33,6 +33,7 @@ import java.util.Map;
 import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.disk.DiskManagerReadRequest;
 import com.biglybt.core.networkmanager.LimitedRateGroup;
+import com.biglybt.core.networkmanager.Transport;
 import com.biglybt.core.peer.impl.PEPeerTransport;
 import com.biglybt.core.peer.util.PeerIdentityDataID;
 import com.biglybt.core.peermanager.peerdb.PeerExchangerItem;
@@ -83,6 +84,10 @@ PEPeerManager
 
 	public float getMinAvailability( int file_index );
 
+	/**
+	 * @return 0: hasn't transitioned from good to bad this session OR known to be good; >0: time availability went from good to bad
+	 */
+	
 	public long getAvailWentBadTime();
 
 	public long getBytesUnavailable();
@@ -93,7 +98,10 @@ PEPeerManager
     public int	getNbPeersWithUploadQueued();
     public int	getNbPeersWithUploadBlocked();
     public int	getNbPeersUnchoked();
+    public int	getNbPeersUnchoking();
 
+    public int	getNbPieces();
+    
     /** Often better to use getPiece(pieceNumber)
      */
 	public PEPiece[]	getPieces();
@@ -118,6 +126,8 @@ PEPeerManager
 
 	public long getRemaining();
 
+	public int getHiddenPiece();
+
 	public long getHiddenBytes();
 
 	public long getETA( boolean smoothed );
@@ -129,6 +139,10 @@ PEPeerManager
 
 	public long getTimeStartedSeeding( boolean mono_time );
 
+	public String
+	getConnectHealth(
+		boolean	verbose );
+	
 	public void
 	addListener(
 		PEPeerManagerListener	l );
@@ -254,7 +268,9 @@ PEPeerManager
 		int 		tcp_port,
 		int			udp_port,
 		boolean 	use_crypto,
-		Map			user_data );
+		Map			user_data )
+	
+		throws Exception;
 
 	public void
 	peerDiscovered(
@@ -264,21 +280,24 @@ PEPeerManager
 		int			udp_port,
 		boolean 	use_crypto );
 
-	public void
+	public default void
 	removePeer(
-		PEPeer	peer );
-
+		PEPeer	peer,
+		String	reason )
+	{
+		removePeer( peer, reason, Transport.CR_NONE );
+	}
+	
 	public void
 	removePeer(
 		PEPeer	peer,
-		String	reason );
+		String	reason,
+		int		reason_code );
 
 	public void
-	peerAdded(PEPeer pc);
-
-	public void
-	peerRemoved(PEPeer pc);
-
+	informFullyConnected(
+		PEPeer	peer );
+	
 	public DiskManagerReadRequest
 	createDiskManagerRequest(
 	   int pieceNumber,
@@ -332,7 +351,7 @@ PEPeerManager
   /**
    * Register a peer connection for peer exchange handling.
    * NOTE: Creation could fail if the peer is not eligible for peer exchange (like if it's remote port is unknown).
-   * @param base_peer exchaning with
+   * @param base_peer exchanging with
    * @return peer database connection item, or null if creation failed
    */
   public PeerExchangerItem createPeerExchangeConnection( PEPeerTransport base_peer );
@@ -428,8 +447,13 @@ PEPeerManager
 	getPartitionID();
 
 	public void
+	setMaskDownloadCompletion(
+		Boolean	mask );
+	
+	public void
 	removeAllPeers(
-		String		reason );
+		String		reason,
+		int			reason_code );
 	
 	public boolean
 	isDestroyed();

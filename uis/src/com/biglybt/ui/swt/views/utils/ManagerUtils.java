@@ -28,9 +28,12 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.net.URLConnection;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
@@ -53,6 +56,7 @@ import org.eclipse.swt.layout.FormLayout;
 import org.eclipse.swt.widgets.*;
 
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.disk.DiskManagerCheckRequest;
 import com.biglybt.core.disk.DiskManagerCheckRequestListener;
@@ -69,6 +73,7 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentFactory;
 import com.biglybt.core.torrent.TOTorrentFile;
+import com.biglybt.core.torrent.impl.TorrentOpenFileOptions;
 import com.biglybt.core.torrent.impl.TorrentOpenOptions;
 import com.biglybt.core.tracker.host.TRHostException;
 import com.biglybt.core.util.*;
@@ -85,6 +90,7 @@ import com.biglybt.pif.disk.DiskManagerEvent;
 import com.biglybt.pif.disk.DiskManagerListener;
 import com.biglybt.pif.disk.DiskManagerRequest;
 import com.biglybt.pif.download.Download;
+import com.biglybt.pif.download.DownloadRemovalVetoException;
 import com.biglybt.pif.download.DownloadStub;
 import com.biglybt.pif.platform.PlatformManagerException;
 import com.biglybt.pif.sharing.*;
@@ -311,7 +317,18 @@ public class ManagerUtils {
 		if (f.isDirectory()) {
 			Utils.launch(f.toString()); // default launcher
 		} else {
-			Utils.launch(f.getParent().toString());
+			String cmd = Utils.getPredefinedExplicitLauncher( Utils.PL_SHOW_FILE );
+			
+			if ( cmd != null ){
+				
+				String[] cmd_args = GeneralUtils.splitQuotedTokens( cmd );
+				
+				Utils.launchFileExplicit( f.getAbsolutePath(), cmd_args );
+				
+			}else{
+			
+				Utils.launch(f.getParent().toString());
+			}
 		}
 	}
 
@@ -1698,12 +1715,16 @@ public class ManagerUtils {
 		}
 	}
 
-  public static boolean isStartable(DownloadManager dm) {
+	public static boolean isStartable(DownloadManager dm) {
+		return( isStartable( dm, false ));
+	}
+	
+  public static boolean isStartable(DownloadManager dm, boolean allow_error) {
     if(dm == null)
       return false;
     int state = dm.getState();
     if (state != DownloadManager.STATE_STOPPED) {
-      return false;
+    	return( allow_error && state == DownloadManager.STATE_ERROR );
     }
     return true;
   }
@@ -1750,6 +1771,14 @@ public class ManagerUtils {
   isForceStartable(
   	DownloadManager	dm )
   {
+	  return( isForceStartable( dm, false ));
+  }
+  
+  public static boolean
+  isForceStartable(
+  	DownloadManager	dm,
+  	boolean			allow_error )
+  {
     if(dm == null){
         return false;
   	}
@@ -1759,11 +1788,149 @@ public class ManagerUtils {
     if (	state != DownloadManager.STATE_STOPPED && state != DownloadManager.STATE_QUEUED &&
             state != DownloadManager.STATE_SEEDING && state != DownloadManager.STATE_DOWNLOADING){
 
-    	return( false );
+    	return( allow_error && state == DownloadManager.STATE_ERROR );
     }
 
     return( true );
   }
+  
+  public static boolean
+  canForceRecheck(
+		DownloadManager		dm )
+  {
+	 if ( dm.canForceRecheck()){
+		 
+		 return( true );
+	 }
+		
+	 int state = dm.getState();
+		 
+	 if ( state == DownloadManager.STATE_SEEDING || state == DownloadManager.STATE_DOWNLOADING ){
+			 
+		 return( true );
+		 
+	 }else{
+		 
+		 return( false );
+	 }
+	 
+  }
+  
+	public static void
+	forceRecheck(
+		DownloadManager	dm )
+	{
+			// changed this so that if it is in an error state then we'll restart it after 
+			// the recheck completes rather than leaving it stopped
+		
+		int state = dm.getState();
+
+		if ( state != DownloadManager.STATE_ERROR && dm.canForceRecheck()){
+
+			asyncRecheck( dm );
+
+			return;
+		}
+
+
+		if (	state == DownloadManager.STATE_ERROR || 
+				state == DownloadManager.STATE_SEEDING || state == DownloadManager.STATE_DOWNLOADING ){
+
+			DownloadManagerListener[] listener = { null };
+
+			boolean was_force_start = dm.isForceStart();
+			
+			synchronized( listener ){
+				
+				listener[0] = 
+					new DownloadManagerAdapter()
+					{
+						long	start_time	= SystemTime.getMonotonousTime();
+						
+						boolean waiting_for_stop		= true;
+						boolean waiting_for_checking	= true;
+		
+						boolean	done = false;
+						
+						public void 
+						stateChanged(
+							DownloadManager 	manager, 
+							int 				state )
+						{
+							try{
+								if ( done ){
+								
+									return;
+								}
+							
+								if ( waiting_for_stop ){
+			
+									if ( state == DownloadManager.STATE_STOPPED ){
+			
+										waiting_for_stop = false;
+			
+										asyncRecheck( dm );
+										
+									}else if ( state == DownloadManager.STATE_STOPPING){
+										
+									}else{
+										
+										if ( SystemTime.getMonotonousTime() - start_time > 30*1000 ){
+										
+											Debug.out( "Abandoning recheck, download hasn't stopped" );
+											
+											done = true;
+										}
+									}
+								}else{
+			
+									if ( state == DownloadManager.STATE_CHECKING ){
+			
+										waiting_for_checking = false;
+										
+									}else{
+			
+										if (	state == DownloadManager.STATE_STOPPED &&
+												!waiting_for_checking ){
+			
+											done = true;
+											
+											if ( was_force_start ){
+											
+												asyncForceStart( dm );
+												
+											}else{
+											
+												asyncQueue( dm );
+											}
+											
+										}else if (	state == DownloadManager.STATE_DOWNLOADING || 
+													state == DownloadManager.STATE_SEEDING ||
+													state == DownloadManager.STATE_ERROR ){
+											
+											done = true;
+										}		
+									}
+								}
+							}finally{
+									
+								if ( done ){
+									
+									synchronized( listener ){
+									
+										dm.removeListener( listener[0] );
+									}
+								}
+							}
+						}
+					};
+			}
+
+			dm.addListener( listener[0] );
+
+			dm.stopIt( DownloadManager.STATE_STOPPED, false, false );
+		}
+	}
 
   /**
    * Host a DownloadManager on our Tracker.
@@ -1838,13 +2005,128 @@ public class ManagerUtils {
     }
   }
 
+  private static AsyncDispatcher alloc_dispatcher = new AsyncDispatcher(2000);
+
+  public static boolean
+  canAllocate(
+	DownloadManager		dm )
+  {
+	  boolean stopped = ManagerUtils.isStopped(dm);
+	  
+	  return( stopped && !dm.isDataAlreadyAllocated() && !dm.isDownloadComplete( false ));	
+  }
+  
+  public static void
+  allocate(
+	  DownloadManager[]		dms )
+  {		
+	  	// although the scheduler will try and enforce the "smallest first" it currently doesn't pause an 
+	  	// active allocation once started. So if the first download in the array isn't the smallest one
+	  	// it'll get to grab an allocation slot regardless and only subsequent ones will be processed in 
+	  	// the correct order. So.... pre-sort. Should fix the scheduler probably to do the same as the
+	  	// recheck scheduler
+	  
+	  boolean smallest_first = COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_DISKMANAGER_ALLOC_SMALLESTFIRST );
+	  
+	  if ( smallest_first ){
+		  
+		  dms = dms.clone();
+		  
+		  Arrays.sort( dms, (o1,o2)->{
+			  long comp = o1.getSize()-o2.getSize();
+			  
+			  return(comp<0?-1:(comp>0?1:0));
+		  });
+	  }
+	  
+	  for ( DownloadManager dm: dms ){
+		  
+		  if ( !canAllocate( dm )){
+			  
+			  continue;
+		  }
+		  
+		  dm.getDownloadState().setLongAttribute( DownloadManagerState.AT_FILE_ALLOC_STRATEGY, DownloadManagerState.FAS_ZERO_NEW_STOP );
+		  
+		  	// order may be ignored if "allocate smallest first" is enabled
+		  
+		  long order = COConfigurationManager.getLongParameter( "file.alloc.order.next", 0 );
+		  
+		  COConfigurationManager.setParameter( "file.alloc.order.next", order+1 );
+		  
+		  dm.getDownloadState().setLongAttribute( DownloadManagerState.AT_FILE_ALLOC_ORDER, order );
+	
+		  dm.getDownloadState().setFlag( DownloadManagerState.FLAG_DISABLE_STOP_AFTER_ALLOC, false );
+			  
+		  alloc_dispatcher.dispatch(()->{
+			  
+			  	// Download will stop post-allocation so we use force-start to get things going. Otherwise
+			  	// the download will sit there queued until such time as the download scheduler decides to
+			  	// start it. If we don't start straight away any explicit allocation ordering by the caller will
+			  	// get lost...
+			  
+			  dm.setForceStart( true );
+			  
+			  try{
+				  long start = SystemTime.getMonotonousTime();
+				  
+				  AtomicInteger latest_state = new AtomicInteger( -1 );
+				  
+				  DownloadManagerListener listener = 
+					new DownloadManagerAdapter()
+				  	{
+					  public void 
+					  stateChanged(
+							 DownloadManager 	manager, 
+							 int 				state )
+					  {
+						  latest_state.set( state );
+					  }
+				  	};
+				  
+				  dm.addListener (listener );
+				  
+				  try{
+					  while( true ){
+					  
+						  int state = latest_state.get();
+						  
+						  if (	state == DownloadManager.STATE_ERROR || 
+							  	state == DownloadManager.STATE_STOPPED ||
+							  	state == DownloadManager.STATE_ALLOCATING ||
+						  		state == DownloadManager.STATE_DOWNLOADING ){
+							  
+							  break;
+						  }
+						  
+						  if ( SystemTime.getMonotonousTime() - start > 5000 ){
+							  
+							  break;
+						  }
+						  
+						  Thread.sleep(50);
+					  }
+				  }finally{
+					  
+					  dm.removeListener( listener );
+				  }
+			  }catch( Throwable e ){
+				  
+			  }
+			  
+			  dm.setForceStart( false );
+		  });
+	  }
+  }
+  
   public static void
   queue(
-  		DownloadManager dm,
-		Composite panelNotUsed)
+  		DownloadManager dm )
   {
     if (dm != null) {
-    	if (dm.getState() == DownloadManager.STATE_STOPPED){
+    	int state = dm.getState();
+    	
+    	if ( state == DownloadManager.STATE_STOPPED || state == DownloadManager.STATE_ERROR ){
 
     		dm.setStateQueued();
 
@@ -2115,6 +2397,48 @@ public class ManagerUtils {
 		});
   	}
 
+ 	public static void
+	asyncRecheck(
+		final DownloadManager	dm )
+  	{
+    	async.dispatch(new AERunnable() {
+    		@Override
+		    public void
+			runSupport()
+    		{
+    			dm.forceRecheck();
+    		}
+		});
+  	}
+ 	
+	public static void
+	asyncQueue(
+		final DownloadManager	dm )
+  	{
+    	async.dispatch(new AERunnable() {
+    		@Override
+		    public void
+			runSupport()
+    		{
+    			dm.setStateQueued();
+    		}
+		});
+  	}
+ 	
+	public static void
+	asyncForceStart(
+		final DownloadManager	dm )
+  	{
+    	async.dispatch(new AERunnable() {
+    		@Override
+		    public void
+			runSupport()
+    		{
+    			dm.setForceStart( true );
+    		}
+		});
+  	}
+	
 	public static void asyncStartAll() {
 		CoreWaiterSWT.waitForCore(TriggerInThread.NEW_THREAD,
 				new CoreRunningListener() {
@@ -2334,6 +2658,16 @@ public class ManagerUtils {
 
 								run_when_complete.success( dm, stub );
 
+							}catch( DownloadRemovalVetoException e ){
+
+								run_when_complete.failed( dm, e );
+
+								if (!e.isSilent()) {
+									  UIFunctionsManager.getUIFunctions().forceNotify(
+											  UIFunctions.STATUSICON_ERROR,
+											  MessageText.getString( "globalmanager.download.remove.veto" ),
+											  e.getMessage(), dm.getName(), new Object[]{ dm }, -1 );
+								}
 							}catch( Throwable e ){
 
 								run_when_complete.failed( dm, e );
@@ -2532,19 +2866,31 @@ public class ManagerUtils {
 					
 					if ( result == 0 ){
 						
-						locateFilesSupport( dms, dm_files, shell );
+						locateFilesSupport( dms, dm_files, null, null, shell );
 					}
 				});
 		}else{
 			
-			locateFilesSupport( dms, dm_files, shell );
+			locateFilesSupport( dms, dm_files, null, null, shell );
 		}
 	}
 	
+	private static final int LOCATE_MODE_LINK		= 0;
+	private static final int LOCATE_MODE_COPY		= 1;
+	private static final int LOCATE_MODE_MOVE		= 2;
+	private static final int LOCATE_MODE_PIECE		= 3;
+	private static final int LOCATE_MODE_RELOCATE	= 4;
+	
+	private static final int LOCATE_MODE_LINK_BLANK		= 0;
+	private static final int LOCATE_MODE_LINK_INTERNAL	= 1;
+	private static final int LOCATE_MODE_LINK_HARD		= 2;
+
 	private static void
 	locateFilesSupport(
-		final DownloadManager[]			dms,
-		final DiskManagerFileInfo[][]	dm_files,
+		DownloadManager[]				dms,
+		DiskManagerFileInfo[][]			dm_files,
+		List<TorrentOpenOptions>		torrents,
+		Consumer<File[]>				listener,
 		Shell							shell )
 	{
 		ClassLoader loader = null;
@@ -2568,7 +2914,9 @@ public class ManagerUtils {
 			}
 		}
 		
-		final SkinnedDialog dialog = new SkinnedDialog( loader, "skin3_dlg_findfiles", "shell", shell,  SWT.DIALOG_TRIM );
+		final SkinnedDialog dialog = new SkinnedDialog( loader, "skin3_dlg_findfiles", "shell", shell,  SWT.DIALOG_TRIM | SWT.RESIZE );
+		
+		dialog.setTitle( MessageText.getString(dms!=null?"dlg.finddatafiles.title":"dlg.findsavelocations.title" ));
 		
 		SWTSkin skin = dialog.getSkin();
 
@@ -2591,9 +2939,13 @@ public class ManagerUtils {
 
 		SWTSkinObjectCheckbox	so_use_def	= (SWTSkinObjectCheckbox)skin.getSkinObject( "use-def" );
 		
+		SWTSkinObject			so_mode_label	= skin.getSkinObject( "mode-label" );
+
 		SWTSkinObjectContainer	so_mode		= (SWTSkinObjectContainer)skin.getSkinObject( "mode" );
 		
 		SWTSkinObjectCheckbox	so_include_skipped	= (SWTSkinObjectCheckbox)skin.getSkinObject( "skip-inc" );
+		
+		SWTSkinObjectCheckbox	so_test_only		= (SWTSkinObjectCheckbox)skin.getSkinObject( "test-only" );
 
 		Composite c_mode = so_mode.getComposite();
 		c_mode.setLayoutData( Utils.getFilledFormData());
@@ -2602,7 +2954,9 @@ public class ManagerUtils {
 		layout.marginWidth = 0;
 		layout.marginHeight = 0;
 		c_mode.setLayout( layout);
-				
+		
+			// mode 
+		
 		Combo mode_combo = new Combo( c_mode, SWT.READ_ONLY );
 		FormData	fd = new FormData();
 		fd.top=new FormAttachment(c_mode,0);
@@ -2612,26 +2966,47 @@ public class ManagerUtils {
 		mode_combo.setItems(
 				MessageText.getString( "label.link" ) + "    ",	// shitty layout doesn't give sufficient width for all options
 				MessageText.getString( "label.copy" ) + "    ",
-				MessageText.getString( "label.move" ) + "    ");
+				MessageText.getString( "label.move" ) + "    ",
+				MessageText.getString( "Peers.column.piece" ) + "    ",
+				MessageText.getString( "label.relocate" ) + "    "
+			);
+		
+			// link mode
+		
+		Combo link_combo = new Combo( c_mode, SWT.READ_ONLY );
+		fd = new FormData();
+		fd.top=new FormAttachment(c_mode,0);
+		fd.bottom=new FormAttachment(100);
+		fd.left=new FormAttachment(mode_combo,2 );
+		link_combo.setLayoutData( fd );
+		
+		link_combo.setItems(
+				"    ",	
+				MessageText.getString( "tag.type.internal" ) + "    ",	// shitty layout doesn't give sufficient width for all options
+				MessageText.getString( "label.hard" ) + "    " );
+			
+		Utils.setTT( link_combo, MessageText.getString( "label.link.type" ));
+		
+			// tolerance
 		
 		CLabel tolerance = new CLabel( c_mode, SWT.CENTER );
 		fd = new FormData();
 		fd.top=new FormAttachment(c_mode,0);
 		fd.bottom=new FormAttachment(100,-2);
-		fd.left=new FormAttachment(mode_combo );
+		fd.left=new FormAttachment(link_combo );
 		tolerance.setLayoutData( fd );
 		tolerance.setText( MessageText.getString( "label.tolerance.pct" ));
 		
-		Spinner spinner = new Spinner(c_mode, SWT.BORDER | SWT.RIGHT);
+		Spinner tolerance_spinner = new Spinner(c_mode, SWT.BORDER | SWT.RIGHT);
 		fd = new FormData();
 		fd.top=new FormAttachment(c_mode,0);
 		fd.bottom=new FormAttachment(100);
 		fd.left=new FormAttachment(tolerance,2);
 		fd.right=new FormAttachment(100);
 		
-		spinner.setLayoutData( fd );
-		spinner.setMinimum( 0 );
-		spinner.setMaximum( 10 );
+		tolerance_spinner.setLayoutData( fd );
+		tolerance_spinner.setMinimum( 0 );
+		tolerance_spinner.setMaximum( 10 );
 				
 		SWTSkinObjectContainer soButtonArea = (SWTSkinObjectContainer)skin.getSkinObject("bottom-area");
 		
@@ -2655,9 +3030,13 @@ public class ManagerUtils {
 					
 					int mode = mode_combo.getSelectionIndex();
 					
-					int tolerance = spinner.getSelection();
+					int link_type = link_combo.getSelectionIndex();
+					
+					int tolerance = tolerance_spinner.getSelection();
 					
 					boolean include_skipped = so_include_skipped.isChecked();
+					
+					boolean test_only = so_test_only.isChecked();
 					
 					dialog.close();
 					
@@ -2668,7 +3047,14 @@ public class ManagerUtils {
 							public void
 							run()
 							{
-								locateFiles( dms, dm_files, shell, roots, mode, tolerance, include_skipped );
+								if ( dms != null ){
+								
+									locateFiles( dms, dm_files, shell, roots, mode, link_type, tolerance, include_skipped, test_only );
+									
+								}else{
+									
+									locateSavePaths( torrents, shell, roots, listener );
+								}
 							}
 						});
 					
@@ -2720,9 +3106,23 @@ public class ManagerUtils {
 					
 					buttonsArea.setButtonEnabled( SWT.OK, can_search );
 					
-					int mode = COConfigurationManager.getIntParameter( "find.files.search.mode", 0 );
+					int mode = COConfigurationManager.getIntParameter( "find.files.search.mode", LOCATE_MODE_LINK );
 					
 					mode_combo.select( mode );
+					
+					boolean not_relocate = mode != LOCATE_MODE_RELOCATE;
+					
+					int link_mode = COConfigurationManager.getIntParameter( "find.files.search.mode.link", LOCATE_MODE_LINK_INTERNAL );
+					
+					boolean link_enabled = mode == LOCATE_MODE_LINK;
+					
+					link_combo.select( link_enabled?link_mode:LOCATE_MODE_LINK_BLANK );
+					
+					link_combo.setEnabled( link_enabled );
+					
+					tolerance_spinner.setEnabled( not_relocate );
+					
+					so_include_skipped.setEnabled( not_relocate );
 				}
 			};
 			
@@ -2769,6 +3169,73 @@ public class ManagerUtils {
 						});
 					
 					mi.setEnabled( selected.length > 0 );
+					
+					new MenuItem( menu, SWT.SEPARATOR );
+					
+					mi = new MenuItem( menu, SWT.PUSH );
+					
+					Messages.setLanguageText(mi, "wizard.multitracker.edit.text" );
+					
+					mi.addListener( SWT.Selection, (ev)->{
+						
+						String[] old_items = def_locs.getItems();
+						
+						String old_text = "";
+						
+						for ( String o: old_items ){
+							
+							old_text += o + "\n";
+						}
+
+						String f_old_text = old_text;
+						
+					   	TextViewerWindow viewer =
+					    		  new TextViewerWindow(
+					    				  shell,
+					    				  "dlg.finddatafiles.deflab",
+					    				  null,
+					    				  old_text, false, false );
+
+				    	  viewer.setEditable( true );
+
+				    	  viewer.addListener(
+								new TextViewerWindow.TextViewerWindowListener()
+								{
+									@Override
+									public void
+									closed()
+									{
+										if ( viewer.getOKPressed()){
+											
+									    	  String new_text = viewer.getText().trim();
+				
+									    	  if ( !f_old_text.trim().equals( new_text )){
+				
+									    		  String[] lines = new_text.split( "\n" );
+						
+									    		  List<String> temp = new ArrayList<>();
+									    		  
+									    		  for ( String line: lines ){
+				
+									    			  line = line.trim();
+				
+									    			  if ( line.length() > 0 ){
+				
+									    				  temp.add( line );
+									    			  }
+									    		  }
+				
+									    		  def_locs.setItems( temp.toArray( new String[ temp.size()]));
+									    		  
+									    		  COConfigurationManager.setParameter( "find.files.search.roots", temp );
+													
+									    		  state_changed.run();
+									    	  }
+										}
+									}
+								});
+					});
+							
 				}
 				public void menuHidden(MenuEvent arg0) {};
 			});
@@ -2822,19 +3289,36 @@ public class ManagerUtils {
 					state_changed.run();
 				}
 			});
-				
-		spinner.addListener(
+			
+		link_combo.addSelectionListener(
+			new SelectionAdapter(){
+				@Override
+				public void widgetSelected(SelectionEvent e){
+					int index = link_combo.getSelectionIndex();
+					
+					if ( index == LOCATE_MODE_LINK_BLANK ){
+						
+						index = LOCATE_MODE_LINK_INTERNAL;
+					}
+					
+					COConfigurationManager.setParameter( "find.files.search.mode.link", index );
+					
+					state_changed.run();
+				}
+			});
+		
+		tolerance_spinner.addListener(
 				SWT.Selection, 
 				(e)->{
-					int value = spinner.getSelection();
+					int value = tolerance_spinner.getSelection();
 					
 					if ( value != 0 ){
 						
 						int index = mode_combo.getSelectionIndex();
 						
-						if ( index == 0 ){
+						if ( index == LOCATE_MODE_LINK ){
 						
-							index = 1;
+							index = LOCATE_MODE_COPY;
 						
 							mode_combo.select( index );
 							
@@ -2945,7 +3429,18 @@ public class ManagerUtils {
 					}
 				});
 		
-		dialog.open();	
+		skin.setAutoSizeOnLayout( true, true );
+		
+		if ( dms == null ){
+			
+			so_mode_label.setVisible( false );
+			
+			so_mode.setVisible( false );
+			
+			skin.getSkinObject( "opt2-line" ).setVisible( false );
+		}
+		
+		dialog.open( "skin3_dlg_findfiles." + (dms==null?"dms":"sps"), true );	
 	}
 	
 		// Bug in Windows 10 causing crash in SWT/OS when window closes:
@@ -2954,6 +3449,7 @@ public class ManagerUtils {
 		// in the absence of any help from SWT team currently hacked to re-use window :(
 	
 	private static List<TextViewerWindow>	lf_windows 	= new ArrayList<>();
+	private static List<TextViewerWindow>	sp_windows 	= new ArrayList<>();
 	private static final boolean			lf_reuse	= Constants.isWindows10OrHigher;
 	
 	private static final long	LOG_TICK_DOT_MIN = 250;
@@ -2964,10 +3460,12 @@ public class ManagerUtils {
 		final DownloadManager[]			dms,
 		final DiskManagerFileInfo[][]	dm_files,
 		Shell							shell,
-		String[]						search_roots,
+		String[]						initial_search_roots,
 		int								mode,
+		int								link_type,
 		int								tolerance,
-		boolean							include_skipped )
+		boolean							include_skipped,
+		boolean							test_only )
 	{
 		TextViewerWindow _viewer = null;
 		
@@ -2983,7 +3481,7 @@ public class ManagerUtils {
 			
 			if ( _viewer == null ){
 		
-				_viewer = new TextViewerWindow( MessageText.getString( "locatefiles.view.title" ), null, "", false, false );
+				_viewer = new TextViewerWindow( lf_reuse?null:shell,MessageText.getString( "locatefiles.view.title" ), null, "", false, false );
 				
 			}else{
 				
@@ -3008,6 +3506,15 @@ public class ManagerUtils {
 			public void
 			run()
 			{
+				SimpleDateFormat date_format = new SimpleDateFormat( "yyyy/MM/dd HH:mm:ss" );
+				
+				String action_str = mode==LOCATE_MODE_LINK?"Linked":(mode==LOCATE_MODE_COPY||mode==LOCATE_MODE_PIECE?"Copied":"Moved" );
+				
+				if ( test_only ){
+					
+					action_str = "Would have " + action_str.toLowerCase( Locale.US );
+				}
+
 				final int 		MAX_LINKS 		= DownloadManagerStateFactory.MAX_FILES_FOR_INCOMPLETE_AND_DND_LINKAGE;
 				final String 	LINK_LIMIT_MSG 	= "Link limit of " + MAX_LINKS + " exceeded. See Tools->Options->Files to increase this";
 
@@ -3035,15 +3542,64 @@ public class ManagerUtils {
 								}
 							});
 
+					if ( test_only ){
+						
+						logLine( viewer, 0, "*** Test mode - changes will not be applied ***" );
+					}
+					
 					int indent = 0;
 
 					boolean[]	handled = new boolean[dms.length ];
 					
 					int	downloads_modified = 0;
 					
-						// first level of processing - look for simple root folder changes								
+						// first level of processing - look for simple root folder changes	
+						// for hard links we don't want to think about switch the root folder as the 
+						// user explicitly wants to use hard links to refer to any files found
 					
-					if ( mode == 0 ){
+					if ( 	mode == LOCATE_MODE_RELOCATE || 
+							( mode == LOCATE_MODE_LINK && link_type != LOCATE_MODE_LINK_HARD )){
+						
+							// If a user is relocating a number of downloads they may have taken the 
+							// opportunity to organise things a bit (e.g. move into genre-based folders)
+							// Expand the search roots a pick this up
+						
+						Set<String>	expanded_search_roots = new LinkedHashSet<>( initial_search_roots.length*10 );
+						
+						expanded_search_roots.addAll( Arrays.asList( initial_search_roots ));
+						
+						Collection<String>	to_expand = expanded_search_roots;
+						
+						for ( int level=0;level<2;level++){
+							
+							List<String>	all_kids = new ArrayList<>();
+							
+							for ( String str: to_expand ){
+								
+								File[] kids = new File( str ).listFiles();
+								
+								if ( kids != null && kids.length > 0 ){
+									
+									for ( File f: kids ){
+										
+										if ( f.isDirectory()){
+										
+											all_kids.add( f.getAbsolutePath());
+										}
+									}
+								}
+							}
+							
+							expanded_search_roots.addAll( all_kids );
+							
+							to_expand = all_kids;
+						}						
+						
+						if ( expanded_search_roots.size() > initial_search_roots.length ){
+							
+							logLine( viewer, 0, ( expanded_search_roots.size() - initial_search_roots.length ) + " subfolders added to search roots" );
+						}
+						
 						for ( int i=0;i<dms.length;i++){
 	
 							DownloadManager			dm = dms[i];
@@ -3090,7 +3646,7 @@ public class ManagerUtils {
 							String save_name = save_loc.getName();
 							
 							outer:
-							for ( String root: search_roots ){
+							for ( String root: expanded_search_roots ){
 	
 								if ( handled[i] ){
 									break;
@@ -3121,17 +3677,24 @@ public class ManagerUtils {
 										
 										if ( dm_files[0].getLength() == test_loc.length()){
 											
-											dm_files[0].setLinkAtomic( test_loc );
-											
-											dm.setTorrentSaveDir( test_loc, true );
-											
 											handled[i] = true;
 											
 											downloads_modified++;
-											
-											dm.forceRecheck();
-											
-											logLine(viewer, dm_indent, "Download '" + dm.getDisplayName() + "' relocated from '" + save_loc.getParent() + "' to '" + root + "'" );
+
+											if ( test_only ){
+												
+												logLine(viewer, dm_indent, "Download '" + dm.getDisplayName() + "' would be relocated from '" + save_loc.getParent() + "' to '" + root + "'" );
+
+											}else{
+												
+												dm_files[0].setLinkAtomic( test_loc, true );
+												
+												dm.setTorrentSaveDir( test_loc, true );
+																								
+												dm.forceRecheck();
+												
+												logLine(viewer, dm_indent, "Download '" + dm.getDisplayName() + "' relocated from '" + save_loc.getParent() + "' to '" + root + "'" );
+											}
 											
 											break;
 										}
@@ -3198,25 +3761,43 @@ public class ManagerUtils {
 										
 										if ( all_good ){
 										
-											dm.setTorrentSaveDir( test_loc, true );
-											
 											handled[i] = true;
 											
 											downloads_modified++;
+
+											if ( test_only ){
+												
+												logLine(viewer, dm_indent, "Download '" + dm.getDisplayName() + "' would be relocated from '" + save_loc.getParent() + "' to '" + root + "'" );
+
+											}else{
+												
+												dm.setTorrentSaveDir( test_loc, true );
+																								
+												if ( mode != LOCATE_MODE_RELOCATE || !dm.isDownloadComplete( false )){
+												
+													dm.forceRecheck();
+												}
+												
+												logLine(viewer, dm_indent, "Download '" + dm.getDisplayName() + "' relocated from '" + save_loc.getParent() + "' to '" + root + "'" );
+											}
 											
-											dm.forceRecheck();
-											
-											logLine(viewer, dm_indent, "Download '" + dm.getDisplayName() + "' relocated from '" + save_loc.getParent() + "' to '" + root + "'" );
-											
-											break;
+											break;											
 										}
 									}
 								}
 							}		
+						
+							if ( !handled[i] ){
+							
+								if ( mode == LOCATE_MODE_RELOCATE ){
+								
+									logLine(viewer, dm_indent, "Download '" + dm.getDisplayName() + "' not relocated from '" + save_loc.getParent() + "' as compatible files not found" );
+								}
+							}
 						}
 					}
 					
-					if ( downloads_modified < handled.length ){
+					if ( downloads_modified < handled.length && mode != LOCATE_MODE_RELOCATE ){
 							
 						int file_count	= 0;	
 	
@@ -3224,7 +3805,7 @@ public class ManagerUtils {
 	
 						long[] log_details = { bfm_start, 0, bfm_start };
 		
-						for ( String root: search_roots ){
+						for ( String root: initial_search_roots ){
 	
 							synchronized( quit ){
 								if ( quit[0] ){
@@ -3234,7 +3815,7 @@ public class ManagerUtils {
 	
 							File dir = new File( root );
 	
-							logLine( viewer, indent, (bfm_start==log_details[0]?"":"\r\n") + new SimpleDateFormat().format( new Date()) +  ": Enumerating files in " + dir );
+							logLine( viewer, indent, (bfm_start==log_details[0]?"":"\r\n") + date_format.format( new Date()) +  ": Enumerating files in " + dir );
 	
 							file_count += buildFileMap( viewer, dir, file_map, log_details, quit );
 						}
@@ -3352,7 +3933,7 @@ public class ManagerUtils {
 													}else if ( diff > 0 ){
 														return( 1 );
 													}else{
-														return( 0 );
+														return( o1.getIndex() - o2.getIndex());
 													}
 												}
 											});
@@ -3362,292 +3943,436 @@ public class ManagerUtils {
 							int skipped				= 0;
 							int unskipped_count		= 0;
 	
-							int	action_count = 0;
+							int	action_count 		= 0;
+							int internal_link_count	= 0;
+							
+								// pre-scan candidates to see if there is a preferred order for multiple-hits
+							
+							Map<String,int[]>	candidate_root_map = new HashMap<>();
+							boolean				has_multiple_candidates = false;
+							String				candidate_root_pref	= null;
+							int					candidate_root_pref_count	= 0;
+							
+							for ( final DiskManagerFileInfo file: files ){
+
+								if ( file.getTorrentFile().isPadFile()){
+									
+									continue;
+								}
+
+								if ( selected_file_indexes != null ){
+
+									if ( !selected_file_indexes.contains( file.getIndex())){
+
+										continue;
+									}
+								}
+
+								long	file_length = file.getLength();
+
+								if ( file.getDownloaded() == file_length ){
+
+									// edge case where file has been deleted but cached download info not reset yet
+
+									if ( file.getFile( true ).exists()){
+
+										already_complete++;
+
+										continue;
+									}
+								}
+
+								if ( !include_skipped ){
+
+									if ( file.isSkipped()){
+
+										skipped++;
+
+										continue;
+									}
+								}
+								
+								Set<File> candidates = file_map.get( file_length );
+
+								if ( candidates == null ){
+									
+									continue;
+								}
+								
+								if ( candidates.size() > 1 ){
+									
+									has_multiple_candidates = true;
+								}
+								
+								for ( File candidate: candidates ){
+									
+									File root = candidate;
+
+									String rel = file.getTorrentFile().getRelativePath();
 	
+									int pos = 0;
+	
+									while( root != null ){
+	
+										root = root.getParentFile();
+	
+										pos = rel.indexOf( File.separatorChar, pos );
+	
+										if ( pos >= 0 ){
+	
+											pos = pos+1;
+	
+										}else{
+	
+											break;
+										}
+									}
+									
+									if ( root != null ){
+										
+										String root_str = root.getAbsolutePath();
+										
+										int[] count = candidate_root_map.get( root_str );
+										
+										if ( count == null ){
+											
+											count = new int[]{ 0 };
+											
+											candidate_root_map.put( root_str, count );
+										}
+										
+										int num = ++count[0];
+										
+										if ( num > candidate_root_pref_count ){
+										
+											candidate_root_pref_count 	= num;
+											candidate_root_pref			= root_str;
+										}
+									}
+								}
+							}
+							
+							if ( has_multiple_candidates && candidate_root_map.size() > 1 ){
+								
+								logLine( viewer, dm_indent, "Multiple candidates, preferred root is " + candidate_root_pref );
+
+							}else{
+								
+								candidate_root_pref = null;
+							}
+							
 							try{
 	
 								download_loop:
-									for ( final DiskManagerFileInfo file: files ){
-	
-										if ( file.getTorrentFile().isPadFile()){
-											
+								for ( final DiskManagerFileInfo file: files ){
+
+									if ( file.getTorrentFile().isPadFile()){
+										
+										continue;
+									}
+									
+									int file_indent = dm_indent;
+
+									synchronized( quit ){
+										if ( quit[0] ){
+											break;
+										}
+									}
+
+									if ( selected_file_indexes != null ){
+
+										if ( !selected_file_indexes.contains( file.getIndex())){
+
 											continue;
 										}
+									}
+
+									long	file_length = file.getLength();
+
+									if ( file.getDownloaded() == file_length ){
+
+										// edge case where file has been deleted but cached download info not reset yet
+
+										if ( file.getFile( true ).exists()){
+
+											already_complete++;
+
+											continue;
+										}
+									}
+
+									if ( !include_skipped ){
+
+										if ( file.isSkipped()){
+
+											skipped++;
+
+											continue;
+										}
+									}
+
+									Set<File> general_candidates = file_map.get( file_length );
+
+									String extra_info = "";
+
+									if ( file_lengths != null ){
+
+										int pos = Arrays.binarySearch( file_lengths, file_length );
+
+										if ( pos < 0 ){
+
+											pos = (-pos) -1;
+										}
+
+										if ( pos >= files.length ){
+											
+											pos = files.length-1;
+										}
 										
-										int file_indent = dm_indent;
-	
-										synchronized( quit ){
-											if ( quit[0] ){
+										long 	file_tolerance = tolerance*file_length/100;
+
+										long	lower_limit = file_length - file_tolerance;
+										long	upper_limit = file_length + file_tolerance;
+
+										int	index = pos;
+
+										List<Set<File>>	extra_candidates = new ArrayList<>();
+
+										while( index >= 0 ){
+
+											long	l = file_lengths[index--];
+										
+											if ( l < lower_limit ){
+
 												break;
-											}
-										}
-	
-										if ( selected_file_indexes != null ){
-	
-											if ( !selected_file_indexes.contains( file.getIndex())){
-	
-												continue;
-											}
-										}
-	
-										long	file_length = file.getLength();
-	
-										if ( file.getDownloaded() == file_length ){
-	
-											// edge case where file has been deleted but cached download info not reset yet
-	
-											if ( file.getFile( true ).exists()){
-	
-												already_complete++;
-	
-												continue;
-											}
-										}
-	
-										if ( !include_skipped ){
-	
-											if ( file.isSkipped()){
-	
-												skipped++;
-	
-												continue;
-											}
-										}
-	
-										Set<File> candidates = file_map.get( file_length );
-	
-										String extra_info = "";
-	
-										if ( file_lengths != null ){
-	
-											int pos = Arrays.binarySearch( file_lengths, file_length );
-	
-											if ( pos < 0 ){
-	
-												pos = 1-pos;
-											}
-	
-											long 	file_tolerance = tolerance*file_length/100;
-	
-											long	lower_limit = file_length - file_tolerance;
-	
-											int	index = pos;
-	
-											List<Set<File>>	extra_candidates = new ArrayList<>();
-	
-											while( index >= 0 ){
-	
-												long	l = file_lengths[index--];
-	
-												if ( l < lower_limit ){
-	
-													break;
-	
-												}else{
-	
-													if ( l != file_length ){
-	
-														Set<File> x = file_map.get( l );
-	
-														if ( x != null ){
-	
-															if ( extra_info.length() > 128 ){
-	
-																if ( !extra_info.endsWith( "..." )){
-	
-																	extra_info += "...";
-																}		
-															}else{
-	
-																extra_info += (extra_info.isEmpty()?"":", ") + l  + "->" + x.size();
-															}
-	
-															extra_candidates.add( x );
-														}
-													}
-												}
-											}
-	
-											long	upper_limit = file_length + file_tolerance;
-	
-											index = pos+1;
-	
-											while( index < file_lengths.length ){
-	
-												long	l = file_lengths[index++];
-	
-												if ( l > upper_limit ){
-	
-													break;
-	
-												}else{
-	
-													if ( l != file_length ){
-	
-														Set<File> x = file_map.get( l );
-	
-														if ( x != null ){
-	
+
+											}else{
+
+												if ( l != file_length && l < upper_limit ){
+
+													Set<File> x = file_map.get( l );
+
+													if ( x != null ){
+
+														if ( extra_info.length() > 128 ){
+
+															if ( !extra_info.endsWith( "..." )){
+
+																extra_info += "...";
+															}		
+														}else{
+
 															extra_info += (extra_info.isEmpty()?"":", ") + l  + "->" + x.size();
-	
-															extra_candidates.add( x );
 														}
-													}
-												}
-											}
-	
-											if ( !extra_candidates.isEmpty()){
-	
-												boolean duplicated = false;
-	
-												if ( candidates != null ){
-	
-													candidates = new HashSet<>( candidates );
-	
-													duplicated = true;
-												}
-	
-												for ( Set<File> s: extra_candidates ){
-	
-													if ( candidates == null ){
-	
-														candidates = s;
-	
-													}else{
-	
-														if ( !duplicated ){
-	
-															candidates = new HashSet<>( candidates );
-	
-															duplicated = true;
-														}
-	
-														candidates.addAll( s );
+
+														extra_candidates.add( x );
 													}
 												}
 											}
 										}
-	
-										if ( candidates != null ){
-	
-											if ( candidates.size() > 0 ){
-	
-												// remove any incomplete files from existing downloads
-	
-												if ( all_dm_incomplete_files == null ){
-	
-													all_dm_incomplete_files = new HashSet<>();
-	
-													List<DownloadManager> all_dms = CoreFactory.getSingleton().getGlobalManager().getDownloadManagers();
-	
-													for ( DownloadManager x: all_dms ){
-	
-														if ( !x.isDownloadComplete( false )){
-	
-															DiskManagerFileInfo[] fs = x.getDiskManagerFileInfoSet().getFiles();
-	
-															for ( DiskManagerFileInfo f: fs ){
-	
-																if ( 	f.isSkipped() ||
-																		f.getDownloaded() != f.getLength()){
-	
-																	all_dm_incomplete_files.add( f.getFile(true).getAbsolutePath());
-																}
+
+										index = pos+1;
+
+										while( index < file_lengths.length ){
+
+											long	l = file_lengths[index++];
+
+											if ( l > upper_limit ){
+
+												break;
+
+											}else{
+
+												if ( l != file_length && l > lower_limit ){
+
+													Set<File> x = file_map.get( l );
+
+													if ( x != null ){
+
+														extra_info += (extra_info.isEmpty()?"":", ") + l  + "->" + x.size();
+
+														extra_candidates.add( x );
+													}
+												}
+											}
+										}
+
+										if ( !extra_candidates.isEmpty()){
+
+											boolean duplicated = false;
+
+											if ( general_candidates != null ){
+
+												general_candidates = new HashSet<>( general_candidates );
+
+												duplicated = true;
+											}
+
+											for ( Set<File> s: extra_candidates ){
+
+												if ( general_candidates == null ){
+
+													general_candidates = s;
+
+												}else{
+
+													if ( !duplicated ){
+
+														general_candidates = new HashSet<>( general_candidates );
+
+														duplicated = true;
+													}
+
+													general_candidates.addAll( s );
+												}
+											}
+										}
+									}
+
+									if ( general_candidates != null ){
+
+										int initial_gc_size = general_candidates.size();
+										
+										if ( initial_gc_size > 0 ){
+
+											// remove any incomplete files from existing downloads
+
+											if ( all_dm_incomplete_files == null ){
+
+												all_dm_incomplete_files = new HashSet<>();
+
+												List<DownloadManager> all_dms = CoreFactory.getSingleton().getGlobalManager().getDownloadManagers();
+
+												for ( DownloadManager x: all_dms ){
+
+													if ( !x.isDownloadComplete( false )){
+
+														DiskManagerFileInfo[] fs = x.getDiskManagerFileInfoSet().getFiles();
+
+														for ( DiskManagerFileInfo f: fs ){
+
+															if ( 	f.isSkipped() ||
+																	f.getDownloaded() != f.getLength()){
+
+																all_dm_incomplete_files.add( f.getFile(true).getAbsolutePath());
 															}
 														}
 													}
 												}
-	
-												Iterator<File> it = candidates.iterator();
-	
-												while( it.hasNext()){
-	
-													File f = it.next();
-	
-													if ( all_dm_incomplete_files.contains( f.getAbsolutePath())){
-	
-														it.remove();
-													}
+											}
+
+											Iterator<File> it = general_candidates.iterator();
+
+											while( it.hasNext()){
+
+												File f = it.next();
+
+												if ( all_dm_incomplete_files.contains( f.getAbsolutePath())){
+
+													it.remove();
 												}
 											}
+										}
+
+											// must duplicate as modified below
+										
+										LinkedList<File> dm_candidates = new LinkedList<>( general_candidates );
+										
+										if ( dm_candidates.size() > 0 ){
 	
-											if ( candidates.size() > 0 ){
-	
-												// duplicate now as this is download-specific
-	
-												candidates = new HashSet<>( candidates );
-	
-												// remove all files from this download
-	
-												if ( dm_files == null ){
-	
-													dm_files = new HashSet<>();
-	
-													for ( DiskManagerFileInfo f: files ){
-	
-														dm_files.add( f.getFile( true ).getAbsolutePath());
-													}
-												}
-	
-												Iterator<File> it = candidates.iterator();
-	
-												while( it.hasNext()){
-	
-													File f = it.next();
-	
-													if ( dm_files.contains( f.getAbsolutePath())){
-	
-														it.remove();
-													}
+											// remove all files from this download
+
+											if ( dm_files == null ){
+
+												dm_files = new HashSet<>();
+
+												for ( DiskManagerFileInfo f: files ){
+
+													dm_files.add( f.getFile( true ).getAbsolutePath());
 												}
 											}
-	
-											if ( candidates.size() > 0 ){
-	
-												boolean	matched = false;
-	
-												Set<String>	failed_candidates = new HashSet<>();
-	
-												TOTorrentFile to_file = file.getTorrentFile();
-	
-												long	offset = 0;
-	
-												for ( TOTorrentFile tf: to_files ){
-	
-													if ( tf == to_file ){
-	
-														break;
+
+											Iterator<File> it = dm_candidates.iterator();
+
+											while( it.hasNext()){
+
+												File f = it.next();
+
+												if ( dm_files.contains( f.getAbsolutePath())){
+
+													it.remove();
+												}
+											}
+										}
+
+										int dm_c_size = dm_candidates.size();
+										
+										if ( test_only && initial_gc_size > 0 && dm_c_size == 0 ){
+											
+											TOTorrentFile to_file = file.getTorrentFile();
+
+											logLine( 
+												viewer, file_indent,
+												to_file.getRelativePath() + " had " + initial_gc_size + " candidates but all have been ignored as incomplete/skipped");
+										}
+										
+										if ( dm_c_size > 0 ){
+
+											boolean	matched = false;
+
+											Set<String>	failed_candidates = new HashSet<>();
+
+											TOTorrentFile to_file = file.getTorrentFile();
+
+											long	offset = to_file.getOffsetInTorrent();
+
+											int	to_piece_number = to_file.getFirstPieceNumber();
+
+											long to_file_offset = offset%piece_size;
+
+											if ( to_file_offset != 0 ){
+
+												to_file_offset = piece_size - to_file_offset;
+
+												to_piece_number++;
+											}
+
+											long	overall_to_stop_at = file_length - piece_size;
+
+											if ( to_file_offset < overall_to_stop_at ){
+
+												int test_indent = file_indent+1;
+
+												logLine( 
+														viewer, file_indent,
+														to_file.getRelativePath() + 
+														" (size=" + DisplayFormatters.formatByteCountToKiBEtc(to_file.getLength()) +
+														(extra_info.isEmpty()?"":(", extra: " + extra_info )) + ")" + " - " + dm_candidates.size() + " candidate(s)" );
+
+												byte[]	buffer = new byte[(int)piece_size];
+
+												RandomAccessFile 	to_raf 			= null;
+												boolean				to_raf_tried 	= false;
+												
+												try{
+													if ( dm_candidates.size() > 1 && candidate_root_pref != null ){
+														
+														for ( Iterator<File> it=dm_candidates.iterator(); it.hasNext();){
+															
+															File candidate = it.next();
+															
+															if ( candidate.getAbsolutePath().startsWith(candidate_root_pref)){
+																
+																it.remove();
+																
+																dm_candidates.addFirst( candidate );
+																
+																break;
+															}
+														}
 													}
-	
-													offset += tf.getLength();
-												}
-	
-												int	to_piece_number = to_file.getFirstPieceNumber();
-	
-												long to_file_offset = offset%piece_size;
-	
-												if ( to_file_offset != 0 ){
-	
-													to_file_offset = piece_size - to_file_offset;
-	
-													to_piece_number++;
-												}
-	
-												long	overall_to_stop_at = file_length - piece_size;
-	
-												if ( to_file_offset < overall_to_stop_at ){
-	
-													int test_indent = file_indent+1;
-	
-													logLine( 
-															viewer, file_indent,
-															to_file.getRelativePath() + 
-															" (size=" + DisplayFormatters.formatByteCountToKiBEtc(to_file.getLength()) +
-															(extra_info.isEmpty()?"":(", extra: " + extra_info )) + ")" + " - " + candidates.size() + " candidate(s)" );
-	
-													byte[]	buffer = new byte[(int)piece_size];
-	
-													for ( File candidate: candidates ){
+													
+													for ( File from_file: dm_candidates ){
 	
 														synchronized( quit ){
 															if ( quit[0] ){
@@ -3658,7 +4383,9 @@ public class ManagerUtils {
 														long 	file_to_stop_at;
 														long 	allowed_fails;
 	
+														int		matched_pieces	= 0;
 														int		failed_pieces	= 0;
+														int		copied_pieces	= 0;
 	
 														if ( tolerance == 0 ){
 	
@@ -3668,7 +4395,7 @@ public class ManagerUtils {
 	
 														}else{
 	
-															long this_file_length = candidate.length();
+															long this_file_length = from_file.length();
 	
 															// might be too long, bring it back within range
 	
@@ -3682,9 +4409,9 @@ public class ManagerUtils {
 															allowed_fails = (( tolerance*this_file_length/100 ) + (piece_size-1)) / piece_size;
 														}
 	
-														log( viewer, test_indent, "Testing " + candidate + (allowed_fails==0?"":(" (max fails=" + allowed_fails + ")" )) + " - " );
+														log( viewer, test_indent, "Testing " + from_file + (allowed_fails==0?"":(" (max fails=" + allowed_fails + ")" )) + " - " );
 	
-														RandomAccessFile raf = null;
+														RandomAccessFile from_raf = null;
 	
 														boolean	error 			= false;
 														boolean	hash_failed		= false;
@@ -3694,7 +4421,7 @@ public class ManagerUtils {
 														long	dot_count	= 0;
 	
 														try{
-															raf = new RandomAccessFile( candidate, "r" );
+															from_raf = new RandomAccessFile( from_file, "r" );
 	
 															long 	file_offset 	= to_file_offset;
 															int		piece_number 	= to_piece_number;
@@ -3707,9 +4434,9 @@ public class ManagerUtils {
 																	}
 																}
 	
-																raf.seek( file_offset );
+																from_raf.seek( file_offset );
 	
-																raf.read( buffer );
+																from_raf.read( buffer );
 	
 																byte[] required_hash = pieces[piece_number];
 																
@@ -3734,6 +4461,8 @@ public class ManagerUtils {
 	
 																if ( match ){
 	
+																	matched_pieces++;
+																	
 																	long now = SystemTime.getMonotonousTime();
 	
 																	long elapsed = now - log_start;
@@ -3753,17 +4482,112 @@ public class ManagerUtils {
 	
 																		log( viewer, 0, "." );
 																	}
+																	
+																	if ( mode == LOCATE_MODE_PIECE ){
+																		
+																		if ( test_only ){
+																			
+																			if ( !to_raf_tried ){
+																				
+																				to_raf_tried = true;
+																				
+																				int action_indent = test_indent+1;
+
+																				if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR ){
+																																											
+																					logLine( viewer, action_indent, "Would set storage type to linear" );
+																				}
+
+																				if ( file.isSkipped()){
+																					
+																					unskipped_count++;
+																					
+																					logLine( viewer, action_indent, "Would set priority to normal" );
+																				}
+																			}
+																			
+																			copied_pieces++;
+																			
+																			if ( !actions_established.containsKey( file )){
+																				
+																				actions_established.put( file, from_file );
+																				
+																				action_count++;
+																			}
+																		}else{
+																			
+																			if ( to_raf == null && !to_raf_tried ){
+																				
+																				to_raf_tried = true;
+																				
+																				int action_indent = test_indent+1;
+																				
+																				if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR ){
+																					
+																					boolean worked = file.setStorageType( DiskManagerFileInfo.ST_LINEAR, true );
+																					
+																					logLine( viewer, action_indent, "Setting storage type to linear - " + ( worked?"OK":"Failed" ));
+																				}
+						
+																				File existing = file.getFile( true );
+
+																				if ( file.isSkipped()){
+												
+																					boolean existed = existing.exists();
+						
+																					file.setSkipped( false );
+						
+																					boolean worked = !file.isSkipped();
+						
+																					if ( worked ){
+						
+																						unskipped_count++;
+																					}
+						
+																					logLine( viewer, action_indent, "Setting priority to normal - " + ( worked?"OK":"Failed" ));
+						
+																					if ( !existed && existing.exists()){
+						
+																						existing.delete();
+																					}
+																				}
+																				
+																				if ( !existing.exists()){
+																					
+																					existing.getParentFile().mkdirs();
+																				}
+																				
+																				to_raf = new RandomAccessFile( existing, "rw" );
+																			}
+																			
+																			if ( to_raf != null ){
+																				
+																				to_raf.seek( file_offset );
+																				
+																				to_raf.write( buffer );
+
+																				copied_pieces++;
+																				
+																				if ( !actions_established.containsKey( file )){
+																					
+																					actions_established.put( file, from_file );
+																					
+																					action_count++;
+																				}
+																			}
+																		}
+																	}
 																}else{
 	
 																	failed_pieces++;
 	
-																	if ( failed_pieces > allowed_fails ){
+																	if ( failed_pieces > allowed_fails && mode != LOCATE_MODE_PIECE ){
 	
 																		logLine( viewer, 0, "X" );
 	
 																		hash_failed = true;
 	
-																		failed_candidates.add( candidate.getAbsolutePath());	
+																		failed_candidates.add( from_file.getAbsolutePath());	
 	
 																		break;
 	
@@ -3786,10 +4610,10 @@ public class ManagerUtils {
 	
 														}finally{
 	
-															if ( raf != null ){
+															if ( from_raf != null ){
 	
 																try{
-																	raf.close();
+																	from_raf.close();
 	
 																}catch( Throwable e ){
 	
@@ -3799,438 +4623,674 @@ public class ManagerUtils {
 	
 														if ( !( error || hash_failed )){
 	
-															logLine( viewer, 0, " Matched" + (failed_pieces==0?"":(" (fails=" + failed_pieces + ")")));
-	
-															int action_indent = test_indent+1;
-	
-															if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR ){
+															if ( test_only ){
 																
-																boolean worked = file.setStorageType( DiskManagerFileInfo.ST_LINEAR, true );
-																
-																logLine( viewer, action_indent, "Setting storage type to linear - " + ( worked?"OK":"Failed" ));
-															}
-	
-															if ( file.isSkipped()){
-	
-																File existing = file.getFile( true );
-	
-																boolean existed = existing.exists();
-	
-																file.setSkipped( false );
-	
-																boolean worked = !file.isSkipped();
-	
-																if ( worked ){
-	
-																	unskipped_count++;
-																}
-	
-																logLine( viewer, action_indent, "Setting priority to normal - " + ( worked?"OK":"Failed" ));
-	
-																if ( !existed && existing.exists()){
-	
-																	existing.delete();
-																}
-															}
-	
-															if ( mode == 0 ){
-	
-																try{
-																	dm.setUserData( "set_link_dont_delete_existing", true );
-	
-																	logLine( viewer, action_indent, "Linking to " + candidate );
-	
-																	if ( file.setLink( candidate )){
-	
-																		logLine( viewer, action_indent+1, "Link successful" );
-	
-																		dm_files.add( candidate.getAbsolutePath());
-	
-																		actions_established.put( file, candidate );
+																if ( mode == LOCATE_MODE_PIECE ){
+																	
+																	logLine( viewer, 0, " Would have copied " + copied_pieces + " pieces" );
+																	
+																}else{
+																	
+																	logLine( viewer, 0, " Matched" + (failed_pieces==0?"":(" (fails=" + failed_pieces + ")")));
+																	
+																	int action_indent = test_indent+1;
+			
+																	if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR ){
+																																					
+																		logLine( viewer, action_indent, "Would set storage type to linear" );
+																	}
+																	
+																	if ( file.isSkipped()){
+																																						
+																		unskipped_count++;
+			
+																		logLine( viewer, action_indent, "Would set priority to normal" );
+
+																	}
+																	
+																	if ( mode == LOCATE_MODE_LINK ){
+																		
+																		logLine( viewer, action_indent, "Would link to " + from_file );
+																		
+																		dm_files.add( from_file.getAbsolutePath());
+																		
+																		actions_established.put( file, from_file );
 	
 																		action_count++;
 	
 																		matched = true;
-	
-																		if ( action_count > MAX_LINKS ){
-	
-																			logLine( viewer, action_indent+2, LINK_LIMIT_MSG );
-	
-																			break download_loop;
-																		}
+
 																	}else{
-	
-																		logLine( viewer, action_indent+1, "Link failed" );
+																		
+																		File target = file.getFile( true );
+																						
+																		actions_established.put( file, from_file );
+																		
+																		action_count++;
+		
+																		matched = true;
+
+																		if ( mode == LOCATE_MODE_COPY ){
+			
+																			logLine( viewer, action_indent, "Would copy " + from_file + " to " + target );
+									
+																		}else if ( mode == LOCATE_MODE_MOVE ){
+			
+																			logLine( viewer, action_indent, "Would move " + from_file + " to " + target );
+																		}
 																	}
-																}finally{
-	
-																	dm.setUserData( "set_link_dont_delete_existing", null );
-	
+																	
+																	break;
 																}
 															}else{
-	
-																File target = file.getFile( true );
-	
-																if ( target.exists()){
-	
-																	target.delete();
-																}
-	
-																File parent = target.getParentFile();
-	
-																if ( !parent.exists()){
-	
-																	parent.mkdirs();
-																}
-	
-																if ( mode == 1 ){
-	
-																	logLine( viewer, action_indent, "Copying " + candidate + " to " + target );
-	
-																	boolean ok = FileUtil.copyFile( candidate,  target );
-	
-																	if ( ok ){
-	
-																		logLine( viewer, action_indent+1, "Copy successful" );
-	
-																		actions_established.put( file, candidate );
-	
-																		action_count++;
-	
-																		matched = true;
-	
-																	}else{
-	
-																		logLine( viewer, action_indent+1, "Copy failed" );
-																	}
+																
+																if ( mode == LOCATE_MODE_PIECE ){
+																	
+																	logLine( viewer, 0, " Copied " + copied_pieces + " pieces" );
+
+																		// continue onto next candidate as may have other pieces
+																	
 																}else{
-	
-																	logLine( viewer, action_indent, "Moving " + candidate + " to " + target );
-	
-																	boolean ok = FileUtil.renameFile( candidate,  target );
-	
-																	if ( ok ){
-	
-																		logLine( viewer, action_indent+1, "Move successful" );
-	
-																		actions_established.put( file, candidate );
-	
-																		action_count++;
-	
-																		matched = true;
-	
-																	}else{
-	
-																		logLine( viewer, action_indent+1, "Move failed" );
+																	
+																	logLine( viewer, 0, " Matched" + (failed_pieces==0?"":(" (fails=" + failed_pieces + ")")));
+			
+																	int action_indent = test_indent+1;
+			
+																	if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR ){
+																		
+																		boolean worked = file.setStorageType( DiskManagerFileInfo.ST_LINEAR, true );
+																		
+																		logLine( viewer, action_indent, "Setting storage type to linear - " + ( worked?"OK":"Failed" ));
 																	}
+			
+																	if ( file.isSkipped()){
+			
+																		File existing = file.getFile( true );
+			
+																		boolean existed = existing.exists();
+			
+																		file.setSkipped( false );
+			
+																		boolean worked = !file.isSkipped();
+			
+																		if ( worked ){
+			
+																			unskipped_count++;
+																		}
+			
+																		logLine( viewer, action_indent, "Setting priority to normal - " + ( worked?"OK":"Failed" ));
+			
+																		if ( !existed && existing.exists()){
+			
+																			existing.delete();
+																		}
+																	}
+			
+																	if ( mode == LOCATE_MODE_LINK ){
+			
+																		logLine( viewer, action_indent, "Linking to " + from_file );
+		
+																		boolean do_internal_link = true;
+																		
+																		if ( link_type == LOCATE_MODE_LINK_HARD ){
+																																			
+																			File original = file.getFile( false );
+																		
+																			if ( original.exists()){
+			
+																				original.delete();
+																				
+																			}else{
+																				
+																				File o_parent = original.getParentFile();
+																				
+																				if ( !o_parent.exists()){
+																					
+																					o_parent.mkdirs();
+																				}
+																			}
+																			
+																			try{
+																				Files.createLink( original.toPath(), from_file.toPath());
+																				
+																				if ( file.setLink( original, true )){
+																					
+																					do_internal_link = false;
+																					
+																					logLine( viewer, action_indent+1, "Hard Link successful" );
+																					
+																					dm_files.add( from_file.getAbsolutePath());
+																					
+																					actions_established.put( file, from_file );
+				
+																					action_count++;
+				
+																					matched = true;
+																					
+																				}else{
+																					
+																					original.delete();
+																					
+																					logLine( viewer, action_indent+1, "Hard Link failed, trying Internal Link" );
+	
+																				}
+																			}catch( Throwable e ){
+																				
+																				logLine( viewer, action_indent+1, "Hard Link failed, trying Internal Link: Error=" + Debug.getNestedExceptionMessage( e ));
+																			}
+																		}
+																		
+																		if ( do_internal_link ){
+																			
+																			if ( file.setLink( from_file, true )){
+			
+																				logLine( viewer, action_indent+1, "Link successful" );
+			
+																				dm_files.add( from_file.getAbsolutePath());
+			
+																				actions_established.put( file, from_file );
+			
+																				action_count++;
+			
+																				internal_link_count++;
+																				
+																				matched = true;
+			
+																				if ( internal_link_count > MAX_LINKS ){
+			
+																					logLine( viewer, action_indent+2, LINK_LIMIT_MSG );
+			
+																					break download_loop;
+																				}
+																			}else{
+			
+																				logLine( viewer, action_indent+1, "Link failed" );
+																			}
+																		}
+																	}else{
+			
+																		File target = file.getFile( true );
+			
+																		if ( target.exists()){
+			
+																			target.delete();
+																		}
+			
+																		File parent = target.getParentFile();
+			
+																		if ( !parent.exists()){
+			
+																			parent.mkdirs();
+																		}
+			
+																		if ( mode == LOCATE_MODE_COPY ){
+			
+																			logLine( viewer, action_indent, "Copying " + from_file + " to " + target );
+			
+																			boolean ok = FileUtil.copyFile( from_file,  target );
+			
+																			if ( ok ){
+			
+																				logLine( viewer, action_indent+1, "Copy successful" );
+			
+																				actions_established.put( file, from_file );
+			
+																				action_count++;
+			
+																				matched = true;
+			
+																			}else{
+			
+																				logLine( viewer, action_indent+1, "Copy failed" );
+																			}
+																		}else if ( mode == LOCATE_MODE_MOVE ){
+			
+																			logLine( viewer, action_indent, "Moving " + from_file + " to " + target );
+			
+																			boolean ok = FileUtil.renameFile( from_file,  target );
+			
+																			if ( ok ){
+			
+																				logLine( viewer, action_indent+1, "Move successful" );
+			
+																				actions_established.put( file, from_file );
+			
+																				action_count++;
+			
+																				matched = true;
+			
+																			}else{
+			
+																				logLine( viewer, action_indent+1, "Move failed" );
+																			}
+																		}else{
+																			
+																			Debug.out( "derp" );
+																		}
+																	}
+			
+																	break;
 																}
 															}
-	
-															break;
 														}
 													}
-	
+												}finally{
+												
+													if ( to_raf != null ){
+														
+														try{
+															
+															to_raf.close();
+															
+														}catch( Throwable e ){
+															
+															Debug.out( e );
+														}
+													}
 												}
-	
-												if ( !matched ){
-	
-													unmatched_files.put( file, failed_candidates );
-												}
-											}else{
-	
-												no_candidates++;
+											}
+
+											if ( !matched ){
+
+												unmatched_files.put( file, failed_candidates );
 											}
 										}else{
-	
+
 											no_candidates++;
 										}
-									}
-	
-							logLine( viewer, dm_indent, "Matched=" + actions_established.size() + ", complete=" + already_complete + ", ignored as not selected for download=" + skipped + ", no candidates=" + no_candidates + ", remaining=" + unmatched_files.size() + " (total=" + files.length + ")");
-	
-							List<DiskManagerFileInfo> fixed_files = new ArrayList<>( actions_established.keySet());
-	
-							if ( actions_established.size() > 0 && unmatched_files.size() > 0 ){
-	
-								logLine( viewer, dm_indent, "Looking for other potential name-based matches" );
-	
-								File overall_root = null;
-	
-								for ( Map.Entry<DiskManagerFileInfo,File> entry: actions_established.entrySet()){
-	
-									int file_indent = dm_indent+1;
-	
-									DiskManagerFileInfo dm_file = entry.getKey();
-									File				root	= entry.getValue();
-	
-									String rel = dm_file.getTorrentFile().getRelativePath();
-	
-									int pos = 0;
-	
-									while( root != null ){
-	
-										root = root.getParentFile();
-	
-										pos = rel.indexOf( File.separatorChar, pos );
-	
-										if ( pos >= 0 ){
-	
-											pos = pos+1;
-	
-										}else{
-	
-											break;
-										}
-									}
-	
-									if ( root == null ){
-	
-										logLine( viewer, file_indent, "No usable root folder found" );
-	
-										break;
-									}
-	
-									if ( overall_root == null ){
-	
-										overall_root = root;
-	
 									}else{
-	
-										if ( !overall_root.equals( root )){
-	
-											overall_root = null;
-	
-											logLine( viewer, file_indent, "Inconsistent root folder found" );
-	
-											break;
-										}
+
+										no_candidates++;
 									}
 								}
 	
-								if ( overall_root != null ){
+								logLine( viewer, dm_indent, "Phase 1: " + action_str + " " + actions_established.size() + ", complete=" + already_complete + ", ignored as not selected for download=" + skipped + ", no candidates=" + no_candidates + ", remaining=" + unmatched_files.size() + " (total=" + files.length + ")");
+			
+								if ( mode != LOCATE_MODE_PIECE && actions_established.size() > 0 && unmatched_files.size() > 0 ){
+		
+									List<DiskManagerFileInfo> fixed_files = new ArrayList<>( actions_established.keySet());
 	
-									logLine( viewer, dm_indent, "Root folder is " + overall_root.getAbsolutePath());
-	
-									int actions_ok = 0;
-	
-									for ( Map.Entry<DiskManagerFileInfo,Set<String>> entry: unmatched_files.entrySet()){
-	
+									logLine( viewer, dm_indent, "Looking for other potential name-based matches" );
+		
+									File overall_root = null;
+		
+									for ( Map.Entry<DiskManagerFileInfo,File> entry: actions_established.entrySet()){
+		
 										int file_indent = dm_indent+1;
-	
-										synchronized( quit ){
-											if ( quit[0] ){
+		
+										DiskManagerFileInfo dm_file = entry.getKey();
+										File				root	= entry.getValue();
+		
+										String rel = dm_file.getTorrentFile().getRelativePath();
+		
+										int pos = 0;
+		
+										while( root != null ){
+		
+											root = root.getParentFile();
+		
+											pos = rel.indexOf( File.separatorChar, pos );
+		
+											if ( pos >= 0 ){
+		
+												pos = pos+1;
+		
+											}else{
+		
 												break;
 											}
 										}
-	
-										DiskManagerFileInfo file = entry.getKey();
-	
-										if ( selected_file_indexes != null ){
-	
-											if ( !selected_file_indexes.contains( file.getIndex())){
-	
-												continue;
-											}
+		
+										if ( root == null ){
+		
+											logLine( viewer, file_indent, "No usable root folder found" );
+		
+											break;
 										}
-	
-										File source_file = new File( overall_root, file.getTorrentFile().getRelativePath());
-										
-										boolean is_approximate = false;
-										
-										if ( source_file.exists() && source_file.length() == file.getLength()){
-	
-											// looks good
-											
+		
+										if ( overall_root == null ){
+		
+											overall_root = root;
+		
 										}else{
-											
-												// if there's only one with the right size in same folder then grab that
-											
-											File[] source_files = source_file.getParentFile().listFiles();
-											
-											File selected = null;
-											
-											if ( source_files != null ){
-												
-												for ( File f: source_files ){
-													
-													if ( f.length() == file.getLength()){
-														
-														if ( selected == null ){
-															
-															selected = f;
-															
-														}else{
-															
-															selected = null;	// multiple same size
-															
-															break;
-														}
-													}
-												}
-											}
-											
-											if ( selected != null ){
-											
-												source_file = selected;
-												
-												is_approximate = true;
-												
-											}else{
-												
-												source_file = null;
-											}
-										}
-										
-										if ( source_file != null ){
-											
-											if ( !entry.getValue().contains( source_file.getAbsolutePath())){
-	
-												String str = "File '" + file.getFile( false ).getName() + "'";
-												
-												if ( is_approximate ){
-													
-													str += "- selected " + source_file ;
-												}
-												
-												logLine( viewer, file_indent, str );
-	
-												int action_indent = file_indent+1;
-	
-												if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR ){
-													
-													boolean worked = file.setStorageType( DiskManagerFileInfo.ST_LINEAR, true );
-													
-													logLine( viewer, action_indent, "Setting storage type to linear - " + ( worked?"OK":"Failed" ));
-												}
-												
-												if ( file.isSkipped()){
-	
-													File existing = file.getFile( true );
-	
-													boolean existed = existing.exists();
-	
-													file.setSkipped( false );
-	
-													boolean worked = !file.isSkipped();
-	
-													if ( worked ){
-	
-														unskipped_count++;
-													}
-	
-													logLine( viewer, action_indent, "Setting priority to normal - " + ( worked?"OK":"Failed" ));
-	
-													if ( !existed && existing.exists()){
-	
-														existing.delete();
-													}
-												}
-	
-												if ( mode == 0 ){
-	
-													try{
-														dm.setUserData( "set_link_dont_delete_existing", true );
-	
-														logLine( viewer, action_indent, "Linking to " + source_file );
-	
-														if ( file.setLink( source_file )){
-	
-															logLine( viewer, action_indent+1, "Linked successful" );
-	
-															fixed_files.add( file );
-	
-															actions_ok++;
-	
-															action_count++;
-	
-															if ( action_count > MAX_LINKS ){
-	
-																logLine( viewer, action_indent+2, LINK_LIMIT_MSG );
-	
-																break;
-															}
-														}else{
-	
-															logLine( viewer, action_indent+1, "Link failed" );
-														}
-													}finally{
-	
-														dm.setUserData( "set_link_dont_delete_existing", null );
-													}
-												}else{
-	
-	
-													File target = file.getFile( true );
-	
-													if ( target.exists()){
-	
-														target.delete();
-													}
-	
-													if ( mode == 1 ){
-	
-														logLine( viewer, action_indent, "Copying " + source_file + " to " + target );
-	
-														boolean ok = FileUtil.copyFile( source_file,  target );
-	
-														if ( ok ){
-	
-															logLine( viewer, action_indent+1, "Copy successful" );
-	
-															fixed_files.add( file );
-	
-															actions_ok++;
-	
-															action_count++;
-	
-														}else{
-	
-															logLine( viewer, action_indent+1, "Copy failed" );
-														}
-													}else{
-	
-														logLine( viewer, action_indent, "Moving " + source_file + " to " + target );
-	
-														boolean ok = FileUtil.renameFile( source_file,  target );
-	
-														if ( ok ){
-	
-															logLine( viewer, action_indent+1, "Move successful" );
-	
-															fixed_files.add( file );
-	
-															actions_ok++;
-	
-															action_count++;
-	
-														}else{
-	
-															logLine( viewer, action_indent+1, "Move failed" );
-														}
-													}
-												}
+		
+											if ( !overall_root.equals( root )){
+		
+												overall_root = null;
+		
+												logLine( viewer, file_indent, "Inconsistent root folder found" );
+		
+												break;
 											}
 										}
 									}
+		
+									if ( overall_root != null ){
+		
+										logLine( viewer, dm_indent, "Root folder is " + overall_root.getAbsolutePath());
+		
+										int actions_ok = 0;
+		
+										int file_indent = dm_indent+1;
+
+										for ( Map.Entry<DiskManagerFileInfo,Set<String>> entry: unmatched_files.entrySet()){
+				
+											synchronized( quit ){
+												if ( quit[0] ){
+													break;
+												}
+											}
+		
+											DiskManagerFileInfo file = entry.getKey();
+		
+											if ( actions_established.containsKey( file )){
+												
+												continue;
+											}
+											
+											if ( selected_file_indexes != null ){
+		
+												if ( !selected_file_indexes.contains( file.getIndex())){
+		
+													continue;
+												}
+											}
+		
+											File source_file = new File( overall_root, file.getTorrentFile().getRelativePath());
+											
+											boolean is_approximate = false;
+											
+											if ( source_file.exists() && source_file.length() == file.getLength()){
+		
+												// looks good
+												
+											}else{
+												
+													// if there's only one with the right size in same folder then grab that
+												
+												File[] source_files = source_file.getParentFile().listFiles();
+												
+												File selected = null;
+												
+												if ( source_files != null ){
+													
+													for ( File f: source_files ){
+														
+														if ( f.length() == file.getLength()){
+															
+															if ( selected == null ){
+																
+																selected = f;
+																
+															}else{
+																
+																selected = null;	// multiple same size
+																
+																break;
+															}
+														}
+													}
+												}
+												
+												if ( selected != null ){
+												
+													source_file = selected;
+													
+													is_approximate = true;
+													
+												}else{
+													
+													source_file = null;
+												}
+											}
+											
+											if ( source_file != null ){
+												
+												if ( !entry.getValue().contains( source_file.getAbsolutePath())){
+		
+													String str = "File '" + file.getFile( false ).getName() + "'";
+													
+													if ( is_approximate ){
+														
+														str += "- selected " + source_file ;
+													}
+													
+													logLine( viewer, file_indent, str );
+		
+													int action_indent = file_indent+1;
+		
+													if ( test_only ){
+														
+														if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR ){
+															
+															logLine( viewer, action_indent, "Would set storage type to linear" );
+														}
+														
+														if ( file.isSkipped()){
+			
+															unskipped_count++;
+																	
+															logLine( viewer, action_indent, "Would set priority to normal" );
+														}
+			
+														fixed_files.add( file );
+														
+														actions_ok++;
 	
-									String action_str = mode==0?"Linked":(mode==1?"Copied":"Moved" );
+														action_count++;
 	
-									logLine( viewer, dm_indent, action_str + " " + actions_ok + " of " + unmatched_files.size());
+														if ( mode == LOCATE_MODE_LINK ){
+			
+															logLine( viewer, action_indent, "Would link to " + source_file );
+																
+														}else{
+			
+															File target = file.getFile( true );
+			
+															if ( mode == LOCATE_MODE_COPY || mode == LOCATE_MODE_PIECE ){
+			
+																logLine( viewer, action_indent, "Would copy " + source_file + " to " + target );
+			
+															}else if ( mode == LOCATE_MODE_MOVE ){
+			
+																logLine( viewer, action_indent, "Would move " + source_file + " to " + target );
+															}
+														}
+													}else{
+														
+														if ( file.getStorageType() != DiskManagerFileInfo.ST_LINEAR ){
+															
+															boolean worked = file.setStorageType( DiskManagerFileInfo.ST_LINEAR, true );
+															
+															logLine( viewer, action_indent, "Setting storage type to linear - " + ( worked?"OK":"Failed" ));
+														}
+														
+														if ( file.isSkipped()){
+			
+															File existing = file.getFile( true );
+			
+															boolean existed = existing.exists();
+			
+															file.setSkipped( false );
+			
+															boolean worked = !file.isSkipped();
+			
+															if ( worked ){
+			
+																unskipped_count++;
+															}
+			
+															logLine( viewer, action_indent, "Setting priority to normal - " + ( worked?"OK":"Failed" ));
+			
+															if ( !existed && existing.exists()){
+			
+																existing.delete();
+															}
+														}
+			
+														if ( mode == LOCATE_MODE_LINK ){
+			
+															logLine( viewer, action_indent, "Linking to " + source_file );
+		
+															boolean do_internal_link = true;
+															
+															if ( link_type == LOCATE_MODE_LINK_HARD ){
+																																
+																File original = file.getFile( false );
+															
+																if ( original.exists()){
+		
+																	original.delete();
+																	
+																}else{
+																	
+																	File o_parent = original.getParentFile();
+																	
+																	if ( !o_parent.exists()){
+																		
+																		o_parent.mkdirs();
+																	}
+																}
+																
+																try{
+																	Files.createLink( original.toPath(), source_file.toPath());
+																	
+																	if ( file.setLink( original, true )){
+																		
+																		do_internal_link = false;
+																		
+																		logLine( viewer, action_indent+1, "Hard Link successful" );
+																		
+																		fixed_files.add( file );
+																		
+																		actions_ok++;
+		
+																		action_count++;
+																		
+																	}else{
+																		
+																		original.delete();
+																		
+																		logLine( viewer, action_indent+1, "Hard Link failed, trying Internal Link" );
+		
+																	}
+																}catch( Throwable e ){
+																	
+																	logLine( viewer, action_indent+1, "Hard Link failed, trying Internal Link: Error=" + Debug.getNestedExceptionMessage( e ));
+																}
+															}
+															
+															if ( do_internal_link ){
+																
+																if ( file.setLink( source_file, true )){
+			
+																	logLine( viewer, action_indent+1, "Link successful" );
+			
+																	fixed_files.add( file );
+			
+																	actions_ok++;
+			
+																	action_count++;
+			
+																	internal_link_count++;
+																	
+																	if ( internal_link_count > MAX_LINKS ){
+			
+																		logLine( viewer, action_indent+2, LINK_LIMIT_MSG );
+			
+																		break;
+																	}
+																}else{
+			
+																	logLine( viewer, action_indent+1, "Link failed" );
+																}
+															}
+														}else{
+			
+			
+															File target = file.getFile( true );
+			
+															if ( target.exists()){
+			
+																target.delete();
+															}
+			
+															if ( mode == LOCATE_MODE_COPY || mode == LOCATE_MODE_PIECE ){
+			
+																logLine( viewer, action_indent, "Copying " + source_file + " to " + target );
+			
+																boolean ok = FileUtil.copyFile( source_file,  target );
+			
+																if ( ok ){
+			
+																	logLine( viewer, action_indent+1, "Copy successful" );
+			
+																	fixed_files.add( file );
+			
+																	actions_ok++;
+			
+																	action_count++;
+			
+																}else{
+			
+																	logLine( viewer, action_indent+1, "Copy failed" );
+																}
+															}else if ( mode == LOCATE_MODE_MOVE ){
+			
+																logLine( viewer, action_indent, "Moving " + source_file + " to " + target );
+			
+																boolean ok = FileUtil.renameFile( source_file,  target );
+			
+																if ( ok ){
+			
+																	logLine( viewer, action_indent+1, "Move successful" );
+			
+																	fixed_files.add( file );
+			
+																	actions_ok++;
+			
+																	action_count++;
+			
+																}else{
+			
+																	logLine( viewer, action_indent+1, "Move failed" );
+																}
+															}else{
+																
+																Debug.out( "derp" );
+															}
+														}
+													}
+												}
+											}
+										}
+												
+										logLine( viewer, file_indent, "Phase 2: " + action_str + " " + actions_ok + " of " + unmatched_files.size());
+									}
 								}
-							}
+		
+								if ( include_skipped ){
+		
+									if ( unskipped_count > 0 ){
+		
+										String skip_str = "Changed ";
+										
+										if ( test_only ){
+											
+											skip_str = "Would have " + skip_str.toLowerCase( Locale.US );
+										}
 	
-							if ( include_skipped ){
-	
-								if ( unskipped_count > 0 ){
-	
-									logLine( viewer, dm_indent, "Changed " + unskipped_count + " file priorities from 'skipped' to 'normal'" );
+										logLine( viewer, dm_indent, skip_str + unskipped_count + " file priorities from 'skipped' to 'normal'" );
+									}
 								}
-							}
 							}finally{
 	
 								if ( action_count > 0 ){
 	
-									dm.forceRecheck();
+									if ( !test_only ){
+									
+										dm.forceRecheck();
+									}
 	
 									downloads_modified++;
 								}
@@ -4238,11 +5298,20 @@ public class ManagerUtils {
 						}
 					}
 					
-					logLine( viewer, indent, new SimpleDateFormat().format( new Date()) +  ": Complete, downloads updated=" + downloads_modified );
+					if ( test_only ){
+						
+						logLine( viewer, indent, date_format.format( new Date()) +  ": Complete, " + downloads_modified + " downloads would have been updated" );
+						
+					}else{
+						
+						logLine( viewer, indent, date_format.format( new Date()) +  ": Complete, downloads updated=" + downloads_modified );
+					}
 
 				}catch( Throwable e ){
 
-					log( viewer, 0, "\r\n" + new SimpleDateFormat().format( new Date()) + ": Failed: " + Debug.getNestedExceptionMessage( e ) + "\r\n" );
+					Debug.out( e );
+					
+					log( viewer, 0, "\r\n" + date_format.format( new Date()) + ": Failed: " + Debug.getNestedExceptionMessage( e ) + "\r\n" );
 					
 				}finally{
 
@@ -4267,6 +5336,431 @@ public class ManagerUtils {
 		// viewer.goModal(); - don't make it modal as it breaks the re-use window hack
 	}
 
+	
+	public static void
+	locateSavePaths(
+		List<TorrentOpenOptions>	torrents,
+		Shell						shell,
+		String[]					roots,
+		Consumer<File[]>			listener )
+	{
+		TextViewerWindow _viewer = null;
+		
+		synchronized( sp_windows ){
+			
+			if ( lf_reuse ){
+			
+				if ( !sp_windows.isEmpty()){
+					
+					_viewer = sp_windows.remove( 0 );
+				}				
+			}
+			
+			if ( _viewer == null ){
+		
+				_viewer = new TextViewerWindow( lf_reuse?null:shell, MessageText.getString( "locatesavepaths.view.title" ), null, "", false, false );
+				
+			}else{
+				
+				_viewer.reset();
+			}
+		}
+
+		final TextViewerWindow viewer = _viewer;
+		
+		if ( lf_reuse ){
+			
+			viewer.setReuseWindow();
+		}
+		
+		viewer.setEditable( false );
+
+		viewer.setCancelEnabled( true );
+		
+		viewer.setOKEnabled( false );
+		
+		viewer.setOKisApply( true );
+		
+		viewer.getShell().moveAbove( shell );
+
+		new AEThread2( "FileLocator" )
+		{
+			@Override
+			public void
+			run()
+			{
+				SimpleDateFormat date_format = new SimpleDateFormat( "yyyy/MM/dd HH:mm:ss" );
+
+				File[] results = new File[torrents.size()];
+
+				int[] result_count = {0};				
+
+				try{
+					String incomplete_file_suffix = null;
+					
+					if ( COConfigurationManager.getBooleanParameter( "Rename Incomplete Files")){
+
+						incomplete_file_suffix = COConfigurationManager.getStringParameter( "Rename Incomplete Files Extension" ).trim();
+						
+						incomplete_file_suffix = FileUtil.convertOSSpecificChars( incomplete_file_suffix, false );
+						
+						if ( incomplete_file_suffix.isEmpty()){
+							
+							incomplete_file_suffix = null;
+						}
+					}
+
+					Map<Long,Set<File>>	file_map = new HashMap<>();
+
+					final boolean[]	quit = { false };
+
+					viewer.addListener(
+							new TextViewerWindow.TextViewerWindowListener() {
+
+								@Override
+								public void closed() {
+									synchronized( quit ){
+										quit[0] = true;
+									}
+
+									synchronized( sp_windows ){
+
+										if ( lf_reuse ){
+
+											sp_windows.add( viewer );
+										}
+									};
+								}
+							});
+
+					int indent = 0;
+					
+					logLine( viewer, indent, "Checking " + torrents.size() + " torrents against " + roots.length + " search locations" );
+					
+					Set<String>	tested_folders = new HashSet<>();
+					
+					LinkedList<File>	to_do = new LinkedList<>();
+					
+					for ( String root: roots ){
+						
+						to_do.add( new File( root ));
+					}
+					
+					Map<TorrentOpenOptions,Object[]>	candidates = new HashMap<>();
+					
+					long last_dir_log = -1;
+					
+					while( !to_do.isEmpty()){
+						
+						synchronized( quit ){
+							if ( quit[0] ){
+								break;
+							}
+						}
+						
+						File dir = to_do.removeFirst();
+						
+						if ( !dir.isDirectory()){
+							
+							continue;
+						}
+						
+						String abs_dir = dir.getAbsolutePath();
+						
+						if ( tested_folders.contains( abs_dir )){
+							
+							continue;
+						}
+						
+						tested_folders.add( abs_dir );
+						
+						long now = SystemTime.getMonotonousTime();
+						
+						if ( last_dir_log == -1 || now - last_dir_log > 100 ){
+						
+							last_dir_log = now;
+							
+							logLine( viewer, indent, "Searching " + abs_dir + ", remaining=" + to_do.size());
+						}
+		
+						
+						for( TorrentOpenOptions too: torrents ){
+							
+							TOTorrent torrent = too.getTorrent();
+							
+							TOTorrentFile[] tfiles = torrent.getFiles();
+							
+							TorrentOpenFileOptions[] files = too.getFiles();
+							
+							int 	hits = 0;
+							long	hits_size = 0;
+							
+							int		pads = 0;
+							
+							if ( torrent.isSimpleTorrent()){
+								
+								String file = files[0].getDestFileName();
+								
+								File test_file = new File( dir, file );
+								
+								if ( test_file.exists()){
+									
+									hits++;
+									
+									hits_size += test_file.length();
+								}
+								
+							}else{
+								
+								//String parent_dir = too.getSubDirOrDefault();
+								
+								for ( TorrentOpenFileOptions tofile: files ){
+									
+									int index = tofile.getIndex();
+									
+									TOTorrentFile tfile = tfiles[index];
+									
+									if ( tfile.isPadFile()){
+										
+										pads++;
+										
+										continue;
+									}
+									
+									String file = tofile.getDestFileName();
+									
+									String path = tfile.getRelativePath() ;
+									
+									int pos = path.lastIndexOf( File.separator );
+									
+									if ( pos != -1 ){
+										
+										path = path.substring( 0, pos+1 ) + file;
+									}
+									
+									/*
+									if ( !too.isRemovedTopLevel()){
+									
+										path = parent_dir + File.separator + path;
+									}
+									*/
+									
+									File test_file = new File( dir, path );
+																		
+									if ( test_file.exists()){
+										
+										hits++;
+										
+										hits_size += test_file.length();
+										
+									}else{
+										
+										if ( incomplete_file_suffix != null ){
+											
+											test_file = new File( dir, path + incomplete_file_suffix );
+											
+											if ( test_file.exists()){
+											
+												hits++;
+												
+												hits_size += test_file.length();
+											}
+										}
+									}
+								}
+							}
+							
+							if ( hits > 0 ){
+							
+								logLine( viewer, indent+1, "Testing " + dir  + " against " + too.getDisplayName() + ": matches=" + hits );
+
+								Object[] entry = candidates.get( too );
+								
+								if ( entry == null ){
+									
+									entry = new Object[]{ new int[]{ 0, pads }, new ArrayList<Object[]>() };
+									
+									candidates.put( too,  entry );
+								}
+								
+								int[] counts = (int[])entry[0];
+								
+								List<Object[]>	hit_entries = (List<Object[]>)entry[1];
+								
+								if ( hits > counts[0] ){
+									
+									counts[0] = hits;
+									
+									hit_entries.clear();
+									
+									hit_entries.add( new Object[]{ dir, hits_size } );
+									
+								}else if ( hits == counts[0] ){
+									
+									hit_entries.add( new Object[]{ dir, hits_size } );
+								}
+							}
+						}
+									
+						
+						File[] files = dir.listFiles();
+						
+						if ( files != null ){
+							
+							for ( File f: files){
+								
+								if ( f.isDirectory()){
+									
+									if ( !f.getName().startsWith( "." )){
+									
+										to_do.add( f );
+									}
+								}
+							}
+						}
+					}
+					
+					logLine( viewer, indent, "Search complete, " + tested_folders.size() + " folders checked" );
+										
+					int pos = 0;
+						
+					List<String[]>	result_lines = new ArrayList<>();
+					
+					for( TorrentOpenOptions too: torrents ){
+						
+						Object[] entry = candidates.get( too );
+						
+						if ( entry == null ){
+							
+							logLine( viewer, indent, "No results for " + too.getDisplayName());
+							
+						}else{
+							
+							TOTorrent torrent = too.getTorrent();
+							
+							long torrent_size = torrent.getSize();
+							
+							long min_hit_size = torrent_size/10;
+							
+							int fc = torrent.getFileCount();
+							
+							int[] counts = (int[])entry[0];
+
+							List<Object[]>	hit_entries = (List<Object[]>)entry[1];
+
+							int matches =  counts[0];
+							int pad		= counts[1];
+							
+							logLine( 
+								viewer, indent, 
+								too.getDisplayName() + 
+									" (" + DisplayFormatters.formatByteCountToKiBEtc( torrent_size ) + 
+									") has " + 
+									hit_entries.size() + " locations with " + matches + " out of " + (fc-pad) + " matches:"  );
+							
+							List<File>	valid = new ArrayList<>();
+							
+							for ( Object[] e: hit_entries ){
+								
+								File 	f = (File)e[0];
+								
+								long size = (Long)e[1];
+								
+								int permille = (int)((size*1000)/torrent_size);
+								
+								logLine( viewer, indent+1, 
+										f.getAbsolutePath() + 
+										", match size=" + DisplayFormatters.formatByteCountToKiBEtc(size) + 
+										" (" + DisplayFormatters.formatPercentFromThousands( permille ) + ")");
+										
+								
+								if ( size >= min_hit_size ){
+									
+									valid.add( f );
+									
+								}else{
+									
+									logLine( viewer, indent+2, "Match is too small, ignoring" );
+								}
+							}
+							
+							if ( valid.size() == 1 ){
+								
+								results[pos] = valid.get(0);
+								
+								result_count[0]++;
+								
+								logLine( viewer, indent+2, "Selected for application" );
+								
+								result_lines.add( new String[]{ too.getDisplayName(), valid.get(0).getAbsolutePath()});
+								
+							}else if ( valid.size() > 1 ){
+								
+								logLine( viewer, indent+2, "Multiple locations require manual resolution" );
+							}
+						}
+						
+						pos++;
+					}
+						
+					if ( !result_lines.isEmpty()){
+						
+						logLine( viewer, indent, "" );
+						logLine( viewer, indent, "--- Summary ---" );
+						logLine( viewer, indent, "" );
+						
+						for ( String[] entry: result_lines ){
+							
+							logLine( viewer, indent, entry[0] );
+							logLine( viewer, indent+2, "-> " + entry[1] );
+						}
+					}
+				}catch( Throwable e ){
+
+					Debug.out( e );
+					
+					log( viewer, 0, "\r\n" + date_format.format( new Date()) + ": Failed: " + Debug.getNestedExceptionMessage( e ) + "\r\n" );
+					
+				}finally{
+
+					Utils.execSWTThread(
+							new Runnable()
+							{
+								public void
+								run()
+								{
+									if ( !viewer.isDisposed()){
+
+										boolean has_results = result_count[0] > 0;
+										
+										viewer.setOKEnabled( has_results );
+										
+										if ( has_results ){
+											
+											viewer.addListener(()->{
+												
+												if ( viewer.getOKPressed()){
+												
+													listener.accept( results );
+												}
+											});
+										}
+									}
+								}
+							});
+				}			}
+		}.start();
+	}
+	
+	public static void
+	locateSaveLocations(
+		List<TorrentOpenOptions>	torrents,
+		Shell						shell,
+		Consumer<File[]>			listener )
+	{
+		locateFilesSupport( null, null, torrents, listener, shell );
+	}
+	
 	private static void
 	logLine(
 		TextViewerWindow	viewer,
@@ -4458,7 +5952,8 @@ public class ManagerUtils {
 							Map<String,Object>	options = new HashMap<>();
 
 							options.put( "Subscription", true );
-							options.put( "Name", MessageText.getString( "label.more" ) + ": " + expression);
+							//options.put( "Name", MessageText.getString( "label.more" ) + ": " + expression);
+							options.put( "Name", expression);
 
 							pi.getIPC().invoke(
 								"lookupByExpression",
@@ -4528,6 +6023,136 @@ public class ManagerUtils {
 		file_info.setSkipped( skipped );
 	}
 	
+	/**
+	 * Takes account of whether the download has ever been started and if not selects between normal/delete 
+	 * as opposed to normal/do-not-download
+	 * @param file_infos
+	 * @param skipped
+	 */
+	
+	public static void
+	setFilesSkipped(
+		List<DiskManagerFileInfo>	file_infos,
+		boolean						skipped )
+	{
+		Map<DownloadManager,List<DiskManagerFileInfo>> dm_map = new IdentityHashMap<>();
+		
+		for ( DiskManagerFileInfo file: file_infos ){
+			
+			DownloadManager dm = file.getDownloadManager();
+			
+			if ( dm == null ){
+				
+				continue;
+			}
+			
+			List<DiskManagerFileInfo> files = dm_map.get( dm );
+			
+			if ( files == null ){
+				
+				files = new ArrayList<>();
+				
+				dm_map.put( dm, files );
+			}
+			
+			files.add( file );
+		}
+		
+		for ( Map.Entry<DownloadManager,List<DiskManagerFileInfo>> entry: dm_map.entrySet()){
+			
+			DownloadManager				dm		= entry.getKey();
+			List<DiskManagerFileInfo>	files	= entry.getValue();
+			
+			DiskManagerFileInfoSet info_set = dm.getDiskManagerFileInfoSet();
+
+			if ( skipped ){
+				
+				if ( dm.getState() == DownloadManager.STATE_STOPPED ){
+					
+					if ( !dm.isDataAlreadyAllocated() && dm.getStats().getSecondsDownloading() <= 0 ){
+										
+						List<DiskManagerFileInfo>	change_compact			= new ArrayList<>( files.size());
+						List<DiskManagerFileInfo>	change_reorder_compact	= new ArrayList<>( files.size());
+						
+						for ( DiskManagerFileInfo file_info: files ){
+							
+							if ( !file_info.getFile( true ).exists()){
+								
+								int existing_storage_type = file_info.getStorageType();
+								
+								int compact_target;
+								
+								if ( existing_storage_type == DiskManagerFileInfo.ST_COMPACT || existing_storage_type == DiskManagerFileInfo.ST_LINEAR ){
+									
+									compact_target 		= DiskManagerFileInfo.ST_COMPACT;
+									
+								}else{
+									
+									compact_target 		= DiskManagerFileInfo.ST_REORDER_COMPACT;
+								}
+																
+								if ( existing_storage_type != compact_target ){
+									
+									if ( compact_target == DiskManagerFileInfo.ST_COMPACT ){
+										
+										change_compact.add( file_info );
+									
+									}else{
+										
+										change_reorder_compact.add( file_info );
+									}
+								}
+							}
+						}
+						
+						if ( !change_compact.isEmpty()){
+							
+							boolean[]	changed = new boolean[info_set.nbFiles()];
+							
+							for ( DiskManagerFileInfo file: change_compact ){
+										
+								changed[file.getIndex()]	= true;
+							}
+							
+							info_set.setStorageTypes( changed, DiskManagerFileInfo.ST_COMPACT );
+						}
+						
+						if ( !change_reorder_compact.isEmpty()){
+							
+							boolean[]	changed = new boolean[info_set.nbFiles()];
+							
+							for ( DiskManagerFileInfo file: change_reorder_compact ){
+										
+								changed[file.getIndex()]	= true;
+							}
+							
+							info_set.setStorageTypes( changed, DiskManagerFileInfo.ST_REORDER_COMPACT );
+						}
+					}
+				}
+			}
+			
+			boolean[]	changed = new boolean[info_set.nbFiles()];
+			
+			boolean has_changes = false;
+			
+			for ( DiskManagerFileInfo file_info: files ){
+
+				if ( file_info.isSkipped() != skipped ){
+					
+					changed[ file_info.getIndex() ] = true;
+					
+					has_changes = true;
+				}
+			}
+			
+			if ( has_changes ){
+			
+				info_set.setSkipped( changed, skipped );
+			}
+		}
+	}
+	
 	private static final Object LOW_RES_RECHECK_KEY = new Object();
 	
 	public static boolean
@@ -4558,6 +6183,8 @@ public class ManagerUtils {
 				dm.setUserData( LOW_RES_RECHECK_KEY, "" );
 
 				DiskManagerCheckRequest req = diskManager.createCheckRequest( -1, null );
+				
+				req.setExplicit( true );
 				
 				diskManager.enqueueCompleteRecheckRequest(
 					req,
@@ -4624,5 +6251,117 @@ public class ManagerUtils {
 
 			advancedRename(list);
 		});
+	}
+	
+	public static void
+	viewLinks(
+		DownloadManager[]	dms )
+	{
+		StringBuilder details = new StringBuilder( 32*1024 );
+		
+		for ( DownloadManager dm: dms ){
+						
+			TOTorrent torrent = dm.getTorrent();
+			
+			if ( torrent != null && torrent.isSimpleTorrent()){
+			
+					// even though internally links can be used to deal with 
+					// incomplete file extension don't show them as they
+					// can't be removed and it confuses things
+				
+				continue;
+			}
+			
+			DiskManagerFileInfoSet fis = dm.getDiskManagerFileInfoSet();
+
+			DiskManagerFileInfo[] files = fis.getFiles();
+
+			boolean done_name = false;
+			
+			for ( DiskManagerFileInfo file_info: files ){
+
+				File file_link 		= file_info.getFile( true );
+				File file_nolink 	= file_info.getFile( false );
+
+				if ( !file_nolink.getAbsolutePath().equals( file_link.getAbsolutePath())){
+
+					if ( dms.length > 1 && !done_name ){
+						
+						done_name = true;
+					
+						if ( details.length() > 0 ){
+							details.append( "\n" );
+						}
+						
+						details.append( dm.getDisplayName());
+						details.append( "\n\n" );
+					}
+			
+					details.append( "    " );
+					details.append( file_nolink.getAbsolutePath());
+					details.append(" -> " );
+					details.append( file_link.getAbsolutePath());
+					details.append( "\n" );
+				}
+			}
+		}
+		
+		TextViewerWindow viewer =
+				new TextViewerWindow(
+        			  Utils.findAnyShell(),
+        			  "view.links.title",
+        			  "view.links.text",
+        			  details.toString(), true, true );
+
+		viewer.setEditable( false );
+		
+		viewer.setCancelEnabled( false );
+		
+		viewer.setNonProportionalFont();
+		
+		viewer.goModal();
+	}
+	
+	public static void
+	viewDebug(
+		DownloadManager[]	dms )
+	{
+		StringWriter debug = new StringWriter( 32*1024 );
+		
+		IndentWriter	writer = new IndentWriter( new PrintWriter( debug ));
+
+		for ( DownloadManager dm: dms ){
+		
+			if ( dms.length > 1 ){
+				
+				writer.println( "Download " + dm.getDisplayName());
+				
+				writer.indent();
+			}
+			
+			dm.generateEvidence( writer, true );
+			
+			if ( dms.length > 1 ){
+				
+				writer.exdent();
+			}
+		}
+		
+		writer.close();
+		
+		TextViewerWindow viewer =
+				new TextViewerWindow(
+        			  Utils.findAnyShell(),
+        			  "GeneralView.section.info",
+        			  null,
+        			  debug.toString(), true, true );
+
+		viewer.setEditable( false );
+		
+		viewer.setCancelEnabled( false );
+		
+		viewer.setNonProportionalFont();
+		
+		viewer.goModal();
 	}
 }

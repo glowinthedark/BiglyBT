@@ -48,6 +48,7 @@ import com.biglybt.ui.swt.pifimpl.UISWTInstanceImpl.SWTViewListener;
 import com.biglybt.ui.swt.skin.SWTSkinObject;
 import com.biglybt.ui.swt.views.ViewManagerSWT;
 import com.biglybt.ui.swt.views.skin.SkinView;
+import com.biglybt.util.DataSourceUtils;
 import com.biglybt.util.MapUtils;
 
 import com.biglybt.pif.PluginInterface;
@@ -202,6 +203,11 @@ public abstract class BaseMDI
 		if (entry == null) {
 			return null;
 		}
+		if (( entry instanceof BaseMdiEntry ) && !((BaseMdiEntry)entry).canClose( userInitiated )){
+		
+			return( null );
+		}
+		
 		return closeEntryByID(entry.getViewID(), userInitiated );
 	}
 	
@@ -232,7 +238,7 @@ public abstract class BaseMDI
 		}
 		
 		if (currentEntry == removedItem) {
-			setCurrentEntry(null);
+			setSelectedEntry(null);
 		}
 
 		removedItem.closeView( userInitiated );
@@ -252,9 +258,37 @@ public abstract class BaseMDI
 	                                                   UISWTViewEventListener l, String id, boolean closeable, Object datasource, String preferedAfterID) {
 		// The only thing that uses the method is EMP, which uses a different id based on language
 		
-		UISWTViewBuilderCore builder = new UISWTViewBuilderCore(id,
-				null).setInitialDatasource(datasource).setListenerInstantiator(false,
-			(Builder, view) -> l).setParentEntryID(parentID);
+		UISWTViewBuilderCore builder = 
+			new UISWTViewBuilderCore(
+				id,
+				null).setInitialDatasource(datasource).setListenerInstantiator(
+					new UISWTViewBuilder.UISWTViewEventListenerInstantiator()
+					{
+						@Override
+						public boolean
+						supportsMultipleViews()
+						{
+							return( false );
+						}
+						
+						@Override
+						public UISWTViewEventListener 
+						createNewInstance(
+							UISWTViewBuilder Builder, 
+							UISWTView forView)
+								throws Exception
+						{
+							return( l );
+						}
+						
+						@Override
+						public String 
+						getUID()
+						{
+							return( parentID + "::" + id );
+						}
+					}).setParentEntryID(parentID);
+		
 		return createEntry(builder, closeable);
 	}
 
@@ -265,15 +299,15 @@ public abstract class BaseMDI
 	                                                boolean closeable, String preferedAfterID);
 
 	@Override
-	public MdiEntrySWT getCurrentEntry() {
+	public MdiEntrySWT getSelectedEntry() {
 		if (isDisposed()) {
 			return null;
 		}
 		return currentEntry;
 	}
-
+	
 	protected void
-	setCurrentEntry(
+	setSelectedEntry(
 		MdiEntrySWT		entry )
 	{
 		currentEntry = entry;
@@ -301,6 +335,24 @@ public abstract class BaseMDI
 		}
 	}
 
+	@Override
+	public MdiEntry 
+	getEntry(
+		String	id, Object datasource )
+	{
+		if ( datasource != null ){
+			
+			String hash = DataSourceUtils.getHash( datasource );
+	
+			if ( hash != null ){
+			
+				return( getEntry( id + "_" + hash ));
+			}
+		}
+		
+		return( getEntry( id ));
+	}
+	
 	/**
 	 * @param skinView
 	 * @return
@@ -355,7 +407,7 @@ public abstract class BaseMDI
 	private boolean createIfAutoOpen(String id) {
 		
 		
-			// carefull with scope of locking on autoOpenLock - make it larger and you'll
+			// careful with scope of locking on autoOpenLock - make it larger and you'll
 			// get deadlocks...
 
 		Map<?, ?> autoOpenInfo;
@@ -527,23 +579,35 @@ public abstract class BaseMDI
 		return loadEntryByID(id, true, false, datasource);
 	}
 	
-	public void popoutEntryByID(String id, Object datasource, boolean onTop ) {
+	public boolean popoutEntryByID(String id, Object datasource, Map<String,Object> options ) {
 		
-		if ( loadEntryByID( id, false, false, datasource )){
+		MdiEntry existing = getEntry( id, datasource );
+		
+		if ( existing != null ){
 			
-			MdiEntry entry = getEntry(id);
-			
-			if ( entry != null ){
+			return( popoutEntry( existing, options ));
+		}
+		
+		MdiEntry entry = loadAndGetEntryByID( id, false, false, datasource );
+		
+		if ( entry != null ){
 				
-				popoutEntry( entry, onTop );
+			try{
+				return( popoutEntry( entry, options ));
+				
+			}finally{
+				
+				entry.closeView();
 			}
 		}
+		
+		return( false );
 	}
 	
-	public abstract void
+	public abstract boolean
 	popoutEntry(
-		MdiEntry	entry,
-		boolean		onTop );
+		MdiEntry			entry,
+		Map<String,Object>	options );
 	
 	@Override
 	public Object skinObjectInitialShow(SWTSkinObject skinObject, Object params) {
@@ -588,7 +652,7 @@ public abstract class BaseMDI
 							// we need to wait for the loadCloseables to complete as there is code in MainMDISetup that runs on the 'UIAttachedComplete'
 							// callback that needs the closables to be loaded (when setting 'start tab') otherwise the order gets broken
 	
-						if ( !wait_sem.reserve(10*1000)){
+						if ( !wait_sem.reserve(20*1000)){
 	
 							Debug.out( "eh?");
 						}
@@ -627,7 +691,7 @@ public abstract class BaseMDI
 
 	@Override
 	public void updateUI() {
-		MdiEntry currentEntry = getCurrentEntry();
+		MdiEntry currentEntry = getSelectedEntry();
 		if (currentEntry != null) {
 			currentEntry.updateUI( false );
 		}
@@ -645,14 +709,26 @@ public abstract class BaseMDI
 	@Override
 	public boolean loadEntryByID(String id, boolean activate,
 	                             boolean onlyLoadOnce, Object datasource) {
+		
+		return( loadAndGetEntryByID( id, activate, onlyLoadOnce, datasource ) != null );
+	}
+
+	private MdiEntry 
+	loadAndGetEntryByID(
+		String		id, 
+		boolean		activate,                    
+		boolean		onlyLoadOnce, 
+		Object		datasource ) 
+	{
+
 		if (id == null) {
-			return false;
+			return( null );
 		}
 
 		@SuppressWarnings("deprecation")
 		boolean loadedOnce = wasEntryLoadedOnce(id);
 		if (loadedOnce && onlyLoadOnce) {
-			return false;
+			return( null );
 		}
 
 		MdiEntry entry = getEntry(id);
@@ -663,7 +739,7 @@ public abstract class BaseMDI
 			if (activate) {
 				showEntry(entry);
 			}
-			return true;
+			return( entry );
 		}
 
 		Map autoOpenInfo = new HashMap();
@@ -683,6 +759,7 @@ public abstract class BaseMDI
 				builder = vi.getBuilder(getDataSourceType(), id);
 			}
 			if (builder != null) {
+				builder.setInitialDatasource(datasource);
 				mdiEntry = createEntry(builder, true);
 			}
 		}
@@ -694,10 +771,10 @@ public abstract class BaseMDI
 			if (activate) {
 				showEntry(mdiEntry);
 			}
-			return true;
+			return( mdiEntry );
 		}
 
-		return false;
+		return( null );
 	}
 
 	protected abstract void setEntryLoadedOnce(String id);
@@ -825,7 +902,17 @@ public abstract class BaseMDI
 					}
 				}
 			}else{
-				initialID = MapUtils.getMapString(loadedMap, CLOSEABLECONFIG_INITIALID, null);
+				String sas = getShowIDAtStartup();
+				
+				if ( sas != null && !sas.isEmpty()){
+					
+					initialID = sas;
+					
+				}else{
+					
+					initialID = MapUtils.getMapString(loadedMap, CLOSEABLECONFIG_INITIALID, null);
+				}
+				
 				if (initialID == null) {
 					String legacyStartTab = COConfigurationManager.getStringParameter("v3.StartTab", null);
 					if (legacyStartTab != null) {
@@ -854,13 +941,26 @@ public abstract class BaseMDI
 				//if (currentEntry != null && !currentEntry.getViewID().equals(initialID)) {
 				//	System.out.println("currentEntry set to " + currentEntry.getViewID() + " before initial " + initialID);
 				//}
-				if (currentEntry == null && initialDef != null) {
-					SimpleTimer.addEvent("ShowDefEntry", SystemTime.getOffsetTime(3000),
-							event -> {
-								if (currentEntry == null) {
-									showEntryByID(initialDef);
+				
+				if ( currentEntry == null ){
+					
+					if ( getEntry( initialID ) != null || initialDef != null ){
+					
+						SimpleTimer.addEvent(
+							"ShowDefEntry", 
+							SystemTime.getOffsetTime(3000),
+							event->{
+								if (currentEntry == null ){
+									
+									if ( getEntry( initialID ) != null ){
+										showEntryByID(initialID);
+									}else if ( initialDef != null ){
+										showEntryByID(initialDef);
+									}
 								}
 							});
+		
+					}
 				}
 			}
 		}catch( Throwable e ){
@@ -873,6 +973,12 @@ public abstract class BaseMDI
 		}
 	}
 
+	protected String
+	getShowIDAtStartup()
+	{
+		return( null );
+	}
+	
 	protected void saveCloseables(){
 		saveCloseables( false );
 	}
@@ -896,14 +1002,14 @@ public abstract class BaseMDI
 				return;
 			}
 			
-			try{
-								
+			try{					
+				if ( closed ){
+					
+					return;
+				}
+
 				if ( interim ){
 					
-					if ( closed ){
-						
-						return;
-					}
 				}else{
 					
 					closed = true;
@@ -961,32 +1067,47 @@ public abstract class BaseMDI
 	private boolean processAutoOpenMap(String id, Map<?, ?> autoOpenInfo,
 			UISWTViewBuilderCore builder) {
 		try {
+
 			MdiEntry entry = getEntry(id);
-			if (entry != null) {
-				return true;
+			
+			if ( entry != null){
+				
+				return( true );
 			}
 
-			String title = MapUtils.getMapString(autoOpenInfo, "title", id);
-
-			MdiEntry mdiEntry = createEntryByCreationListener(id, autoOpenInfo);
-			if (mdiEntry != null) {
-				if (mdiEntry.getTitle().equals("") && !title.isEmpty()) {
-					mdiEntry.setTitle(title);
-				}
-				return true;
-			}
+			String title = MapUtils.getMapString(autoOpenInfo, "title", "" );
 
 			Object datasource = autoOpenInfo.get(AUTOOPENINFO_DS);
 
-			if (builder != null) {
-				entry = createEntry(builder, true);
-				if (entry != null) {
-					if (entry.getTitle().equals("") && !title.isEmpty()) {
-						entry.setTitle(title);
+			entry = createEntryByCreationListener(id, autoOpenInfo);
+			
+			if ( entry != null ){
+				
+				if ( !title.isEmpty()){
+					
+					entry.setTitle(title);
+				}
+			}
+
+
+			if ( entry == null ){
+				
+				if ( builder != null ){
+					
+					entry = createEntry(builder, true);
+					
+					if ( entry != null ){
+						
+						if ( !title.isEmpty()){
+							
+							entry.setTitle( title );
+						}
+						
+							// Auto-Open stores last datasource used before close.
+							// Override builder's initialDataSource with stored one.
+						
+						entry.setDatasource(datasource);
 					}
-					// Auto-Open stores last datasource used before close.
-					// Override builder's initialDataSource with stored one.
-					entry.setDatasource(datasource);
 				}
 			}
 
@@ -1051,7 +1172,8 @@ public abstract class BaseMDI
 
 		setEntryAutoOpen(id, entry.getAutoOpenInfo());
 
-		if (currentEntry == null && id.equals(initialID)) {
+		if ( currentEntry == null && id.equals(initialID)){
+			
 			showEntryByID(initialID);
 		}
 	}
@@ -1176,6 +1298,27 @@ public abstract class BaseMDI
 
 
 	public void fillMenu(Menu menu, final MdiEntry entry, String menuID) {
+		if (entry != null) {
+			MdiSWTMenuHackListener[] menuHackListeners = getMenuHackListeners();
+			for (MdiSWTMenuHackListener l : menuHackListeners) {
+				try {
+					l.menuWillBeShown(entry, menu);
+				} catch (Exception e) {
+					Debug.out(e);
+				}
+			}
+			if (entry instanceof BaseMdiEntry) {
+				menuHackListeners = ((BaseMdiEntry) entry).getMenuHackListeners();
+				for (MdiSWTMenuHackListener l : menuHackListeners) {
+					try {
+						l.menuWillBeShown(entry, menu);
+					} catch (Exception e) {
+						Debug.out(e);
+					}
+				}
+			}
+		}
+
 		com.biglybt.pif.ui.menus.MenuItem[] menu_items;
 
 		menu_items = MenuItemManager.getInstance().getAllAsArray(menuID);
@@ -1196,7 +1339,7 @@ public abstract class BaseMDI
 
 					PluginInterface pi = ((UISWTView) entry).getPluginInterface();
 
-					if (pi != null) {
+					if (pi != null && pi != pi.getPluginManager().getDefaultPluginInterface()){
 
 						final List<String> relevant_sections = new ArrayList<>();
 
@@ -1244,25 +1387,6 @@ public abstract class BaseMDI
 					new MenuBuildUtils.MenuItemPluginMenuControllerImpl(new Object[] {
 						entry
 					}));
-
-			MdiSWTMenuHackListener[] menuHackListeners = getMenuHackListeners();
-			for (MdiSWTMenuHackListener l : menuHackListeners) {
-				try {
-					l.menuWillBeShown(entry, menu);
-				} catch (Exception e) {
-					Debug.out(e);
-				}
-			}
-			if (currentEntry instanceof BaseMdiEntry) {
-				menuHackListeners = ((BaseMdiEntry) entry).getMenuHackListeners();
-				for (MdiSWTMenuHackListener l : menuHackListeners) {
-					try {
-						l.menuWillBeShown(entry, menu);
-					} catch (Exception e) {
-						Debug.out(e);
-					}
-				}
-			}
 		}
 
 		menu_items = MenuItemManager.getInstance().getAllAsArray(menuID + "._end_");

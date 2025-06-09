@@ -37,6 +37,8 @@ import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagDownload;
+import com.biglybt.core.tag.TagException;
+import com.biglybt.core.tag.TagManagerFactory;
 import com.biglybt.core.tag.TagType;
 import com.biglybt.core.tag.impl.TagTypeBase;
 import com.biglybt.core.torrent.TOTorrent;
@@ -104,13 +106,68 @@ CategoryManagerImpl
   private
   CategoryManagerImpl()
   {
-	super( TagType.TT_DOWNLOAD_CATEGORY, TagDownload.FEATURES, "Category" );
+	super( TagType.TT_DOWNLOAD_CATEGORY, TagDownload.FEATURES, "tag.type.category" );
 
 	addTagType();
 
   	loadCategories();
+  	
+  	MessageText.addListener((l1,l2)->{
+  		List<CategoryImpl>	cats;
+
+		try{
+			categories_mon.enter();
+
+			cats = new ArrayList<>(categories.values());
+
+		}finally{
+
+			categories_mon.exit();
+		}
+
+		try{
+			// buffer the changes to avoid costly multiple rebuilds of tagging UI components... 
+			setMDEventsEnabled( false );
+			
+			for ( CategoryImpl c: cats ){
+				c.localeChanged();
+			}
+			
+		}finally{
+			setMDEventsEnabled( true );
+		}
+  	});
   }
 
+  boolean	md_events_enabled = true;
+  List<Tag>	pending_md_events	= new ArrayList<>();
+  
+  private void
+  setMDEventsEnabled(
+	 boolean 	enabled )
+  {
+	  md_events_enabled = enabled;
+	  
+	  if ( enabled ){
+		  for ( Tag t: pending_md_events ){
+			  fireMetadataChanged(t);
+		  }
+		  pending_md_events.clear();
+	  }
+  }
+  
+  @Override
+  protected void 
+  fireMetadataChanged(
+	Tag  t)
+  {
+	  if ( md_events_enabled ){
+		  super.fireMetadataChanged(t);
+	  }else{
+		  pending_md_events.add( t );
+	  }
+	}
+  
   public void addCategoryManagerListener(CategoryManagerListener l) {
     category_listeners.addListener( l );
   }
@@ -388,6 +445,29 @@ CategoryManagerImpl
   }
   
   @Override
+  public Tag
+  createTag(
+	  String 	name,
+	  boolean	auto_add )
+
+	  throws TagException
+  {
+	  if ( !auto_add ){
+		  
+		  throw( new TagException( "Not supported - must be auto-add" ));
+	  }
+	  
+	  Category cat = getCategory( name );
+	  
+	  if ( cat == null ){
+		  
+		  cat = createCategory( name );
+	  }
+	  
+	  return( cat );
+  }
+	
+  @Override
   protected void
   sync()
   {
@@ -566,7 +646,7 @@ CategoryManagerImpl
 
 			pw.println( "<?xml version=\"1.0\" encoding=\"utf-8\"?>" );
 
-			pw.println( "<rss version=\"2.0\" xmlns:vuze=\"http://www.vuze.com\">" );
+			pw.println( "<rss version=\"2.0\" " + Constants.XMLNS_VUZE + ">" );
 
 			pw.println( "<channel>" );
 
@@ -631,6 +711,35 @@ CategoryManagerImpl
 					pw.println(	"<vuze:peers>" + scrape.getNonSeedCount() + "</vuze:peers>" );
 				}
 
+				String dl_cat = download.getCategoryName();
+				
+				if ( dl_cat != null && dl_cat.length() > 0 ){
+
+					if ( !dl_cat.equalsIgnoreCase("Categories.uncategorized")){
+						
+						pw.println( "<category>" + escape( dl_cat ) + "</category>" );
+					}
+				}
+				
+				List<Tag> dl_tags = TagManagerFactory.getTagManager().getTagsForTaggable( core_download );
+
+				for ( Tag dl_tag : dl_tags) {
+
+					TagType tt = dl_tag.getTagType();
+					
+					if ( tt.isTagTypeAuto() || tt.getTagType() != TagType.TT_DOWNLOAD_MANUAL ){
+						
+						continue;
+					}
+					
+					boolean[] autos = dl_tag.isTagAuto();
+					
+					if (!( autos[0] || autos[1] )){
+						
+						pw.println( "<tag>" + escape( dl_tag.getTagName(true )) + "</tag>" );
+					}
+				}
+				
 				pw.println( "</item>" );
 			}
 

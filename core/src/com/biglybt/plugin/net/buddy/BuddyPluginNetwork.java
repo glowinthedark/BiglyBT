@@ -160,6 +160,7 @@ BuddyPluginNetwork
 	private AESemaphore						pd_queue_sem	= new AESemaphore( "BuddyPlugin:persistDispatch");
 	private AEThread2						pd_thread;
 
+	private volatile boolean closing;
 
 	protected
 	BuddyPluginNetwork(
@@ -977,6 +978,8 @@ BuddyPluginNetwork
 	{
 		logMessage( null, "Closing down" );
 
+		closing = true;
+		
 		List<BuddyPluginBuddy>	buddies = getAllBuddies();
 
 		synchronized( this ){
@@ -1327,7 +1330,7 @@ BuddyPluginNetwork
 					
 					if ( authorised && !buddy.isAuthorised()){
 
-						log( buddy, "Buddy " + buddy.getString() + ": no authorised" );
+						log( buddy, "Buddy " + buddy.getString() + ": now authorised" );
 
 						buddy.setAuthorised( true );
 
@@ -1385,7 +1388,7 @@ BuddyPluginNetwork
 			}
 		}
 		
-		return( addBuddy( key, SUBSYSTEM_AZ2, true, true ));
+		return( addBuddy( key, SUBSYSTEM_AZ2, false, true ));
 	}
 	
 	protected void
@@ -1520,7 +1523,7 @@ BuddyPluginNetwork
 				{
 					tick_count++;
 
-					if ( !plugin.isClassicEnabled()){
+					if ( closing || !plugin.isClassicEnabled()){
 
 						return;
 					}
@@ -2634,6 +2637,7 @@ BuddyPluginNetwork
 
 		private AsyncDispatcher	publish_dispatcher = new AsyncDispatcher();
 
+		private boolean 	ygm_active;
 		private boolean		bogus_ygm_written;
 
 		private int		status_seq;
@@ -2837,13 +2841,25 @@ BuddyPluginNetwork
 		private void
 		checkMessagePending()
 		{
+			synchronized( this ){
+				
+				if ( ygm_active ){
+					
+					return;
+				}
+				
+				ygm_active = true;
+			}
+			
+			boolean active = false;
+			
 			try{
 				String	reason = "Friend YGM check";
 
 				byte[] public_key = ecc_handler.getPublicKey( reason );
 
 				DistributedDatabaseKey	key = getYGMKey( public_key, reason );
-
+				
 				ddb.read(
 					new DistributedDatabaseListener()
 					{
@@ -2927,6 +2943,11 @@ BuddyPluginNetwork
 							}else if ( 	type == DistributedDatabaseEvent.ET_OPERATION_TIMEOUT ||
 										type == DistributedDatabaseEvent.ET_OPERATION_COMPLETE ){
 
+								synchronized( DDBDetails.this ){
+									
+									ygm_active = false;
+								}
+								
 								if ( new_ygm_buddies.size() > 0 || unauth_permitted ){
 
 									BuddyPluginBuddy[] b = new BuddyPluginBuddy[new_ygm_buddies.size()];
@@ -2941,6 +2962,8 @@ BuddyPluginNetwork
 					key,
 					120*1000,
 					DistributedDatabase.OP_EXHAUSTIVE_READ );
+
+				active = true;
 
 				boolean	write_bogus_ygm = false;
 
@@ -2985,6 +3008,16 @@ BuddyPluginNetwork
 			}catch( Throwable e ){
 
 				logMessage( null, "YGM check failed", e );
+				
+			}finally{
+				
+				if ( !active ){
+					
+					synchronized( this ){
+							
+						ygm_active = false;
+					}
+				}
 			}
 		}
 		

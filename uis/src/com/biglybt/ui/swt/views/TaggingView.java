@@ -20,9 +20,11 @@ package com.biglybt.ui.swt.views;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.function.Consumer;
 
-import com.biglybt.core.category.Category;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.events.ControlAdapter;
@@ -34,11 +36,13 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 
+import com.biglybt.core.category.Category;
 import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.tag.*;
 import com.biglybt.core.tag.TagFeatureProperties.TagProperty;
+import com.biglybt.core.util.CopyOnWriteList;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.TextViewerWindow;
 import com.biglybt.ui.swt.Utils;
@@ -48,8 +52,8 @@ import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.pifimpl.UISWTViewCoreEventListener;
 import com.biglybt.ui.swt.views.utils.TagButtonsUI;
 import com.biglybt.ui.swt.views.utils.TagUIUtils;
-import com.biglybt.ui.swt.widgets.TagCanvas;
 import com.biglybt.ui.swt.widgets.TagCanvas.TagButtonTrigger;
+import com.biglybt.ui.swt.widgets.TagPainter;
 
 /**
  * View showing tags set on selected taggable item(s).  Sometimes easier than
@@ -64,6 +68,9 @@ public class TaggingView
 {
 	public static final String MSGID_PREFIX = "TaggingView";
 
+	private static Set<Tag>	copied_tag_assignment = new HashSet<>();
+	private static CopyOnWriteList<Consumer<String>>	cta_listeners = new CopyOnWriteList<>();
+	
 	private UISWTView swtView;
 
 	private ScrolledComposite sc;
@@ -73,6 +80,10 @@ public class TaggingView
 	private Composite parent;
 
 	private TagButtonsUI 	tagButtonsUI;
+	private Button			buttonCopy;
+	private Button			buttonPaste;
+	private Button			buttonClear;
+	private Button			buttonInvert;
 	private Button			buttonExplain;
 	private Composite mainComposite;
 
@@ -238,7 +249,7 @@ public class TaggingView
 		GridData layoutData = new GridData(SWT.FILL, SWT.CENTER, true, false);
 		buttonComp.setLayoutData(layoutData);
 
-		GridLayout bcLayout = new GridLayout(hasGroup ? 3 : 2, false);
+		GridLayout bcLayout = new GridLayout(hasGroup ? 7 : 6, false);
 		bcLayout.marginHeight = 0;
 		buttonComp.setLayout(bcLayout);
 		GridData gridData;
@@ -249,12 +260,181 @@ public class TaggingView
 		Messages.setLanguageText(buttonAdd, "label.add.tag");
 		buttonAdd.addListener(SWT.Selection, event -> askForNewTag());
 
+		buttonCopy = new Button(buttonComp, SWT.PUSH);
+		gridData = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+		buttonCopy.setLayoutData(gridData);
+		Messages.setLanguageText(buttonCopy, "label.copy");
+		Messages.setLanguageTooltip(buttonCopy,"tags.copy.tooltip");
+		
+		buttonCopy.addListener(SWT.Selection, event -> {
+			if ( taggables == null ){
+				return;
+			}
+			
+			TagManager tm = TagManagerFactory.getTagManager();
+			
+			copied_tag_assignment.clear();
+			
+			for (Taggable taggable : taggables) {
+				
+				List<Tag> has_tags = tm.getTagsForTaggable( TagType.TT_DOWNLOAD_MANUAL, taggable);
+								
+				for ( Tag tag: has_tags ){
+					
+					boolean[] auto = tag.isTagAuto();
+					
+					if ( !auto[0] && !auto[1] ){
+						
+						copied_tag_assignment.add( tag );
+					}
+				}
+			}
+			
+			for ( Consumer<String> c: cta_listeners ){
+				c.accept("");
+			}
+		});
+		
+		buttonPaste = new Button(buttonComp, SWT.PUSH);
+		gridData = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+		buttonPaste.setLayoutData(gridData);
+		Messages.setLanguageText(buttonPaste, "label.paste");
+		Messages.setLanguageTooltip(buttonPaste,"tags.paste.tooltip");
+		
+		buttonPaste.addListener(SWT.Selection, event -> {
+			if ( taggables == null ){
+				return;
+			}
+
+			TagManager tm = TagManagerFactory.getTagManager();
+			for (Taggable taggable : taggables) {
+				
+				for ( Tag t: tm.getTagType( TagType.TT_DOWNLOAD_MANUAL ).getTags()){
+					
+					boolean[] auto = t.isTagAuto();
+					
+					if ( !auto[0] && !auto[1] ){
+				
+						if ( !copied_tag_assignment.contains(t)){
+							
+							if ( t.hasTaggable(taggable)){
+								t.removeTaggable(taggable);
+							}
+						}
+					}
+				}
+				
+				for ( Tag t: copied_tag_assignment ){
+					if ( !t.hasTaggable(taggable)){
+						t.addTaggable(taggable);
+					}
+				}
+			}
+		});
+		
+		cta_listeners.add(
+			new Consumer<String>()
+			{
+				@Override
+				public void 
+				accept(String t){
+					if ( buttonPaste.isDisposed()){
+						cta_listeners.remove( this );
+					}else{
+						buttonPaste.setEnabled( !copied_tag_assignment.isEmpty());
+					}
+				}
+			});
+		
+		buttonPaste.setEnabled( !copied_tag_assignment.isEmpty());
+		
+		buttonClear = new Button(buttonComp, SWT.PUSH);
+		gridData = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+		buttonClear.setLayoutData(gridData);
+		Messages.setLanguageText(buttonClear, "Button.clear");
+		Messages.setLanguageTooltip(buttonClear,"tags.clear.tooltip");
+		
+		buttonClear.addListener(SWT.Selection, event -> {
+			if ( taggables == null ){
+				return;
+			}
+			TagManager tm = TagManagerFactory.getTagManager();
+						
+			for (Taggable taggable : taggables) {
+				
+				List<Tag> has_tags = tm.getTagsForTaggable( TagType.TT_DOWNLOAD_MANUAL, taggable);
+								
+				for ( Tag tag: has_tags ){
+					
+					boolean[] auto = tag.isTagAuto();
+					
+					if ( !auto[0] && !auto[1] ){
+						
+						tag.removeTaggable(taggable);
+					}
+				}
+			}
+		});
+		
+		buttonInvert = new Button(buttonComp, SWT.PUSH);
+		gridData = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+		buttonInvert.setLayoutData(gridData);
+		Messages.setLanguageText(buttonInvert, "label.invert");
+		Messages.setLanguageTooltip(buttonInvert,"tags.invert.tooltip");
+		
+		buttonInvert.addListener(SWT.Selection, event -> {
+			if ( taggables == null ){
+				return;
+			}
+
+			TagManager tm = TagManagerFactory.getTagManager();
+
+			List<Tag> all_tags = new ArrayList<>();
+			
+			for ( Tag t: tm.getTagType( TagType.TT_DOWNLOAD_MANUAL ).getTags()){
+				
+				boolean[] auto = t.isTagAuto();
+				
+				if ( !auto[0] && !auto[1] ){
+			
+					all_tags.add( t );
+				}
+			}
+			
+			for (Taggable taggable : taggables) {
+				
+				List<Tag> has_tags = tm.getTagsForTaggable( TagType.TT_DOWNLOAD_MANUAL, taggable);
+				
+				Set<Tag>	tags_to_add = new HashSet<>( all_tags );
+				
+				for ( Tag tag: has_tags ){
+					
+					boolean[] auto = tag.isTagAuto();
+					
+					if ( !auto[0] && !auto[1] ){
+						
+						tag.removeTaggable( taggable );
+						
+						tags_to_add.remove( tag );
+					}
+				}
+				
+				for ( Tag tag: tags_to_add ){
+					
+					tag.addTaggable(taggable);
+				}
+			}
+		});
+		
 		buttonExplain = new Button(buttonComp, SWT.PUSH);
 		gridData = new GridData(SWT.LEFT, SWT.CENTER, false, false);
 		buttonExplain.setLayoutData(gridData);
 		Messages.setLanguageText(buttonExplain, "button.explain");
 		buttonExplain.addListener(SWT.Selection, event -> explain());
 
+		Utils.makeButtonsEqualWidth( buttonCopy, buttonPaste, buttonClear, buttonInvert );
+		Utils.makeButtonsEqualWidth( buttonAdd, buttonInvert, buttonExplain );
+		
 		if (hasGroup) {
 			int layoutStyle = tagButtonsUI.getLayoutStyle();
 
@@ -302,22 +482,32 @@ public class TaggingView
 		layout.marginHeight = layout.marginWidth = 0;
 		cTagComposite.setLayout(layout);
 		sc.setContent(cTagComposite);
-		
+
 		Composite tagArea = tagButtonsUI.buildTagGroup(listAllTags, cTagComposite,
 			true, new TagButtonTrigger() {
 				@Override
-				public void tagButtonTriggered(TagCanvas tagCanvas, Tag tag, int stateMask, boolean longPress) {
+				public void tagButtonTriggered(TagPainter painter, int stateMask,
+						boolean longPress) {
 					if (taggables == null || longPress) {
 						return;
 					}
-					boolean doTag = !(tagCanvas.isSelected() && !tagCanvas.isGrayed());
-					for (Taggable taggable : taggables) {
-						if (doTag) {
-							tag.addTaggable(taggable);
-						} else {
-							tag.removeTaggable(taggable);
+					Tag tag = painter.getTag();
+					boolean doTag = !(painter.isSelected() && !painter.isGrayed());
+					
+					try{
+						tag.addTaggableBatch( true );
+					
+						for (Taggable taggable : taggables) {
+							if (doTag) {
+								tag.addTaggable(taggable);
+							} else {
+								tag.removeTaggable(taggable);
+							}
+							painter.setSelected(doTag);
 						}
-						tagCanvas.setSelected(doTag);
+					}finally{
+						
+						tag.addTaggableBatch( false );
 					}
 				}
 
@@ -390,6 +580,10 @@ public class TaggingView
 			}
 		}
 		
+		buttonCopy.setEnabled( taggables != null );
+		buttonPaste.setEnabled( taggables != null && !copied_tag_assignment.isEmpty());
+		buttonClear.setEnabled( taggables != null );
+		buttonInvert.setEnabled( taggables != null );
 		buttonExplain.setEnabled( has_constraint );
 	}
 
@@ -466,14 +660,20 @@ public class TaggingView
 	{
 		List<Tag> tags = getTags();
 		
-		TagUtils.sortTags( tags );
+		tags = TagUtils.sortTags( tags );
 		
 		StringBuilder content = new StringBuilder(1024);
+				
+		int num_taggables = taggables.size();
 		
 		for ( Taggable t: taggables ){
 			
 			content.append( t.getTaggableName() + "\n\n" );
+		
+			String	indent = "";
 			
+			String	current_group = null;
+
 			for ( Tag tag: tags ){
 				
 				TagFeatureProperties	tfp = (TagFeatureProperties)tag;
@@ -485,14 +685,34 @@ public class TaggingView
 					String[] constraint = tfp_constraint.getStringList();
 					
 					if ( constraint != null && constraint.length > 0 ){
-						
+
 						String s = constraint[0];
 						
 						if ( s.length() > 0 ){
-	
-							String details = tfp_constraint.explainTaggable( t );
+
+							String group = tag.getGroup();
 							
-							content.append( tag.getTagName(true) + " -> " + details + "\n" );
+							if ( group != null ){
+								
+								indent = "        ";
+								
+								if ( current_group == null || !group.equals( current_group )){
+									
+									content.append( "    Group: " + group + "\n");
+									
+									current_group = group;
+								}
+							}else{
+								
+								indent = "    ";
+							}
+
+							String[] details = tfp_constraint.explainTaggable( t );
+							
+							content.append( indent + tag.getTagName(true) + " -> " + details[0] + "\n" );
+							content.append( indent + "    " + details[1] + "\n" );
+							content.append( indent + "    " + details[2] + "\n" );
+							
 						}
 					}
 				}

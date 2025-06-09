@@ -20,6 +20,11 @@
 
 package com.biglybt.ui.swt;
 
+import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
+import java.awt.image.DirectColorModel;
+import java.awt.image.IndexColorModel;
+import java.awt.image.WritableRaster;
 import java.io.*;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -29,6 +34,8 @@ import java.util.List;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 
 import org.eclipse.swt.SWT;
@@ -38,15 +45,21 @@ import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.events.DisposeEvent;
 import org.eclipse.swt.events.DisposeListener;
+import org.eclipse.swt.events.MenuAdapter;
+import org.eclipse.swt.events.MenuEvent;
+import org.eclipse.swt.events.MenuListener;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.graphics.*;
-import org.eclipse.swt.internal.DPIUtil;
 import org.eclipse.swt.layout.*;
 import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.*;
 
+import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
+import com.biglybt.core.CoreOperation;
+import com.biglybt.core.CoreOperationTask;
+import com.biglybt.core.CoreOperationTask.ProgressCallback;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.DiskManagerFileInfo;
@@ -67,6 +80,7 @@ import com.biglybt.plugin.I2PHelpers;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.UIFunctionsUserPrompter;
+import com.biglybt.ui.common.table.impl.TableColumnManager;
 import com.biglybt.ui.swt.components.BufferedTruncatedLabel;
 import com.biglybt.ui.swt.imageloader.ImageLoader;
 import com.biglybt.ui.swt.mainwindow.ClipboardCopy;
@@ -75,11 +89,12 @@ import com.biglybt.ui.swt.mainwindow.SWTThread;
 import com.biglybt.ui.swt.mainwindow.TorrentOpener;
 import com.biglybt.ui.swt.pif.UISWTStatusEntry;
 import com.biglybt.ui.swt.pifimpl.UISWTGraphicImpl;
+import com.biglybt.ui.swt.shells.GCStringPrinter;
 import com.biglybt.ui.swt.shells.MessageBoxShell;
 import com.biglybt.ui.swt.systray.TrayItemDelegate;
 import com.biglybt.ui.swt.utils.ColorCache;
 import com.biglybt.ui.swt.utils.SWTRunnable;
-
+import com.biglybt.ui.swt.views.table.painted.TablePaintedUtils;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.PluginManager;
 import com.biglybt.pif.disk.DiskManagerEvent;
@@ -87,6 +102,8 @@ import com.biglybt.pif.disk.DiskManagerListener;
 import com.biglybt.pif.platform.PlatformManagerException;
 import com.biglybt.pif.sharing.ShareManager;
 import com.biglybt.pif.ui.Graphic;
+import com.biglybt.pif.ui.UIInputReceiver;
+import com.biglybt.pif.ui.UIInputReceiverListener;
 import com.biglybt.pif.utils.PooledByteBuffer;
 
 /**
@@ -95,20 +112,51 @@ import com.biglybt.pif.utils.PooledByteBuffer;
  */
 public class Utils
 {
-	static final boolean hasDPIUtils;
+	static final Method		method_DPIUTIL_getDeviceZoom;
+	static final Method		method_DPIUTIL_getNativeDeviceZoom;
 	
 	static {
 			// osx 10.7 only runs on older swt and that doesn't have DPIUtil
 		
-		boolean ok = false;
-		try {
-			DPIUtil.getDeviceZoom();
-			
-			ok = true;
+		Method	m1	= null;
+		Method	m2	= null;
+		
+		try{
+			try{
+				Class<?> claDPIUtil = Class.forName("org.eclipse.swt.internal.DPIUtil");
+				
+				try{
+					m1 = claDPIUtil.getMethod( "getDeviceZoom" );
+					
+				}catch( Throwable e ){
+					
+					if ( Constants.IS_CVS_VERSION ){
+						
+						Debug.out( "DPIUtil::getDeviceZoom unavailable" );
+					}
+				}
+				
+				if ( SWT.getVersion() >= 4968 ){
+					
+					try{
+						m2 = claDPIUtil.getMethod( "getNativeDeviceZoom" );
+						
+					}catch( Throwable e ){
+						
+						if ( Constants.IS_CVS_VERSION ){
+							
+							Debug.out( "DPIUtil::getNativeDeviceZoom unavailable" );
+						}
+					}
+				}
+				
+			}catch( Throwable e ){
+			}
 		}catch( Throwable e ) {
-			
 		}
-		hasDPIUtils = ok;
+				
+		method_DPIUTIL_getDeviceZoom		= m1;
+		method_DPIUTIL_getNativeDeviceZoom	= m2;
 	}
 	
 	public static final String GOOD_STRING = "(/|,jI~`gy";
@@ -132,10 +180,15 @@ public class Utils
 
 	public static int BUTTON_MINWIDTH = Constants.isOSX ? 90 : 70;
 
+	public static final int SCT_SKINNING_DISABLED	= -1;
+	public static final int SCT_NONE				= 0;
+	public static final int SCT_BUBBLE_TEXT_BOX		= 1;
+	public static final int SCT_MENU_ITEM			= 2;
+	
 	/**
-	 * Debug/Diagnose SWT exec calls.  Provides usefull information like how
+	 * Debug/Diagnose SWT exec calls.  Provides useful information like how
 	 * many we are queuing up, and how long each call takes.  Good to turn on
-	 * occassionally to see if we coded something stupid.
+	 * occasionally to see if we coded something stupid.
 	 */
 	private static final boolean DEBUG_SWTEXEC = System.getProperty(
 			"debug.swtexec", "0").equals("1");
@@ -158,8 +211,8 @@ public class Utils
 	private static AEDiagnosticsEvidenceGenerator evidenceGenerator;
 
 	private static ParameterListener configUserModeListener;
-
 	private static ParameterListener configUIListener;
+	private static ParameterListener configOtherListener;
 
 	private static boolean	terminated;
 
@@ -191,17 +244,25 @@ public class Utils
 		SWT_REVISION = rev;
 	}
 	
-	private static volatile boolean	dark_misc_things = false;
+	private static Boolean	is_dark_appearance;
+	private static boolean	force_dark_appearance;
 	
-	static{
-		COConfigurationManager.addAndFireParameterListener(
-			"Dark Misc Colors",
-			(n)->{
-				dark_misc_things = COConfigurationManager.getBooleanParameter( "Dark Misc Colors" );
-			});
-	}
+	private static Skinner	skinner;
+	private static int		skinning_enabled = 1;
 	
-	static void initStatic() {
+	private static volatile boolean	dark_misc_things 		= false;
+	private static volatile boolean	gradient_fill	 		= true;
+	
+	
+	private static volatile boolean	gui_refresh_disable_when_min	= false;
+	private static volatile boolean	gui_is_minimized				= false;
+	private static volatile boolean gui_refresh_enable				= true;
+	
+	private static String SHELL_METRICS_DISABLED_KEY = "utils:shmd";
+	
+	static void initStatic( Core core ) {
+		
+			// don't do anything that requires SWT specific config parameter defaults to be set up before they are initialised below!
 		
 		if (DEBUG_SWTEXEC) {
 			System.out.println("==== debug.swtexec=1, performance may be affected ====");
@@ -229,7 +290,7 @@ public class Utils
 			queue = null;
 			diag_logger = null;
 		}
-
+		
 		configUserModeListener = new ParameterListener() {
 			@Override
 			public void parameterChanged(String parameterName) {
@@ -246,9 +307,33 @@ public class Utils
 		};
 		COConfigurationManager.addAndFireParameterListener("User Mode", configUserModeListener);
 		COConfigurationManager.addAndFireParameterListener("ui", configUIListener);
+		
+		UIConfigDefaultsSWT.initialize();
+
+		UIConfigDefaultsSWTv3.initialize(core);
+
 		// no need to listen, changing param requires restart
 		boolean smallOSXControl = COConfigurationManager.getBooleanParameter("enable_small_osx_fonts");
 		BUTTON_MARGIN = Constants.isOSX ? (smallOSXControl ? 10 : 12) : 6;
+		
+		configOtherListener = new ParameterListener() {
+			@Override
+			public void parameterChanged(String parameterName) {
+				dark_misc_things				= COConfigurationManager.getBooleanParameter( "Dark Misc Colors" );
+				gradient_fill					= COConfigurationManager.getBooleanParameter( "Gradient Fill Selection" );
+				gui_refresh_disable_when_min	= COConfigurationManager.getBooleanParameter( "GUI Refresh Disable When Minimized" );
+				
+				gui_refresh_enable = !( gui_is_minimized && gui_refresh_disable_when_min );
+			}
+		};
+		
+		COConfigurationManager.addAndFireParameterListeners(
+				new String[]{
+					"Dark Misc Colors",
+					"Gradient Fill Selection",
+					"GUI Refresh Disable When Minimized",
+				},
+				configOtherListener );
 	}
 
 	private static Display		display;
@@ -258,21 +343,606 @@ public class Utils
 
 	private static volatile int dragDetectMask	= 0;
 	
+	private static CopyOnWriteList<TerminateListener>	listeners = new CopyOnWriteList<>();
+
 	public static void
 	initialize(
 		Display		_display )
 	{
 		display	= _display;
-		
+
+		if ( UI.useSystemTheme() && Constants.isWindows ){
+			
+			try{
+				// OS.setTheme( true );
+				// requires recent SWT which requires Java 11+....
+				// support still flakey...
+
+				try{
+					Class<?> OS = Class.forName( "org.eclipse.swt.internal.win32.OS" );
+					
+					Method setTheme = OS.getMethod( "setTheme", boolean.class );
+					
+					setTheme.invoke( null, true );
+					
+				}catch( Throwable e ){
+					
+					Debug.out( e );
+				}
+				
+				force_dark_appearance = true;
+	
+				skinner = new Skinner( display );
+
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
+				
 		isGTK3 = isGTK && System.getProperty("org.eclipse.swt.internal.gtk.version",
 				"2").startsWith("3");
 		
-		display.addFilter( SWT.DragDetect, (ev)->{
-
-			dragDetectMask = ev.stateMask;
+			// if we're running Sleak this won't be the SWT thread...
+		
+		execSWTThread(()->{
+			display.addFilter( SWT.DragDetect, (ev)->{
+	
+				dragDetectMask = ev.stateMask;
+			});
 		});
 	}
 	
+	private static class
+	Skinner
+	{
+		
+		final Color widget_fg;
+		final Color widget_bg;
+		final Color list_bg;
+		
+		Skinner(
+			Display	display )
+		{
+			widget_fg	= Colors.getWindowsDarkSystemColor(display, SWT.COLOR_WIDGET_FOREGROUND );
+			widget_bg	= Colors.getWindowsDarkSystemColor(display, SWT.COLOR_WIDGET_BACKGROUND );
+			list_bg		= Colors.getWindowsDarkSystemColor(display, SWT.COLOR_LIST_BACKGROUND );
+		
+				// have to theme things ourselves :(
+				// https://www.eclipse.org/lists/eclipse-dev/msg12104.html
+			
+			display.addFilter(SWT.Skin, e -> {
+				
+				Widget widget = e.widget;
+				
+				skinner.handleSkinning( widget );
+			});
+		}
+		
+		void
+		handleSkinning(
+			Widget		widget )
+		{		
+			if ( skinning_enabled <= 0 ){
+				
+				return;
+			}
+			// System.out.println( widget );
+			
+			Integer _sct = (Integer)widget.getData("utils:skinned-ct" );
+
+			int sct = _sct==null?SCT_NONE:_sct.intValue();
+		
+			if ( sct == SCT_SKINNING_DISABLED ){
+			
+				return;
+			}
+			
+			if ( widget instanceof ExpandBar ){
+				
+				// background settings have no affect so don't change foreground
+				// as unreadable :(
+				
+			}else if ( widget instanceof Control ){
+				
+				Control control = (Control)widget;
+				
+				setSkinnedForegroundDefault( control, widget_fg );
+				setSkinnedBackgroundDefault( control, widget_bg );
+			}
+			
+			if ( widget instanceof CTabFolder ){
+				
+				CTabFolder control = (CTabFolder)widget;
+				
+				control.setSelectionForeground( widget_fg );
+				control.setHighlightEnabled( false );
+			}
+			
+			if ( widget instanceof Text ){
+				
+				Text control = (Text)widget;	
+				
+				
+				if ( sct == SCT_BUBBLE_TEXT_BOX ){
+				
+					setSkinnedBackgroundDefault( control, Colors.black );
+				}
+			}
+			
+			if ( widget instanceof Label ){
+				
+				Label control = (Label)widget;	
+				
+				if ( sct == SCT_MENU_ITEM ){
+				
+					setSkinnedForegroundDefault( control, Colors.white );
+				}
+			}
+			
+			if ( widget instanceof CTabItem ){
+				
+				CTabItem item = (CTabItem)widget;
+				
+				setSkinnedForegroundDefault( item, widget_fg );
+			}
+			
+			if ( widget instanceof Tree ){
+			
+				Tree tree = (Tree)widget;
+				
+				tree.setLinesVisible( false );
+				tree.setHeaderForeground( widget_fg );
+				tree.setHeaderBackground( list_bg );
+			}
+			
+			if ( widget instanceof Table ){
+				
+				Table table = (Table)widget;
+				
+				table.setLinesVisible( false );
+				table.setHeaderForeground( widget_fg );
+				table.setHeaderBackground( list_bg );
+			}
+		}
+	}
+	
+	public static void
+	setSkinningEnabled(
+		boolean	enabled )
+	{
+		if ( !isSWTThread()){
+			
+			Debug.out( "This probably won't work..." );
+		}
+		
+		if ( enabled ){
+			skinning_enabled++;
+		}else{
+			skinning_enabled--;
+		}
+	}
+	
+	public static void
+	setSkinnedControlType(
+		Control		control,
+		int			type )
+	{
+		control.setData( "utils:skinned-ct", type );
+	}
+	
+	private static void
+	setSkinnedForegroundDefault(
+		Control		control,
+		Color		color )
+	{
+		Boolean forced = (Boolean)control.getData( "utils:skinned-fg-forced" );
+		
+		if ( forced == null || !forced ){
+		
+			control.setForeground(color);
+		}
+		
+		control.setData( "utils:skinned-fg", color );
+	}
+	
+	private static void
+	setSkinnedBackgroundDefault(
+		Control		control,
+		Color		color )
+	{
+		Boolean forced = (Boolean)control.getData( "utils:skinned-bg-forced" );
+
+		if ( forced == null || !forced ){
+		
+			control.setBackground(color);
+		}
+		
+		control.setData( "utils:skinned-bg", color );
+	}
+	
+	private static void
+	setSkinnedForegroundDefault(
+		CTabItem		control,
+		Color			color )
+	{
+		try{
+				// support old SWT on linux :(
+			
+			Method m = CTabItem.class.getMethod( "setForeground", Color.class );
+			
+			m.invoke( control, color );
+			
+			control.setData( "utils:skinned-fg", color );
+			
+		}catch( Throwable e ){
+			
+			e.printStackTrace();
+		}
+	}
+
+	public static boolean
+	hasSkinnedForeground(
+		Control		control )
+	{
+		return( control.getData( "utils:skinned-fg" ) != null );
+	}
+	
+	public static void
+	setSkinnedForeground(
+		Control		control,
+		Color		color )
+	{
+		setSkinnedForeground( control, color, false );
+	}
+	
+	public static void
+	setSkinnedForeground(
+		Control		control,
+		Color		color,
+		boolean		force )
+	{
+		if ( force ){
+			
+			if ( color == null ){
+				
+					// remove force
+				
+				control.setData( "utils:skinned-fg-forced", null );
+				
+				Color def = (Color)control.getData( "utils:skinned-fg" );
+								
+				control.setForeground( def );
+
+			}else{
+			
+				control.setData( "utils:skinned-fg-forced", true );
+				
+				control.setForeground( color );
+			}
+						
+		}else{
+			
+			Color def = (Color)control.getData( "utils:skinned-fg" );
+			
+			if ( def != null ){
+				
+				control.setForeground( color==null?def:color );
+				
+			}else{
+				
+				control.setForeground( color );
+			}
+		}
+	}
+	
+	public static Color
+	getSkinnedForeground(
+		Control		c )
+	{
+		if ( skinner != null ){
+			
+			Color bg = c.getForeground();
+			
+			c.setForeground( null );
+			
+			skinner.handleSkinning(c);
+			
+			Color skinned = c.getForeground();
+			
+			c.setForeground( bg );
+			
+			return ( skinned );
+		}else{
+			
+			return( c.getForeground());
+		}
+	}
+	
+	public static boolean
+	hasSkinnedBackground(
+		Control		control )
+	{
+		return( control.getData( "utils:skinned-bg" ) != null );
+	}
+
+	public static Color
+	getSkinnedBackground(
+		Control		c )
+	{
+		if ( skinner != null ){
+			
+			Color bg = c.getBackground();
+			
+			c.setBackground( null );
+			
+			skinner.handleSkinning(c);
+			
+			Color skinned = c.getBackground();
+			
+			c.setBackground( bg );
+			
+			return ( skinned );
+		}else{
+			
+			return( c.getBackground());
+		}
+	}
+	
+	public static void
+	setSkinnedBackground(
+		Control		control,
+		Color		color )
+	{
+		setSkinnedBackground( control, color, false );
+	}
+	
+	public static void
+	setSkinnedBackground(
+		Control		control,
+		Color		color,
+		boolean		force )
+	{
+		if ( force ){
+						
+			if ( color == null ){
+				
+					// remove force
+				
+				control.setData( "utils:skinned-bg-forced", null );
+				
+				Color def = (Color)control.getData( "utils:skinned-bg" );
+								
+				control.setBackground( def );
+	
+			}else{
+			
+				control.setData( "utils:skinned-bg-forced", true );
+				
+				control.setBackground( color );
+			}			
+		}else{
+			
+			Color def = (Color)control.getData( "utils:skinned-bg" );
+			
+			if ( def != null ){
+				
+				control.setBackground( color==null?def:color );
+				
+			}else{
+				
+				control.setBackground( color );
+			}
+		}
+	}
+
+	public static void
+	setSkinnedBackground(
+		Control		control,
+		Control		from )
+	{
+		control.setBackground( from.getBackground());
+		
+		control.setData( "utils:skinned-bg-forced", from.getData( "utils:skinned-bg-forced" ));
+	}
+	
+	public static Control
+	createSkinnedLabelSeparator(
+		Composite	parent,
+		int			style )
+	{
+		return( 
+			createSkinnedLabelSeparator(
+				parent, 
+				style, 
+				Colors.getSystemColor(display, SWT.COLOR_WIDGET_BORDER )));
+	}
+	
+	public static Control
+	createSkinnedLabelSeparator(
+		Composite	parent,
+		int			style,
+		Color		color )
+	{
+		if ( isDarkAppearanceNativeWindows()){
+			
+			Composite comp = 
+				new Composite(parent, SWT.NULL )
+				{
+					public Point 
+					computeSize(
+						int wHint, int hHint, boolean changed )
+					{
+						Point size = super.computeSize(wHint, hHint, changed);
+						
+						if (( style & SWT.HORIZONTAL ) != 0 ){
+							
+							size.y = 2;
+							
+						}else{
+							
+							size.x = 2;
+						}
+						
+						return( size );
+					}
+				};
+			
+				comp.addListener( SWT.Paint, (ev)->{
+				
+					Rectangle bounds = comp.getBounds();
+					ev.gc.setBackground( color );
+					ev.gc.fillRectangle( 0, 0, bounds.width, bounds.height );
+					
+				});
+			
+			return( comp );
+		}
+		
+		return( new Label( parent, SWT.SEPARATOR | style ));
+	}
+	
+	public static Composite
+	createSkinnedComposite(
+		Composite	parent,
+		int			style,
+		Object		parentLayoutData )
+	{
+		return(createSkinnedCompositeEx(parent,style,parentLayoutData)[1]);
+	}
+	
+	public static Composite[]
+	createSkinnedCompositeEx(
+		Composite	parent,
+		int			style,
+		Object		parentLayoutData )
+	{
+		if ((style | SWT.BORDER ) != 0 && isDarkAppearanceNativeWindows()){
+			
+			Composite bc = new Composite( parent, SWT.NULL );
+			
+			if ( parentLayoutData != null ){
+			
+				if ( parentLayoutData instanceof GridData ){
+					GridData gd = (GridData)parentLayoutData;
+					
+					if ( gd.widthHint != SWT.DEFAULT ){
+						gd.widthHint += 4;
+					}
+					if ( gd.heightHint != SWT.DEFAULT ){
+						gd.heightHint += 4;
+					}
+				}
+				
+				bc.setLayoutData( parentLayoutData );
+			}
+			
+			Layout parentLayout = parent.getLayout();
+			
+			if ( parentLayout instanceof FormLayout ){
+								
+				FormLayout layout = new FormLayout();
+				
+				layout.marginBottom=layout.marginTop=layout.marginLeft=layout.marginRight=2;
+				
+				bc.setLayout(layout);
+				
+			}else{
+								
+				GridLayout layout = getSimpleGridLayout(1);
+				
+				layout.marginBottom=layout.marginTop=layout.marginLeft=layout.marginRight=2;
+				
+				bc.setLayout(layout);
+			}
+			
+			
+			bc.addListener(SWT.Paint, (ev)->{
+			
+				Rectangle bounds = bc.getBounds();
+				ev.gc.setForeground( Colors.getSystemColor(display, SWT.COLOR_WIDGET_BORDER ));
+				ev.gc.drawRectangle( 0, 0, bounds.width-1, bounds.height-1 );
+			});
+			
+			Composite comp = new Composite( bc, style & ~SWT.BORDER );
+				
+			comp.addListener( SWT.Dispose, (ev)->{
+				if ( !bc.isDisposed()){
+					bc.dispose();
+				}
+			});
+			
+			if ( parentLayout instanceof FormLayout ){
+				
+				comp.setLayoutData( getFilledFormData());
+				
+			}else{
+				
+				comp.setLayoutData( new GridData( GridData.FILL_BOTH ));
+			}
+			
+			return(new Composite[]{ bc, comp });
+			
+		}else{
+			
+			Composite comp = new Composite( parent, style );
+			
+			if ( parentLayoutData != null ){
+				
+				comp.setLayoutData(parentLayoutData);
+			}
+			
+			return(new Composite[]{ comp, comp });
+		}
+	}
+	
+	public static Group
+	createSkinnedGroup(
+		Composite	parent,
+		int			style )
+	{
+		if (isDarkAppearanceNativeWindows()){
+			
+			Group comp = new Group( parent, style );
+			
+			comp.addListener(SWT.Paint, (ev)->{
+			
+				Rectangle bounds = comp.getBounds();
+				
+				GC gc = ev.gc;
+				
+				int height = gc.getFontMetrics().getHeight();
+				
+				int y_offset = height/2;
+				
+					// seems we can just trash over the existing border drawing and replace with
+					// our own, lol
+				
+				gc.setBackground( parent.getBackground());
+				
+				gc.setForeground( Colors.getSystemColor(display, SWT.COLOR_WIDGET_BORDER ));
+				
+				gc.fillRectangle( 0, 0, bounds.width, bounds.height );
+				
+				gc.drawRectangle( 0, y_offset, bounds.width-1, bounds.height-1 - y_offset );
+			});
+		
+			return( comp );
+			
+		}else{
+			
+			Group comp = new Group( parent, style );
+			
+			return( comp );
+		}
+	}
+	
+	public static void
+	setLinkForeground(
+		Control		label )
+	{
+		Utils.setSkinnedForeground( label, Colors.getSystemColor( label.getDisplay(), SWT.COLOR_LINK_FOREGROUND), true );
+	}
 	public static int
 	getDragDetectModifiers()
 	{
@@ -307,19 +977,83 @@ public class Utils
 	public static int
 	getDeviceZoom()
 	{
-		if ( hasDPIUtils ) {
-			return( DPIUtil.getDeviceZoom());
+		if ( method_DPIUTIL_getDeviceZoom != null ){
+			
+			try{
+		
+				Integer res = (Integer)method_DPIUTIL_getDeviceZoom.invoke( null );
+				
+				return( res );
+				
+			}catch( Throwable e ){
+			}
 		}
 		
 		return( 100 );
+	}
+	
+	public static int
+	getNativeDeviceZoom()
+	{
+		if ( method_DPIUTIL_getNativeDeviceZoom != null ){
+			
+			try{
+		
+				Integer res = (Integer)method_DPIUTIL_getNativeDeviceZoom.invoke( null );
+				
+				return( res );
+				
+			}catch( Throwable e ){
+			}
+		}
+		
+		return( 100 );
+	}
+	public static void
+	setUIVisible(
+		boolean	visible )
+	{
+		gui_is_minimized = !visible;
+		
+		gui_refresh_enable = !( gui_is_minimized && gui_refresh_disable_when_min );
+	}
+	
+	public static boolean
+	isUIUpdateEnabled()
+	{
+		return( gui_refresh_enable );
+	}
+	
+	public static void
+	addTerminateListener(
+		TerminateListener		l )
+	{
+		listeners.add( l );
 	}
 	
 	public static void
 	setTerminated()
 	{
 		terminated	= true;
+		
+		for ( TerminateListener l: listeners ){
+			
+			try{
+				l.terminated();
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
 	}
 
+	public static boolean
+	isTerminated()
+	{
+		return( terminated );
+	}
+	
 	public static boolean isAZ2UI() {
 		if ( configUIListener == null ){
 			Debug.out( "hmm" );
@@ -408,15 +1142,25 @@ public class Utils
 		if (disposeList == null) {
 			return;
 		}
-		for (int i = 0; i < disposeList.length; i++) {
-			try {
-  			Object o = disposeList[i];
-  			if (o instanceof Widget && !((Widget) o).isDisposed())
-  				((Widget) o).dispose();
-  			else if ((o instanceof Resource) && !((Resource) o).isDisposed()) {
-  				((Resource) o).dispose();
-  			}
-			} catch (Exception e) {
+		for ( Object o: disposeList ){
+			if ( o == null ){
+				continue;
+			}
+			try{
+				if (o instanceof Widget){
+					Widget w = (Widget)o;
+					if ( !w.isDisposed()){
+						w.dispose();
+					}
+				}else if ( o instanceof Resource){
+					Resource r = (Resource)o;
+					if ( !r.isDisposed()){
+						r.dispose();
+					}
+				}else{
+					Debug.out( "No dispose action for " + o.getClass());
+				}
+			}catch (Exception e) {
 				Debug.out("Warning: Disposal failed "
 						+ Debug.getCompressedStackTrace(e, 0, -1, true));
 			}
@@ -588,6 +1332,243 @@ public class Utils
 		}
 	}	
 	
+	public interface
+	ColorButton
+	{
+		public Button
+		getButton();
+		
+		public void
+		setColor(
+			int[]		rgb );
+	}
+	
+	public static ColorButton
+	createColorButton(
+		Composite		composite,
+		Point			size,
+		boolean			isForeground,
+		int[]			existingColor,
+		int[]			defaultColor,
+		Consumer<int[]>	listener )
+	{
+		int[][] currentColor = { existingColor };
+		
+		Button colorChooser = new Button( composite, SWT.PUSH );
+		
+		Messages.setLanguageTooltip(colorChooser,isForeground?"label.foreground.color":"label.background.color" );
+		
+		Image[]		img = { null };
+		
+		Runnable imageDisposer = ()->{
+			Image old = img[0];
+			if ( old != null && !old.isDisposed()){
+				old.dispose();
+			}
+			img[0] = null;
+		};
+		
+		Runnable imageUpdater = ()->{
+			imageDisposer.run();
+			
+			int w = size.x;
+			int h = size.y;
+			
+			int offset = 5;
+
+			Image newImage = new Image(display, w, h);
+			GC gc = new GC(newImage);
+						
+			try {				
+				int[] rgb = currentColor[0];
+				
+				Color bg = Colors.getSystemColor(display, SWT.COLOR_WIDGET_BACKGROUND);
+				Color fg = Colors.getSystemColor(display, SWT.COLOR_WIDGET_FOREGROUND);
+				Color border = Colors.getSystemColor(display, SWT.COLOR_WIDGET_BORDER);
+
+				gc.setBackground( bg );
+				gc.fillRectangle( 0, 0, w, h );
+				
+				Rectangle	fg_rect = new Rectangle( 0, 0, w-offset-1, h-offset-1 );
+				Rectangle	bg_rect = new Rectangle( offset, offset, w-offset-1, h-offset-1 );
+				
+				Color color = null;
+				
+				if ( rgb != null ){
+					
+					color = ColorCache.getColor(display, rgb[0], rgb[1], rgb[2]);
+				}
+				
+				boolean stripe = false;
+				
+				if ( color == null ){
+					
+					color = Colors.getSystemColor(display, SWT.COLOR_WIDGET_NORMAL_SHADOW );
+					
+					stripe = true;
+				}
+				
+				if ( isForeground ){
+					gc.setBackground(bg);
+					gc.fillRectangle(bg_rect);
+					gc.setBackground(border);
+					gc.drawRectangle(bg_rect);
+					gc.setBackground(color);
+					
+					gc.fillRectangle(fg_rect);
+					if ( stripe ){
+						drawStriped(gc, fg_rect.x, fg_rect.y, fg_rect.width, fg_rect.height,1,1,false);
+					}
+							
+					gc.setBackground(border);
+					gc.drawRectangle(fg_rect);
+				}else{							
+					gc.setBackground(color);
+					
+					gc.fillRectangle(bg_rect);
+					if ( stripe ){
+						drawStriped(gc, bg_rect.x, bg_rect.y, bg_rect.width, bg_rect.height,1,1,false);
+					}
+
+					gc.setBackground(border);
+					gc.drawRectangle(bg_rect);
+					
+					gc.setBackground(fg);
+					gc.fillRectangle(fg_rect);
+					gc.setBackground(border);
+					gc.drawRectangle(fg_rect);
+
+				}
+			}finally{
+				
+				gc.dispose();
+			}
+			
+			ImageData id = newImage.getImageData();
+			
+			newImage.dispose();	
+
+			for ( int i=0;i<w;i++){
+				for ( int j=0;j<h;j++){
+					id.setAlpha(i,j,255);
+				}
+			}
+			
+			for ( int i=0;i<offset;i++){
+				for ( int j=h-offset;j<h;j++){
+					id.setAlpha(i,j,0);
+				}
+			}
+			for ( int i=w-offset;i<w;i++){
+				for ( int j=0;j<offset;j++){
+					id.setAlpha(i,j,0);
+				}
+			}
+					
+			newImage = new Image( display,id );
+						
+			img[0] = newImage;
+			
+			colorChooser.setImage(newImage);
+		};
+		
+		imageUpdater.run();
+		
+		Menu menu = new Menu(colorChooser);
+		colorChooser.setMenu(menu);
+		MenuItem mi = new MenuItem(menu, SWT.PUSH);
+		Messages.setLanguageText(mi,
+				"ConfigView.section.style.colorOverrides.reset");
+		
+		mi.addListener(SWT.Selection, (e) ->{
+			currentColor[0] = defaultColor;
+			listener.accept( defaultColor );
+			imageUpdater.run(); 
+		});
+
+		Supplier<Boolean>	isDefaultValue = ()->{
+				if ( defaultColor == null && currentColor[0] == null ){
+					return( true );
+				}else if ( defaultColor == null || currentColor[0] == null ){
+					return( false );
+				}else{
+					return( Arrays.equals( defaultColor, currentColor[0] ));
+				}
+		};
+		
+		try{
+			menu.addMenuListener( MenuListener.menuShownAdapter(
+				    	(e)->{ mi.setEnabled( !isDefaultValue.get());}));
+		
+		}catch( Throwable e ){
+			
+				// last win32 SWT 4757
+			
+			menu.addMenuListener(
+				new MenuAdapter(){
+					@Override
+					public void menuShown(MenuEvent e){
+						mi.setEnabled( !isDefaultValue.get());
+					}
+				});
+		}
+		
+		colorChooser.addListener( SWT.Dispose, e->imageDisposer.run());		
+
+		colorChooser.addListener(SWT.Selection, e -> {
+			ColorDialog cd = new ColorDialog(composite.getShell());
+
+			List<RGB> custom_colours = Utils.getCustomColors();
+
+			int[] rgb = currentColor[0];
+			
+			if ( rgb != null && rgb.length == 3) {
+
+				RGB colour = new RGB(rgb[0], rgb[1], rgb[2]);
+
+				custom_colours.remove(colour);
+
+				custom_colours.add(0, colour);
+
+				cd.setRGB(colour);
+			}
+
+			cd.setRGBs(custom_colours.toArray(new RGB[0]));
+
+			RGB newColor = cd.open();
+
+			if ( newColor != null) {
+
+				Utils.updateCustomColors(cd.getRGBs());
+
+				currentColor[0] = new int[]{ newColor.red, newColor.green,	newColor.blue };
+
+				listener.accept( currentColor[0] );
+			
+				imageUpdater.run();
+			}
+		});
+
+		return( 
+			new ColorButton()
+			{
+				@Override
+				public Button 
+				getButton()
+				{
+					return( colorChooser );
+				}
+				
+				@Override
+				public void 
+				setColor(int[] rgb)
+				{
+					currentColor[0] = rgb;
+					
+					imageUpdater.run();
+				}
+			});
+	}
 	
 	public static RGB
 	showColorDialog(
@@ -672,7 +1653,23 @@ public class Utils
 		return rowLayout;
 	}
 
+	public static GridLayout getSimpleGridLayout(int cols){
+		GridLayout gridLayout = new GridLayout(cols,false);
+		gridLayout.horizontalSpacing = 0;
+		gridLayout.verticalSpacing = 0;
+		gridLayout.marginHeight = 0;
+		gridLayout.marginBottom = 0;
+		gridLayout.marginTop = 0;
+		gridLayout.marginLeft = 0;
+		gridLayout.marginRight = 0;
+		gridLayout.marginWidth = 0;
+		return( gridLayout );
+	}
+	
 	public static void alternateRowBackground(TableItem item) {
+		if ( isDarkAppearanceNativeWindows()){
+			return;
+		}
 		if (Utils.TABLE_GRIDLINE_IS_ALTERNATING_COLOR) {
 			if (!item.getParent().getLinesVisible())
 				item.getParent().setLinesVisible(true);
@@ -683,7 +1680,7 @@ public class Utils
 			return;
 		Color[] colors = {
 			Colors.getSystemColor(item.getDisplay(), SWT.COLOR_LIST_BACKGROUND),
-			Colors.colorAltRow
+			TablePaintedUtils.isDark()?Colors.colorAltRowDefault:Colors.colorAltRow
 		};
 		Color newColor = colors[item.getParent().indexOf(item) % colors.length];
 		if (!item.getBackground().equals(newColor)) {
@@ -712,7 +1709,7 @@ public class Utils
 
 		Color[] colors = {
 			Colors.getSystemColor(table.getDisplay(), SWT.COLOR_LIST_BACKGROUND),
-			Colors.colorAltRow
+			TablePaintedUtils.isDark()?Colors.colorAltRowDefault:Colors.colorAltRow
 		};
 		int iFixedIndex = iTopIndex;
 		for (int i = iTopIndex; i <= iBottomIndex; i++) {
@@ -927,7 +1924,7 @@ public class Utils
 	 * @param msLater time to wait before running code on SWT thread.  0 does not
 	 *                mean immediate, but as soon as possible.
 	 * @param code Code to run
-	 * @return sucess
+	 * @return success
 	 *
 	 * @since 3.0.4.3
 	 */
@@ -946,7 +1943,7 @@ public class Utils
 		return( display.getThread() == Thread.currentThread());
 	}
 
-	/** For Debugging only: uncomment and chec
+	/** For Debugging only: uncomment and check
 	 * {@link #execSWTThread(Runnable, int)} for callers
 	 *
 	 public static boolean execSWTThreadLater(int msLater, final SWTRunnable code) {
@@ -1394,50 +2391,15 @@ public class Utils
 
 			if ( exe != null ){
 
-				File	file = new File( sFileModified );
-
-				try{
-					System.out.println( "Launching " + sFileModified + " with " + exe );
-
-					if ( Constants.isWindows ){
-
-							// need to use createProcess as we want to force the process to decouple correctly (otherwise Vuze won't close until the child closes)
-
-						try{
-							PlatformManagerFactory.getPlatformManager().createProcess( exe + " \"" + sFileModified + "\"", false );
-
-							return;
-
-						}catch( Throwable e ){
-						}
-					} else if (Constants.isOSX && exe.endsWith(".app")) {
-						ProcessBuilder pb = GeneralUtils.createProcessBuilder(
-								file.getParentFile(), new String[] {
-										"open",
-										"-a",
-									exe,
-									file.getName()
-								}, null);
-						pb.start();
-						return;
-					}
-
-					ProcessBuilder pb = GeneralUtils.createProcessBuilder( file.getParentFile(), new String[]{ exe, file.getName()}, null );
-
-					pb.start();
-
-					return;
-
-				}catch( Throwable e ){
-
-					Debug.out( "Launch failed", e );
-				}
+				launchFileExplicit( sFileModified, exe );
+				
+				return;
 			}
 		}
 
 		String lc_sFile = sFileModified.toLowerCase( Locale.US );
 
-		if ( lc_sFile.startsWith( "tor:" )){
+		if ( lc_sFile.startsWith( "tor:" ) || lc_sFile.startsWith( "i2p:" )){
 
 			force_anon	= true;
 
@@ -1483,30 +2445,74 @@ public class Utils
 
 			}else if ( eb_choice.equals( "manual" )){
 
-				String browser_exe = COConfigurationManager.getStringParameter( "browser.external.prog", "" );
+				String browser_cmd_str = COConfigurationManager.getStringParameter( "browser.external.prog", "" );
 
-				File bf = new File( browser_exe );
+				browser_cmd_str = browser_cmd_str.trim();
+				
+				String[] browser_cmd;
+				
+				File bf = new File( browser_cmd_str );
+
+				if ( bf.exists()){
+					
+						// seems like a winner, take it regardless of whether it 
+						// includes spaces or whatever
+					
+					browser_cmd = new String[]{ browser_cmd_str };
+					
+				}else if ( browser_cmd_str.contains( " " )){
+					
+					browser_cmd = GeneralUtils.decomposeArgs( browser_cmd_str );
+					
+				}else{
+					
+						// gonna fail
+					
+					browser_cmd = new String[]{ browser_cmd_str };
+				}
+				
+				String browser_exe = browser_cmd[0];
+				
+				bf = new File( browser_exe );
 
 				if ( bf.exists()){
 
 					try{
 						if ( Constants.isOSX && browser_exe.endsWith( ".app" )){
 
+							String[] args = new String[ 3 + browser_cmd.length ];
+							
+							args[0] = "open";
+							args[1] = "-a";
+							
+							for ( int i=0;i<browser_cmd.length;i++){
+								
+								args[2+i] = browser_cmd[i];
+							}
+							
+							args[args.length-1] = sFileModified;
+							
 							ProcessBuilder pb = GeneralUtils.createProcessBuilder(
 									bf.getParentFile(),
-									new String[]{
-										"open",
-										"-a",
-										browser_exe,
-										sFileModified
-									},
+									args,
 									null );
 
 							pb.start();
 
 						}else{
+							
+							String[] args = new String[ 1 + browser_cmd.length ];
+							
+							args[0] = bf.getAbsolutePath();
+							
+							for ( int i=1;i<browser_cmd.length;i++){
+								
+								args[i] = browser_cmd[i];
+							}
 
-							Process proc = Runtime.getRuntime().exec( new String[]{ bf.getAbsolutePath(), sFileModified });
+							args[args.length-1] = sFileModified;
+														
+							Process proc = Runtime.getRuntime().exec( args );
 						}
 					}catch( Throwable e ){
 
@@ -1575,6 +2581,83 @@ public class Utils
 		}
 	}
 
+	public static void
+	launchFileExplicit(
+		DiskManagerFileInfo		file,
+		String					exe )
+	{
+		launchFileExplicit( file.getFile(true).toString(), exe );
+	}
+	
+	public static void
+	launchFileExplicit(
+		String		sfile,
+		String...	cmd_args )
+	{
+		File	file = new File( sfile );
+
+		try{
+			String cmd = "";
+			
+			for ( String ca: cmd_args ){
+				
+				cmd += (cmd.isEmpty()?"":" ") + ca;	// should do something about spaces in ca someday
+			}
+			
+			System.out.println( "Launching " + sfile + " with " + cmd );
+
+			if ( Constants.isWindows ){
+
+					// handle fact that "explorer.exe /select," doesn't require a space :(
+				
+				if ( !cmd.endsWith( "," )){
+					
+					cmd += " ";
+				}
+				
+				try{
+					// need to use createProcess as we want to force the process to decouple correctly (otherwise Vuze won't close until the child closes)
+
+					PlatformManagerFactory.getPlatformManager().createProcess( cmd + "\"" + sfile + "\"", false );
+
+					return;
+
+				}catch( Throwable e ){
+				}
+			} else if (Constants.isOSX && cmd.endsWith(".app")) {
+				
+				ProcessBuilder pb = GeneralUtils.createProcessBuilder(
+						file.getParentFile(), 
+						new String[] {
+							"open",
+							"-a",
+							cmd,
+							file.getName()
+						}, null);
+				
+				pb.start();
+				
+				return;
+			}
+
+			String[] args = new String[cmd_args.length+1];
+		
+			System.arraycopy(cmd_args,0,args,0,cmd_args.length);
+			
+			args[args.length-1] = file.getName();
+			
+			ProcessBuilder pb = GeneralUtils.createProcessBuilder( file.getParentFile(), args, null );
+
+			pb.start();
+
+			return;
+
+		}catch( Throwable e ){
+
+			Debug.out( "Launch failed", e );
+		}
+	}
+	
 	private static boolean fallbackLaunch(String command, String... args) {
 		try {
 			List<String> cmdList = new ArrayList<>();
@@ -1984,10 +3067,10 @@ public class Utils
 				ext = ext.substring( 0, q_pos );
 			}
 
-			for ( int i=0;i<10;i++){
+			for ( int i=0;i<ConfigKeysSWT.getLaunchHelperEntryCount();i++){
 
-				String exts = COConfigurationManager.getStringParameter( "Table.lh" + i + ".exts", "" ).trim();
-				String exe 	= COConfigurationManager.getStringParameter( "Table.lh" + i + ".prog", "" ).trim();
+				String exts = ConfigKeysSWT.getLaunchHelpersExts(i).trim();
+				String exe 	= ConfigKeysSWT.getLaunchHelpersProg(i).trim();
 
 				if ( exts.length() > 0 && exe.length() > 0 && new File( exe ).exists()){
 
@@ -2010,6 +3093,37 @@ public class Utils
 		return( null );
 	}
 
+	public static final String PL_SHOW_FILE = "<showfile>";
+	
+	public static String
+	getPredefinedExplicitLauncher(
+		String	type )
+	{
+		for ( int i=0;i<ConfigKeysSWT.getLaunchHelperEntryCount();i++){
+
+			String exts = ConfigKeysSWT.getLaunchHelpersExts(i).trim();
+			String exe 	= ConfigKeysSWT.getLaunchHelpersProg(i).trim();
+
+			if ( exts.length() > 0 && exe.length() > 0 ){
+
+				exts = "," + exts.toLowerCase();
+
+				exts = exts.replaceAll( "\\.", "," );
+				exts = exts.replaceAll( ";", "," );
+				exts = exts.replaceAll( " ", "," );
+
+				exts = exts.replaceAll( "[,]+", "," );
+
+				if ( exts.contains( type )){
+
+					return( exe );
+				}
+			}
+		}
+
+		return( null );
+	}
+	
 	/**
 	 * Sets the checkbox in a Virtual Table while inside a SWT.SetData listener
 	 * trigger.  SWT 3.1 has an OSX bug that needs working around.
@@ -2074,6 +3188,44 @@ public class Utils
 
 		return bDidResize;
 	}
+	
+	public static void
+	setShellMetricsConfigEnabled(
+		Shell		shell,
+		boolean		enabled )
+	{
+		int[] disabled_count = (int[])shell.getData( SHELL_METRICS_DISABLED_KEY );
+		
+		if ( enabled ){
+			
+			if ( disabled_count == null || disabled_count[0] <= 0 ){
+				
+				Debug.out( "eh" );
+				
+			}else{
+				
+				disabled_count[0]--;
+				
+				if ( disabled_count[0] == 0 ){
+					
+					shell.setData( SHELL_METRICS_DISABLED_KEY, null );
+				}
+			}
+		}else{
+			
+			if ( disabled_count == null ){
+				
+				disabled_count = new int[]{1};
+				
+				shell.setData( SHELL_METRICS_DISABLED_KEY, disabled_count );
+				
+			}else{
+				
+				disabled_count[0]++;
+			}
+		}
+		
+	}
 
 	public static boolean hasShellMetricsConfig( String sConfigPrefix )
 	{
@@ -2127,6 +3279,11 @@ public class Utils
 		public void handleEvent(Event event) {
 			Shell shell = (Shell) event.widget;
 			
+			if ( shell.getData( SHELL_METRICS_DISABLED_KEY ) != null ){
+				
+				return;
+			}
+			
 			currentState = calcState(shell);
 
 			if (event.type != SWT.Dispose && currentState == SWT.NONE){
@@ -2136,6 +3293,8 @@ public class Utils
 				}
 			}
 			
+			String rectStr = currentBounds.x + "," + currentBounds.y + "," + currentBounds.width + "," + currentBounds.height;
+
 			boolean	changed = false;
 			
 			if ( currentState != savedState ){
@@ -2150,9 +3309,8 @@ public class Utils
 			if ( !currentBounds.equals( savedBounds)){
 
 				if (currentBounds.width > 0  && currentBounds.height > 0 ){
-				
-					COConfigurationManager.setParameter(sConfigPrefix + ".rectangle",
-							currentBounds.x + "," + currentBounds.y + "," + currentBounds.width + "," + currentBounds.height);
+														
+					COConfigurationManager.setParameter(sConfigPrefix + ".rectangle", rectStr );
 					
 					savedBounds = currentBounds;
 					
@@ -2209,18 +3367,133 @@ public class Utils
 
 	}
 
-    private static boolean drawImage(GC gc, Image image, Rectangle dstRect,
-			Rectangle clipping, int hOffset, int vOffset, boolean clearArea) {
-		return drawImage(gc, image, new Point(0, 0), dstRect, clipping, hOffset,
-				vOffset, clearArea);
+	public static boolean
+	hasAlpha(
+		Image		image )
+	{
+		ImageData data = image.getImageData();
+		
+		int tt = data.getTransparencyType();
+		
+		if ( tt == SWT.TRANSPARENCY_NONE ){
+			return( false );
+		}else if ( tt == SWT.TRANSPARENCY_PIXEL ){
+			return( data.transparentPixel != -1 );
+			
+		}else if ( tt == SWT.TRANSPARENCY_MASK ){
+			ImageData tm = data.getTransparencyMask();
+			if ( tm == null ){
+				return( false );
+			}
+			for ( int x=0;x<tm.width;x++){
+				for ( int y=0;y<tm.height;y++){
+					if ( tm.getPixel(x, y) == 0 ){
+						return( true );
+					}
+				}
+			}
+			return( false );
+		}else{
+			for ( int x=0;x<data.width;x++){
+				for ( int y=0;y<data.height;y++){
+					if ( data.getAlpha(x, y) != 255 ){
+						return( true );
+					}
+				}
+			}
+			return( false );
+		}
 	}
-
-    private static boolean drawImage(GC gc, Image image, Rectangle dstRect,
-			Rectangle clipping, int hOffset, int vOffset) {
-		return drawImage(gc, image, new Point(0, 0), dstRect, clipping, hOffset,
-				vOffset, false);
+	
+	public static void 
+	drawResizedImage(
+		GC			gc,
+		Image 		image, 
+		int srcX, int srcY, int srcWidth, int srcHeight, 
+		int destX, int destY, int destWidth, int destHeight) 
+	{
+		if ( srcWidth == destWidth && srcHeight == destHeight ){
+			
+			gc.drawImage(image, srcX, srcY, srcWidth, srcHeight, destX, destY, destWidth, destHeight);
+			
+			return;
+		}
+		
+			// On my windows machine I have some icons that do have transparency but fail to 
+			// exhibit it in a testable way in hasAlpha - hence the source size test
+		
+		if ( srcWidth <= 128 || hasAlpha( image )){
+			
+				// messing with offscreen images for icons messes up transparency - just do it
+			
+			gc.drawImage(image, srcX, srcY, srcWidth, srcHeight, destX, destY, destWidth, destHeight);
+			
+			return;
+		}
+		
+		Image 	tempImage 	= getResizedImage(image, srcX, srcY, srcWidth, srcHeight, destWidth, destHeight);
+				
+		try{
+			gc.drawImage( tempImage, destX, destY );
+			
+		}finally{
+		
+			if ( tempImage != null ){
+				tempImage.dispose();
+			}
+		}
 	}
-
+	
+	public static Image 
+	getResizedImage(
+		Image 		image, 
+		int srcX, int srcY, int srcWidth, int srcHeight, 
+		int destWidth, int destHeight) 
+	{
+		GC 		tempGC 		= null;
+		
+		try{
+				// AWT based code is slow and doesn't support all images - just try it for larger ones (thumbnails at the moment )
+			
+			Image tempImage;
+			
+			if ( destWidth > 100 ){
+				
+				tempImage = resizeImage(image, destWidth, destHeight);
+				
+			}else{
+				
+				tempImage = new Image(image.getDevice(), destWidth, destHeight);
+				
+				tempGC = new GC(tempImage);
+				
+				try{
+					// weirdly any of these options cause transparency issues on Windows, the same as those
+					// encountered by the AWT resize method!
+					
+					//tempGC.setAdvanced( true );		
+					//tempGC.setAntialias(SWT.ON);
+					//tempGC.setInterpolation(SWT.HIGH);
+					
+				}catch( Throwable e ){
+				}
+				
+				tempGC.drawImage(
+					image, 
+					srcX, srcY, srcWidth, srcHeight, 
+					0, 0, destWidth, destHeight );
+			}
+			
+			return( tempImage );
+			
+		}finally{
+		
+			if ( tempGC != null ){
+				tempGC.dispose();
+			}
+		}
+	}
+	
 	public static boolean drawImage(GC gc, Image image, Point srcStart,
 			Rectangle dstRect, Rectangle clipping, int hOffset, int vOffset,
 			boolean clearArea) {
@@ -2314,13 +3587,24 @@ public class Utils
 	dump(
 		Control	comp )
 	{
-		PrintWriter pw = new PrintWriter( System.out );
+		File file = new File( AEDiagnostics.getLogDir(), "ui_dump.log" );
+		
+		try{
+			PrintWriter pw = new PrintWriter( new FileWriter( file ));
 
-		IndentWriter iw = new IndentWriter( pw );
+			IndentWriter iw = new IndentWriter( pw );
 
-		dump( iw, comp, new HashSet<>());
+			dump( iw, comp, new HashSet<>());
 
-		pw.flush();
+			pw.flush();
+			
+			System.out.println( "Dump written to " + file );
+						
+		}catch( Throwable e ){
+			
+			
+			Debug.out( e );
+		}
 	}
 
 	private static void
@@ -2494,20 +3778,28 @@ public class Utils
 
 			Monitor[] monitors = shell.getDisplay().getMonitors();
 			for (int j = 0; j < monitors.length && !bMetricsOk; j++) {
-				Rectangle bounds = monitors[j].getClientArea();
-				boolean hasTopLeft = bounds.contains(ptTopLeft);
-				boolean hasBottomRight = bounds.contains(ptBottomRight);
+				Rectangle monitorBounds = monitors[j].getClientArea();
+				Rectangle testBounds;
+					// seems that Windows 10 has some magical padding that means that a window manually resized to fill the entire monitor
+					// fails the test below - add some padding to deal with this :(
+				if ( Constants.isWindows ){
+					testBounds = new Rectangle(monitorBounds.x-10,monitorBounds.y-10,monitorBounds.width+20,monitorBounds.height+20);
+				}else{
+					testBounds = monitorBounds;
+				}
+				boolean hasTopLeft = testBounds.contains(ptTopLeft);
+				boolean hasBottomRight = testBounds.contains(ptBottomRight);
 				bMetricsOk = hasTopLeft && hasBottomRight;
 				if (hasTopLeft) {
-					boundsMonitorTopLeft = bounds;
+					boundsMonitorTopLeft = monitorBounds;
 				}
 				if (hasBottomRight){
-					boundsMonitorBottomRight = bounds;
+					boundsMonitorBottomRight = monitorBounds;
 				}
-				if (boundsMonitorContained == null && bounds.intersects(ptTopLeft.x,
+				if (boundsMonitorContained == null && testBounds.intersects(ptTopLeft.x,
 						ptTopLeft.y, ptBottomRight.x - ptTopLeft.x + 1,
 						ptBottomRight.y - ptTopLeft.y + 1)) {
-					boundsMonitorContained = bounds;
+					boundsMonitorContained = monitorBounds;
 				}
 			}
 			Rectangle bounds = boundsMonitorTopLeft != null ? boundsMonitorTopLeft
@@ -2865,18 +4157,14 @@ public class Utils
 		}
 
 		if (modalShell != null) {
-			while (!modalShell.isDisposed()) {
-				if (!display.readAndDispatch()) {
-					display.sleep();
-				}
-			}
+			readAndDispatchLoop(modalShell);
 		}
 	}
 
 	public static GridData getWrappableLabelGridData(int hspan, int styles) {
 		GridData gridData = new GridData(GridData.HORIZONTAL_ALIGN_FILL | styles);
 		gridData.horizontalSpan = hspan;
-		gridData.widthHint = 0;
+		gridData.widthHint = 0;	// not sure about this, causes some controls to be invisible...
 		return gridData;
 	}
 
@@ -3273,10 +4561,25 @@ public class Utils
 
 	public static void
 	makeButtonsEqualWidth(
+		Button...	buttons )
+	{
+		makeButtonsEqualWidth( Arrays.asList( buttons ));
+	}
+	
+	public static void
+	makeButtonsEqualWidth(
 		List<Button>	buttons )
 	{
-		int width = 75;
-
+		makeButtonsEqualWidth( buttons, 75 );
+	}
+	
+	public static void
+	makeButtonsEqualWidth(
+		List<Button>	buttons,
+		int				min )
+	{
+		int width = min;
+		
 		for ( Button button: buttons ){
 
 			if ( button != null ){
@@ -3338,8 +4641,15 @@ public class Utils
 	private static Map truncatedTextCache = new HashMap();
 
 	public static final String THREAD_NAME_OFFSWT = "GetOffSWT";
-	private static ThreadPool tp = new ThreadPool(THREAD_NAME_OFFSWT, 3, true);
+	private static ThreadPool<AERunnable> tp = new ThreadPool<>(THREAD_NAME_OFFSWT, 10, true);
 
+	static{
+		if ( Constants.isCVSVersion()){
+		
+			tp.setWarnWhenFull();
+		}
+	}
+	
 	private static class TruncatedTextResult {
 		String text;
 		int maxWidth;
@@ -3445,13 +4755,18 @@ public class Utils
 	}
 
 	public static void getOffOfSWTThread(Runnable runnable) {
-		AERunnable r = (runnable instanceof AERunnable) ? (AERunnable) runnable : new AERunnable() {
-			@Override
-			public void runSupport() {
-				runnable.run();
-			}
-		};
-		tp.run(r);
+
+		if ( isSWTThread()){
+			AERunnable r = (runnable instanceof AERunnable) ? (AERunnable) runnable : new AERunnable() {
+				@Override
+				public void runSupport() {
+					runnable.run();
+				}
+			};
+			tp.run(r);
+		}else{
+			runnable.run();
+		}
 	}
 
 	// Needed because plugins use it (VPNHelper)
@@ -3490,7 +4805,80 @@ public class Utils
 		return false;
 	}
 
-
+	public static void
+	runWhenCoreOperationsIdle(
+		Core		core,
+		Runnable 	r )
+	{
+		  getOffOfSWTThread(()->{
+			  
+			  try{
+				  long start = SystemTime.getMonotonousTime();
+				  
+				  boolean waiting = true;
+						  
+				  while( waiting && ( SystemTime.getMonotonousTime() - start <= 60*1000 )){			  
+					  
+					  waiting = false;
+					
+					  List<CoreOperation> ops = core.getOperations();
+		
+					  for ( CoreOperation op: ops ){
+			
+						  if ( op.isRemoved()){
+			
+							  continue;
+						  }
+			
+						  int type = op.getOperationType();
+			
+						  if (	type == CoreOperation.OP_DOWNLOAD_CHECKING ||
+								type == CoreOperation.OP_DOWNLOAD_COPY ||
+								type == CoreOperation.OP_DOWNLOAD_EXPORT ||
+								type == CoreOperation.OP_FILE_MOVE ){
+			
+							  CoreOperationTask task = op.getTask();
+			
+							  if ( task != null ){
+			
+								  ProgressCallback cb = task.getProgressCallback();
+			
+								  if ( cb != null ){
+			
+									  int state = cb.getTaskState();
+			
+									  if ( state == ProgressCallback.ST_CANCEL ){
+			
+										  continue;
+									  }
+								  }
+							  }
+							  
+							  waiting = true;
+							  
+							  break;
+						  }
+					  }
+					  
+					  if ( waiting ){
+						  
+						  try{
+							  Thread.sleep(250);
+							  
+						  }catch( Throwable e ){
+						  }
+					  }
+				  }
+			  
+			  }catch( Throwable e ){
+				  
+				  Debug.out( e );
+			  }
+			  
+			  r.run();
+		  });
+	}
+	
 	public static BrowserWrapper
 	createSafeBrowser(
 		Composite parent, int style)
@@ -3505,7 +4893,7 @@ public class Utils
   					 * Intent here seems to be to run all pending events through the queue to ensure
   					 * that the 'setUrl' and 'setVisible' actions are complete before disposal in an
   					 * attempt to ensure memory released. This is old code and the new 4508 SWT introduced
-  					 * in Dec 2014 causes the 'readAndDispatch' loop to bever exit.
+  					 * in Dec 2014 causes the 'readAndDispatch' loop to never exit.
   					 * So added code to queue an async event and hope that by the time this runs
   					 * any housekeeping is complete
   					 * Meh, tested and the injected code doesn't run until, say, you move the window containing
@@ -3526,7 +4914,7 @@ public class Utils
 	  					new Runnable()
 	  					{
 	  						@Override
-							  public void
+							public void
 	  						run()
 	  						{
 	  							synchronized( done ){
@@ -3536,16 +4924,14 @@ public class Utils
 	  						}
 	  					});
 
-	  				while(!event.display.isDisposed() && event.display.readAndDispatch()){
-
+	  				Utils.readAndDispatchUntilIdleOr(()->{
+	  					
 	  					synchronized( done ){
 
-	  						if ( done[0] || SystemTime.getMonotonousTime() - start > 500 ){
-
-	  							break;
-	  						}
+	  						return( done[0] || SystemTime.getMonotonousTime() - start > 500 );
 	  					}
-	  				}
+	  				});
+	  				
   				}catch( Throwable e ){
 
   				}
@@ -4163,35 +5549,42 @@ public class Utils
 		int			style )
 	{
 	    final Sash sash = new Sash(form, style );
-	    Image image = new Image(sash.getDisplay(), 9, SASH_WIDTH);
-	    ImageData imageData = image.getImageData();
-	    int[] row = new int[imageData.width];
-	    for (int i = 0; i < row.length; i++) {
-	    	if (imageData.depth == 16) {
-	    		row[i] = (i % 3) != 0 ? 0x7BDEF7BD : 0xDEF7BDEB;
-	    	} else {
-	    		row[i] = (i % 3) != 0 ? 0xE0E0E0 : 0x808080;
-	    		if (imageData.depth == 32) {
-	    			row[i] = (row[i] & 255) + (row[i] << 8);
-	    		}
-	    	}
-			}
-	    for (int y = 1; y < imageData.height - 1; y++) {
-	    	imageData.setPixels(0, y, row.length, row, 0);
-	    }
-	    Arrays.fill(row, imageData.depth == 16 ? 0x7BDEF7BD : 0xE0E0E0E0);
-	  	imageData.setPixels(0, 0, row.length, row, 0);
-	  	imageData.setPixels(0, imageData.height - 1, row.length, row, 0);
-	    image.dispose();
-	    image = new Image(sash.getDisplay(), imageData);
-	    sash.setBackgroundImage(image);
-	    sash.addDisposeListener(new DisposeListener() {
-				@Override
-				public void widgetDisposed(DisposeEvent e) {
-					sash.getBackgroundImage().dispose();
+	    
+	    if ( isDarkAppearanceNative()) {
+	    	
+	    	sash.setBackground( ColorCache.getColor( sash.getDisplay(), 81, 86, 88 ));
+	    	
+	    }else{
+		    Image image = new Image(sash.getDisplay(), 9, SASH_WIDTH);
+		    ImageData imageData = image.getImageData();
+		    int[] row = new int[imageData.width];
+		    for (int i = 0; i < row.length; i++) {
+		    	if (imageData.depth == 16) {
+		    		row[i] = (i % 3) != 0 ? 0x7BDEF7BD : 0xDEF7BDEB;
+		    	} else {
+		    		row[i] = (i % 3) != 0 ? 0xE0E0E0 : 0x808080;
+		    		if (imageData.depth == 32) {
+		    			row[i] = (row[i] & 255) + (row[i] << 8);
+		    		}
+		    	}
 				}
-			});
-
+		    for (int y = 1; y < imageData.height - 1; y++) {
+		    	imageData.setPixels(0, y, row.length, row, 0);
+		    }
+		    Arrays.fill(row, imageData.depth == 16 ? 0x7BDEF7BD : 0xE0E0E0E0);
+		  	imageData.setPixels(0, 0, row.length, row, 0);
+		  	imageData.setPixels(0, imageData.height - 1, row.length, row, 0);
+		    image.dispose();
+		    image = new Image(sash.getDisplay(), imageData);
+		    sash.setBackgroundImage(image);
+		    sash.addDisposeListener(new DisposeListener() {
+					@Override
+					public void widgetDisposed(DisposeEvent e) {
+						sash.getBackgroundImage().dispose();
+					}
+				});
+	    }
+	    
 	    return( sash );
 	}
 	
@@ -4599,6 +5992,9 @@ public class Utils
 
 	public static void relayoutUp(Composite c) {
 		while (c != null && !c.isDisposed()) {
+			if ( c instanceof ScrolledComposite ){
+				updateScrolledComposite((ScrolledComposite)c, c.getStyle());
+			}
 			Composite newParent = c.getParent();
 			if (newParent == null) {
 				break;
@@ -4727,6 +6123,11 @@ public class Utils
 
 			if (req_h >= 0) {
 
+				if ( Utils.isDarkAppearanceNativeWindows()){
+										
+					req_h -= 2;	// getting truncation in Windows Dark theme for some reason
+				}
+				
 				sc_size.y = req_h;
 			}
 
@@ -4738,7 +6139,7 @@ public class Utils
 			}
 		});
 
-		Utils.execSWTThreadLater(1000, () -> new Runnable() {
+		Utils.execSWTThreadLater(1000, new Runnable() {
 			public void run() {
 				hack.run();
 
@@ -4937,24 +6338,7 @@ public class Utils
 		mapListeners.clear();
 	}
 
-	public static void
-	ensureDisplayUpdated( Display display )
-	{
-		long start = SystemTime.getMonotonousTime();
-
-		// make sure display is up to date
-		while (display.readAndDispatch()) {
-
-			if ( SystemTime.getMonotonousTime() - start > 5000 ){
-
-				// hmmm, somert wrong
-
-				return;
-			}
-		}
-	}
-
-	public static void
+	public static boolean
 	setPeronalShare(
 		Map<String, String> properties )
 	{
@@ -4968,6 +6352,7 @@ public class Utils
 					MessageText.getString( "personal.share.prompt.text"),
 					new String[] {
 							MessageText.getString("Button.ok"),
+							MessageText.getString("Button.cancel"),
 					},
 					0);
 
@@ -4981,10 +6366,17 @@ public class Utils
 
 			prompter.open(null);
 
-			prompter.waitUntilClosed();
+			int result = prompter.waitUntilClosed();
+			
+			if ( result != 0 ){
+				
+				return( false );
+			}
 		}
 
 		properties.put(ShareManager.PR_PERSONAL, "true");
+		
+		return( true );
 	}
 
 
@@ -5087,10 +6479,15 @@ public class Utils
 		evidenceGenerator = null;
 		COConfigurationManager.removeParameterListener("User Mode", configUserModeListener);
 		COConfigurationManager.removeParameterListener("ui", configUIListener);
-		COConfigurationManager.removeParameterListener("quick.view.exts",
-				pconfigQuickViewListeners);
-		COConfigurationManager.removeParameterListener("quick.view.maxkb",
-				pconfigQuickViewListeners);
+		COConfigurationManager.removeParameterListener("quick.view.exts", pconfigQuickViewListeners);
+		COConfigurationManager.removeParameterListener("quick.view.maxkb", pconfigQuickViewListeners);
+		
+		COConfigurationManager.removeParameterListeners(
+				new String[]{
+					"Dark Misc Colors",
+					"Gradient Fill Selection",
+					"GUI Refresh Disable When Minimized" },
+				configOtherListener);
 	}
 	
 	public static String
@@ -5098,30 +6495,30 @@ public class Utils
 		String		base,
 		String		sub )
 	{
-		return( base + "::" + sub );
+		return( TableColumnManager.createSubViewID(base,sub));
 	}
 	
 	public static String
 	getBaseViewID(
 		String		id )
 	{
-		int	pos = id.lastIndexOf( "::" );
-		
-		if ( pos == -1 ){
-			
-			return( id );
-			
-		}else{
-			
-			return( id.substring( 0, pos ));
-		}
+		return( TableColumnManager.getBaseViewID(id));
 	}
 	
-	static Boolean is_dark_appearance;
+	public static boolean
+	isDarkAppearanceNativeWindows()
+	{
+		return( Constants.isWindows && isDarkAppearanceNative());
+	}
 	
 	public static boolean
 	isDarkAppearanceNative()
 	{
+		if ( force_dark_appearance ){
+			
+			return( true );
+		}
+		
 		if ( is_dark_appearance == null ) {
 			
 			if ( Constants.isOSX ){
@@ -5139,9 +6536,32 @@ public class Utils
 					
 					is_dark_appearance = false;
 				}
+			}else if ( Constants.isWindows ){
+				
+				is_dark_appearance = UI.useSystemTheme();
+				
 			}else{
 				
-				is_dark_appearance = false;
+				boolean is_system_dark_theme = COConfigurationManager.getBooleanParameter( "Force Dark Theme" );
+				
+				if ( !is_system_dark_theme ){
+					
+					try{
+						Class<?> displayClass = Class.forName( "org.eclipse.swt.widgets.Display" );
+						
+						Method method = displayClass.getMethod( "isSystemDarkTheme" );
+								
+						is_system_dark_theme = (Boolean)method.invoke(null);
+					
+					}catch( NoSuchMethodException e ){
+					
+					}catch( Throwable e ) {
+						
+						Debug.out( e );
+					}
+				}
+				
+				is_dark_appearance = is_system_dark_theme;
 			}
 		}
 		
@@ -5166,20 +6586,23 @@ public class Utils
 			return( false );
 		}
 		
-		boolean is_system_dark_theme = false;
+		boolean is_system_dark_theme = COConfigurationManager.getBooleanParameter( "Force Dark Theme" );
 		
-		try{
-			Class<?> displayClass = Class.forName( "org.eclipse.swt.widgets.Display" );
+		if ( !is_system_dark_theme ){
 			
-			Method method = displayClass.getMethod( "isSystemDarkTheme" );
-					
-			is_system_dark_theme = (Boolean)method.invoke(null);
-		
-		}catch( NoSuchMethodException e ){
-		
-		}catch( Throwable e ) {
+			try{
+				Class<?> displayClass = Class.forName( "org.eclipse.swt.widgets.Display" );
+				
+				Method method = displayClass.getMethod( "isSystemDarkTheme" );
+						
+				is_system_dark_theme = (Boolean)method.invoke(null);
 			
-			Debug.out( e );
+			}catch( NoSuchMethodException e ){
+			
+			}catch( Throwable e ) {
+				
+				Debug.out( e );
+			}
 		}
 		
 		return( is_system_dark_theme );
@@ -5241,7 +6664,10 @@ public class Utils
 											showText(
 													"MainWindow.menu.speed_limits.schedule.title",
 													"MainWindow.menu.speed_limits.schedule.err",
-													result );
+													result,
+													()->editSpeedLimitHandlerConfig( slh ));
+											
+											
 										}
 									}
 								}
@@ -5252,9 +6678,19 @@ public class Utils
 	
 	public static void
 	showText(
-		final String					title,
-		final String					message,
-		final java.util.List<String>	lines )
+		String					title,
+		String					message,
+		java.util.List<String>	lines )
+	{
+		showText( title, message, lines, null );
+	}
+	
+	public static void
+	showText(
+		String					title,
+		String					message,
+		java.util.List<String>	lines,
+		Runnable				callback )
 	{
 		Utils.execSWTThreadLater(
 			1,
@@ -5277,6 +6713,12 @@ public class Utils
 					TextViewerWindow viewer = new TextViewerWindow(title, message, text.toString(), false );
 
 					viewer.setEditable( false );
+					
+					viewer.addListener(()->{
+						if ( callback != null ){
+							callback.run();
+						}
+					});
 				}
 			});
 	}
@@ -5348,7 +6790,7 @@ public class Utils
 				
 				range.start 		= result.length();
 				range.length		= t.length();
-				range.foreground	= Colors.blue;
+				range.foreground	= text.getDisplay().getSystemColor(SWT.COLOR_LINK_FOREGROUND);
 				range.data			= url;
 				
 				ranges.add( range );
@@ -5608,5 +7050,485 @@ public class Utils
 		}
 		
 		return( str );
+	}
+	
+	/**
+	 * Resizes an image, using the given scaling factor. Constructs a new image resource, please take care of resource
+	 * disposal if you no longer need the original one. This method is optimized for quality, not for speed.
+	 * 
+	 * @param image source image
+	 * @return scaled image
+	 */
+	public static Image 
+	resizeImage(
+		Image 	image,
+		int		newWidth,
+		int		newHeight )
+	{
+	    int oldwidth 	= image.getBounds().width;
+	    
+	    // convert to buffered image
+	    BufferedImage img = convertToAWT(image.getImageData());
+
+	    // determine scaling mode for best result: if downsizing, use area averaging, if upsizing, use smooth scaling
+	    // (usually bilinear).
+	    int mode = newWidth < oldwidth ? BufferedImage.SCALE_AREA_AVERAGING : BufferedImage.SCALE_SMOOTH;
+	    java.awt.Image scaledImage = img.getScaledInstance(newWidth, newHeight, mode);
+
+	    // convert the scaled image back to a buffered image
+	    img = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_ARGB);
+	    img.getGraphics().drawImage(scaledImage, 0, 0, null);
+
+	    // reconstruct swt image
+	    ImageData imageData = convertToSWT(img);
+	    return new Image(image.getDevice(), imageData);
+	}
+
+	private static BufferedImage 
+	convertToAWT(
+		ImageData data) 
+	{
+        ColorModel colorModel = null;
+        PaletteData palette = data.palette;
+        if (palette.isDirect) {
+    		ImageData transparencyMask = data.getTransparencyType() != SWT.TRANSPARENCY_ALPHA?data.getTransparencyMask() : null;
+
+            BufferedImage bufferedImage = new BufferedImage(data.width,
+                    data.height, BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < data.height; y++) {
+                for (int x = 0; x < data.width; x++) {
+                    int pixel = data.getPixel(x, y);
+                    RGB rgb = palette.getRGB(pixel);
+                    int alpha = data.getAlpha(x, y);
+                    if ( transparencyMask != null ){
+                    	int mask = transparencyMask.getPixel(x, y);
+                    	if ( mask == 0 ){
+                    		alpha = 0;
+                    	}
+                    }            
+                    bufferedImage.setRGB(x, y, alpha << 24
+                            | rgb.red << 16 | rgb.green << 8 | rgb.blue);
+                }
+            }
+            return bufferedImage;
+        } else {
+            RGB[] rgbs = palette.getRGBs();
+            byte[] red = new byte[rgbs.length];
+            byte[] green = new byte[rgbs.length];
+            byte[] blue = new byte[rgbs.length];
+            for (int i = 0; i < rgbs.length; i++) {
+                RGB rgb = rgbs[i];
+                red[i] = (byte) rgb.red;
+                green[i] = (byte) rgb.green;
+                blue[i] = (byte) rgb.blue;
+            }
+            if (data.transparentPixel != -1) {
+                colorModel = new IndexColorModel(data.depth, rgbs.length, red,
+                        green, blue, data.transparentPixel);
+            } else {
+                colorModel = new IndexColorModel(data.depth, rgbs.length, red,
+                        green, blue);
+            }
+            BufferedImage bufferedImage = new BufferedImage(colorModel,
+                    colorModel.createCompatibleWritableRaster(data.width,
+                            data.height), false, null);
+            WritableRaster raster = bufferedImage.getRaster();
+            int[] pixelArray = new int[1];
+            for (int y = 0; y < data.height; y++) {
+                for (int x = 0; x < data.width; x++) {
+                    int pixel = data.getPixel(x, y);
+                    pixelArray[0] = pixel;
+                    raster.setPixel(x, y, pixelArray);
+                }
+            }
+            return bufferedImage;
+        }
+    }
+
+	private static ImageData 
+	convertToSWT(
+		BufferedImage bufferedImage) 
+	{
+		if (bufferedImage.getColorModel() instanceof DirectColorModel) {
+			DirectColorModel colorModel = (DirectColorModel)bufferedImage.getColorModel();
+			PaletteData palette = new PaletteData(colorModel.getRedMask(), colorModel.getGreenMask(), colorModel.getBlueMask());
+			ImageData data = new ImageData(bufferedImage.getWidth(), bufferedImage.getHeight(), colorModel.getPixelSize(), palette);
+			for (int y = 0; y < data.height; y++) {
+				for (int x = 0; x < data.width; x++) {
+					int rgb = bufferedImage.getRGB(x, y);
+					int pixel = palette.getPixel(new RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF));
+					data.setPixel(x, y, pixel);
+					if (colorModel.hasAlpha()) {
+						data.setAlpha(x, y, (rgb >> 24) & 0xFF);
+					}
+				}
+			}
+			return data;
+		} else if (bufferedImage.getColorModel() instanceof IndexColorModel) {
+			IndexColorModel colorModel = (IndexColorModel)bufferedImage.getColorModel();
+			int size = colorModel.getMapSize();
+			byte[] reds = new byte[size];
+			byte[] greens = new byte[size];
+			byte[] blues = new byte[size];
+			colorModel.getReds(reds);
+			colorModel.getGreens(greens);
+			colorModel.getBlues(blues);
+			RGB[] rgbs = new RGB[size];
+			for (int i = 0; i < rgbs.length; i++) {
+				rgbs[i] = new RGB(reds[i] & 0xFF, greens[i] & 0xFF, blues[i] & 0xFF);
+			}
+			PaletteData palette = new PaletteData(rgbs);
+			ImageData data = new ImageData(bufferedImage.getWidth(), bufferedImage.getHeight(), colorModel.getPixelSize(), palette);
+			data.transparentPixel = colorModel.getTransparentPixel();
+			WritableRaster raster = bufferedImage.getRaster();
+			int[] pixelArray = new int[1];
+			for (int y = 0; y < data.height; y++) {
+				for (int x = 0; x < data.width; x++) {
+					raster.getPixel(x, y, pixelArray);
+					data.setPixel(x, y, pixelArray[0]);
+				}
+			}
+			return data;
+		}
+		return null;
+	}
+	
+	public static boolean
+	gradientFillSelection()
+	{
+		return( gradient_fill );
+	}
+	
+	public static void
+	ensureDisplayUpdated()
+	{
+		readAndDispatchUntilIdleFor( 5000 );
+	}
+	
+	public static void
+	readAndDispatchUntilIdle()
+	{
+		readAndDispatchUntilIdleFor( -1 );
+	}
+	
+	public static void
+	readAndDispatchLoop(
+		Control owner )
+	{
+		readAndDispatchLoop( owner, false );
+	}
+		
+	public static void
+	readAndDispatchLoop(
+		Control owner,
+		boolean	check_visible )
+	{
+		if ( owner == null ){
+			
+			return;
+		}
+		
+		readAndDispatchLoop(()->{ return( owner.isDisposed() || (check_visible && !owner.isVisible()));});
+	}
+	
+	public static void
+	readAndDispatchUntilIdleFor(
+		long	millis )
+	{
+		long start = SystemTime.getMonotonousTime();
+	
+		readAndDispatchUntilIdleOr(()->( millis >= 0 && SystemTime.getMonotonousTime() - start > millis ));
+	}
+	
+	public static void
+	readAndDispatchUntilIdleOr(
+		Supplier<Boolean>	done )
+	{		
+		while (	!SWTThread.getInstance().isTerminated() && 
+				!done.get() && 
+				!display.isDisposed() && 
+				display.readAndDispatch()){
+			
+		}
+	}
+	
+	private static AtomicInteger dl_depth = new AtomicInteger();
+	
+	public static int
+	getDispatchLoopDepth()
+	{
+		return( dl_depth.get());
+	}
+	
+	public static boolean
+	readAndDispatchLoop(
+		Supplier<Boolean>	done )
+	{
+		try{
+			dl_depth.incrementAndGet();
+			
+			while ( !SWTThread.getInstance().isTerminated() && 
+					!( done.get() || display.isDisposed())){
+	
+				if ( !display.readAndDispatch()){
+	
+					display.sleep();
+				}
+			}
+	
+			return( display.isDisposed());
+			
+		}finally{
+			
+			dl_depth.decrementAndGet();
+		}
+	}
+	
+
+	public interface
+	TerminateListener
+	{
+		public void
+		terminated();
+	}
+	
+	public static void
+	setFilterPathWithTimeout(
+		FileDialog	dialog,
+		String		path )
+	{
+		try{
+			if ( path != null ){
+			
+				path = FileUtil.getCanonicalPathWithTimeout( FileUtil.newFile( path ), 20*1000 );
+			}
+			
+			dialog.setFilterPath( path );
+			
+		}catch( Throwable e ){
+			
+			Debug.out( "Failed to set filter path '" + path + "'" );
+		}
+	}
+	
+	public static void
+	setFilterPathWithTimeout(
+		DirectoryDialog	dialog,
+		String			path )
+	{
+		try{
+			if ( path != null ){
+			
+				path = FileUtil.getCanonicalPathWithTimeout( FileUtil.newFile( path ), 20*1000 );
+			}
+			
+			dialog.setFilterPath( path );
+			
+		}catch( Throwable e ){
+			
+			Debug.out( "Failed to set filter path '" + path + "'" );
+		}
+	}
+	
+	public static boolean
+	isFileResponding(
+		File		file )
+	{
+		return( FileUtil.isResponding(file, 250 ));
+	}
+	
+	public static boolean
+	fileExistsWithTimeout(
+		String		path )
+	{
+		return( fileExistsWithTimeout( new File( path )));
+	}
+	
+	public static boolean
+	fileExistsWithTimeout(
+		File		file )
+	{
+		return( FileUtil.existsWithTimeout( file, 250 ));
+	}
+	
+	public static boolean
+	isDirectoryWithTimeout(
+		File		dir )
+	{
+		return( FileUtil.isDirectoryWithTimeout( dir, 250 ));
+	}
+	
+	public static boolean
+	canReadFileWithTimeout(
+		File		dir )
+	{
+		return( FileUtil.canReadWithTimeout( dir, 250 ));
+	}
+	
+	public static long
+	fileLengthWithTimeout(
+		File		file )
+	{
+		return( FileUtil.lengthWithTimeout( file, 250 ));
+	}
+	
+	public static String
+	getCanonicalPathWithTimeout(
+		File		file )
+	
+		throws IOException
+	{
+		return( FileUtil.getCanonicalPathWithTimeout( file, 250 ));
+	}
+	
+	public static File[]
+	listFileRootsWithTimeout()
+	{
+		return( FileUtil.listRootsWithTimeout( 250 ));
+	}
+	
+	public static void
+	numberPrompt(
+		String				title_resource,
+		String				text_resource,
+		Integer				def,
+		Consumer<Integer>	cons )
+	{
+		SimpleTextEntryWindow entryWindow = new SimpleTextEntryWindow( title_resource, text_resource );
+				
+		if ( def != null ){
+			
+			entryWindow.setPreenteredText( String.valueOf( def ), false );
+			entryWindow.selectPreenteredText( true );
+		}
+		
+		entryWindow.prompt(
+			new UIInputReceiverListener() {
+				@Override
+				public void 
+				UIInputReceiverClosed(
+					UIInputReceiver entryWindow ) 
+				{
+					if (!entryWindow.hasSubmittedInput()){
+						
+						return;
+					}
+					
+					String sReturn = entryWindow.getSubmittedInput();
+
+					if ( sReturn == null ){
+						
+						return;
+					}
+					
+					try{
+						int num = Integer.valueOf(sReturn).intValue();
+						
+						cons.accept( num );
+						
+					}catch ( Throwable e ){
+
+						new MessageBoxShell(SWT.ICON_ERROR | SWT.OK,
+								MessageText.getString("value.invalid.title"),
+								MessageText.getString("value.invalid.text", new String[]{ sReturn })).open(
+										(n)->{
+											Utils.execSWTThreadLater(1,()->numberPrompt(title_resource,text_resource, def, cons ));
+										});
+					}
+				}
+			});
+	}
+	
+		/**
+		 * Test if characters are displayable. Both should be different and equally likely to
+		 * display within the font (e.g. in same unicode block)
+		 * If they both render to the same thing then it is assumed that neither can be displayed...
+		 */
+	
+	public static boolean
+	canDisplayCharacters(
+		Font		font,
+		char		character1,
+		char		character2 )
+	{
+		String str1	= String.valueOf( character1 );
+		String str2	= String.valueOf( character2 );
+		
+		Image newImage1 = null;
+		Image newImage2 = null;
+
+		GC gc1 = null;
+		GC gc2 = null;
+		
+		try{
+			newImage1 = new Image(Utils.getDisplay(),100,100);
+			newImage2 = new Image(Utils.getDisplay(),100,100);
+			
+			gc1 = new GC(newImage1);
+			gc2 = new GC(newImage2);
+			
+			gc1.setFont(font);
+			gc2.setFont(font);
+			
+			Point p1 = GCStringPrinter.stringExtent(gc1,str1);
+			Point p2 = GCStringPrinter.stringExtent(gc2,str2);
+			
+			boolean same = p1.equals(p2);
+			
+			if ( same ){
+				
+				Rectangle rect = new Rectangle( 0, 0, p1.x + 10, p1.y + 10 );
+				
+				GCStringPrinter.printString( gc1, str1, rect);
+				GCStringPrinter.printString( gc2, str2, rect );
+			
+				gc1.dispose();
+				
+				gc1 = null;
+				
+				gc2.dispose();
+				
+				gc2 = null;
+
+				ImageData id1 = newImage1.getImageData();
+				ImageData id2 = newImage2.getImageData();
+				
+				for ( int x=0; x<p1.x && same ; x++ ){
+					
+					for ( int y=0; y<p1.y; y++ ){
+
+						if ( id1.getPixel( x, y ) != id2.getPixel( x, y )){
+							
+							same = false;
+							
+							break;
+						}
+					}
+				}
+			}
+				
+			return( !same );
+			
+		}catch( Throwable e ){
+		
+			Debug.out( e );
+			
+			return( false );
+			
+		}finally{
+			
+			if ( gc1 != null){
+				gc1.dispose();
+			}
+			if ( gc2 != null){
+				gc2.dispose();
+			}
+			if ( newImage1 != null){
+				newImage1.dispose();
+			}
+			if ( newImage2 != null){
+				newImage2.dispose();
+			}
+		}
 	}
 }

@@ -20,6 +20,8 @@ package com.biglybt.ui.swt.subscriptions;
 
 
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import com.biglybt.core.internat.MessageText;
@@ -29,7 +31,9 @@ import com.biglybt.pif.ui.UIInstance;
 import com.biglybt.pif.ui.UIManager;
 import com.biglybt.pif.ui.menus.*;
 import com.biglybt.pifimpl.local.PluginInitializer;
+import com.biglybt.ui.mdi.MdiAcceleratorListener;
 import com.biglybt.ui.mdi.MdiCloseListener;
+import com.biglybt.ui.swt.mdi.MdiSWTMenuHackListener;
 import com.biglybt.ui.swt.pif.UISWTViewEventListener;
 
 
@@ -39,6 +43,7 @@ import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfoManager;
 import com.biglybt.ui.mdi.MdiEntry;
 import com.biglybt.ui.mdi.MdiEntryVitalityImage;
 import com.biglybt.ui.swt.mdi.BaseMdiEntry;
+import com.biglybt.ui.swt.subscriptions.SubscriptionManagerUI.SubsLists;
 
 public class SubscriptionMDIEntry implements SubscriptionListener, ViewTitleInfo
 {
@@ -82,17 +87,23 @@ public class SubscriptionMDIEntry implements SubscriptionListener, ViewTitleInfo
 
 		setWarning();
 
-		setupMenus(
-			subs,
-			new Runnable(){
-				@Override
-				public void run() {
-					SubscriptionMDIEntry.this.refreshView();
-				}
-			});
+		if (mdiEntry instanceof BaseMdiEntry) {
+			((BaseMdiEntry) mdiEntry).addListener(
+				(MdiSWTMenuHackListener) (entry, menuTree) -> setupMenus(subs,
+					SubscriptionMDIEntry.this::refreshView));
+		}
 
 		subs.addListener(this);
 
+		mdiEntry.addAcceleratorListener((character,mask)->{
+			if (( character == 'c' || character == 'C' ) && mask== MdiAcceleratorListener.SHIFT ){
+				subs.getHistory().markAllResultsRead();
+				return( true );
+			}else{
+				return( false );
+			}
+		});
+		
 		mdiEntry.addListener(new MdiCloseListener() {
 			@Override
 			public void mdiEntryClosed(MdiEntry entry, boolean userClosed) {
@@ -118,8 +129,9 @@ public class SubscriptionMDIEntry implements SubscriptionListener, ViewTitleInfo
 			{
 				@Override
 				public MenuItem
-				createMenu(
-					String 	resource_id )
+				newItem(
+					String 	resource_id,
+					MenuItemListener multiListener )
 				{
 					List<MenuItem> mis = menu_manager.getMenuItems(key, resource_id);
 					
@@ -131,6 +143,10 @@ public class SubscriptionMDIEntry implements SubscriptionListener, ViewTitleInfo
 					MenuItem menu_item = menu_manager.addMenuItem(key, resource_id);
 						
 					menu_item.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+					
+					if (multiListener != null) {
+						menu_item.addMultiListener(multiListener);
+					}
 						
 					return( menu_item );
 				}
@@ -143,7 +159,7 @@ public class SubscriptionMDIEntry implements SubscriptionListener, ViewTitleInfo
 				}
 			};
 
-		SubscriptionManagerUI.createMenus( menu_manager, menu_creator, new Subscription[]{ subs });
+		SubscriptionManagerUI.createMenus( menu_manager, menu_creator, new SubsLists(subs));
 
 		return( key );
 	}
@@ -279,6 +295,6 @@ public class SubscriptionMDIEntry implements SubscriptionListener, ViewTitleInfo
 	protected void
 	removeWithConfirm()
 	{
-		SubscriptionManagerUI.removeWithConfirm( subs );
+		SubscriptionManagerUI.removeWithConfirm( new ArrayList<>(Collections.singletonList(subs)) );
 	}
 }

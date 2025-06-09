@@ -93,6 +93,13 @@ DiskManagerFileInfoDelegate
 	}
 
 	@Override
+	public Boolean 
+	isSkipping()
+	{
+		return( delegate.isSkipping());
+	}
+	
+	@Override
 	public void
 	setDeleted(boolean b)
 	{
@@ -102,9 +109,10 @@ DiskManagerFileInfoDelegate
 	@Override
 	public void
 	setLink(
-		File	link_destination )
+		File		link_destination,
+		boolean		no_delete)
 	{
-		delegate.setLink( link_destination );
+		delegate.setLink( link_destination, no_delete );
 	}
 
 	@Override

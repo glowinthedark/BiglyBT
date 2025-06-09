@@ -25,11 +25,11 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 
 import com.biglybt.core.disk.DiskManagerFactory;
-import com.biglybt.core.diskmanager.access.DiskAccessControllerFactory;
 import com.biglybt.core.diskmanager.access.DiskAccessControllerStats;
 import com.biglybt.core.diskmanager.cache.CacheFileManagerFactory;
 import com.biglybt.core.diskmanager.cache.CacheFileManagerStats;
 import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.DisplayFormatters;
 import com.biglybt.ui.swt.Messages;
@@ -136,7 +136,7 @@ public class CacheView
   private void generateGeneralGroup() {
     GridData gridData;
 
-    Group gCacheGeneral = new Group(panel,SWT.NULL);
+    Group gCacheGeneral = Utils.createSkinnedGroup(panel,SWT.NULL);
     Messages.setLanguageText(gCacheGeneral,"CacheView.general.title");
     gCacheGeneral.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));
 
@@ -162,6 +162,10 @@ public class CacheView
     pbInUse.setLayoutData(gridData);
     pbInUse.setMinimum(0);
     pbInUse.setMaximum(1000);
+    if ( Constants.isWindows ){
+    		// disable the annoying animation windows bestows on us
+    	pbInUse.setState(SWT.PAUSED);
+    }
 
     lblPercentUsed = new BufferedLabel(gCacheGeneral,SWT.DOUBLE_BUFFERED);
     gridData = new GridData();
@@ -184,7 +188,7 @@ public class CacheView
   private void generateReadsGroup() {
     GridData gridData;
 
-    Group gCacheReads = new Group(panel,SWT.NULL);
+    Group gCacheReads = Utils.createSkinnedGroup(panel,SWT.NULL);
     Messages.setLanguageText(gCacheReads,"CacheView.reads.title");
     gCacheReads.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));
 
@@ -234,7 +238,10 @@ public class CacheView
     pbReads1.setLayoutData(gridData);
     pbReads1.setMinimum(0);
     pbReads1.setMaximum(1000);
-
+    if ( Constants.isWindows ){
+    	pbReads1.setState(SWT.PAUSED);
+    }
+    
     lblPercentReads1 = new BufferedLabel(gCacheReads,SWT.DOUBLE_BUFFERED);
     gridData = new GridData(GridData.FILL_VERTICAL);
      gridData.widthHint = 120;
@@ -266,7 +273,10 @@ public class CacheView
     pbReads2.setLayoutData(gridData);
     pbReads2.setMinimum(0);
     pbReads2.setMaximum(1000);
-
+    if ( Constants.isWindows ){
+    	pbReads2.setState(SWT.PAUSED);
+    }
+    
     lblPercentReads2 = new BufferedLabel(gCacheReads,SWT.DOUBLE_BUFFERED);
     gridData = new GridData(GridData.FILL_VERTICAL);
      gridData.widthHint = 120;
@@ -276,7 +286,7 @@ public class CacheView
   private void generateSpeedGroup() {
     GridData gridData;
 
-    Group gCacheSpeeds = new Group(panel,SWT.NULL);
+    Group gCacheSpeeds = Utils.createSkinnedGroup(panel,SWT.NULL);
     Messages.setLanguageText(gCacheSpeeds,"CacheView.speeds.title");
     gCacheSpeeds.setLayoutData(new GridData(GridData.FILL_BOTH));
 
@@ -360,7 +370,7 @@ public class CacheView
   private void generateWritesGroup() {
     GridData gridData;
 
-    Group gCacheWrites = new Group(panel,SWT.NULL);
+    Group gCacheWrites = Utils.createSkinnedGroup(panel,SWT.NULL);
     Messages.setLanguageText(gCacheWrites,"CacheView.writes.title");
     gCacheWrites.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));
 
@@ -411,7 +421,10 @@ public class CacheView
     pbWrites.setLayoutData(gridData);
     pbWrites.setMinimum(0);
     pbWrites.setMaximum(1000);
-
+    if ( Constants.isWindows ){
+    	pbWrites.setState(SWT.PAUSED);
+    }
+    
     lblPercentWrites = new BufferedLabel(gCacheWrites,SWT.DOUBLE_BUFFERED);
     gridData = new GridData();
     gridData.verticalSpan = 2;

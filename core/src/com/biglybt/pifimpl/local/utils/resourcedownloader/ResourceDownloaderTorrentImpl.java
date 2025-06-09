@@ -25,13 +25,16 @@ package com.biglybt.pifimpl.local.utils.resourcedownloader;
  */
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Set;
 
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.tag.Tag;
+import com.biglybt.core.tag.TagManager;
+import com.biglybt.core.tag.TagManagerFactory;
+import com.biglybt.core.tag.TagType;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentException;
 import com.biglybt.core.torrent.TOTorrentFactory;
@@ -71,7 +74,7 @@ ResourceDownloaderTorrentImpl
 	protected boolean					completed;
 
 	protected ResourceDownloader		current_downloader;
-	protected Object					result;
+	protected volatile Object			result;
 	protected AESemaphore				done_sem	= new AESemaphore("RDTorrent");
 
 	public
@@ -300,31 +303,16 @@ ResourceDownloaderTorrentImpl
 
 			informActivity( getLogIndent() + "Downloading: " + name );
 
-				// we *don't* want this temporary file to be deleted automatically as we're
-				// going to use it across the client restarts to hold the download data and
-				// to seed it afterwards. Therefore we don't use AETemporaryFileHandler.createTempFile!!!!
+			TOTorrent	torrent = torrent_holder[0];
 
-			final File	torrent_file 	= AETemporaryFileHandler.createSemiTempFile( name + ".torrent" );
-
-			if ( download_dir != null && !download_dir.exists()){
-
-				FileUtil.mkdirs(download_dir);
-			}
-
-			final File	data_dir		= download_dir==null?torrent_file.getParentFile():download_dir;
-
-			final TOTorrent	torrent = torrent_holder[0];
-
-			TorrentUtils.setFlag( torrent, TorrentUtils.TORRENT_FLAG_LOW_NOISE, true );
-
-			boolean anon = isAnonymous();
-
-			torrent.serialiseToBEncodedFile( torrent_file );
-
+			byte[] torrent_hash = torrent.getHash();
+			
 				// see if already there in an error state and delete if so
 
+			Download existing = null;
+
 			try{
-				Download existing = download_manager.getDownload( torrent.getHash());
+				existing = download_manager.getDownload( torrent_hash );
 
 				if ( existing != null ){
 
@@ -335,6 +323,8 @@ ResourceDownloaderTorrentImpl
 						informActivity( getLogIndent() + "Deleting existing stopped/error state download for " + name );
 
 						existing.remove( true, true );
+						
+						existing = null;
 					}
 				}
 			}catch( Throwable e ){
@@ -342,13 +332,67 @@ ResourceDownloaderTorrentImpl
 				informActivity( getLogIndent() + "Failed to tidy up: " + Debug.getNestedExceptionMessage(e));
 			}
 
-			DownloadWillBeAddedListener dwbal = null;
+			File	torrent_file;
+			File	data_dir;
+			
+			if ( existing == null ){
+				
+					// we *don't* want this temporary file to be deleted automatically as we're
+					// going to use it across the client restarts to hold the download data and
+					// to seed it afterwards. Therefore we don't use AETemporaryFileHandler.createTempFile!!!!
 
-			try{
-				Torrent t = new TorrentImpl(torrent);
+				torrent_file 	= AETemporaryFileHandler.createSemiTempFile( name + ".torrent" );
 
-				if ( anon ){
+				if ( download_dir != null && !download_dir.exists()){
 
+					FileUtil.mkdirs(download_dir);
+				}
+
+				data_dir		= download_dir==null?torrent_file.getParentFile():download_dir;
+
+				TorrentUtils.setFlag( torrent, TorrentUtils.TORRENT_FLAG_LOW_NOISE, true );
+
+				boolean anon = isAnonymous();
+
+				torrent.serialiseToBEncodedFile( torrent_file );
+			
+				DownloadWillBeAddedListener dwbal = null;
+	
+				try{
+					Torrent t = new TorrentImpl(torrent);
+	
+					String[] networks_to_set;
+					
+					if ( anon ){
+	
+						networks_to_set = AENetworkClassifier.AT_NON_PUBLIC;
+						
+					}else{
+						
+							// if torrent includes i2p url and i2p installed then enable network
+						
+						Set<String> hosts = TorrentUtils.getUniqueTrackerHosts( torrent );
+						
+						boolean	has_i2p = false;
+						
+						for ( String host: hosts ) {
+							
+							if ( AENetworkClassifier.categoriseAddress( host ) == AENetworkClassifier.AT_I2P ){
+						
+								has_i2p = true;
+							}
+						}
+						
+						if ( has_i2p && I2PHelpers.isI2PInstalled()){
+							
+							networks_to_set = new String[]{ AENetworkClassifier.AT_PUBLIC, AENetworkClassifier.AT_I2P, AENetworkClassifier.AT_TOR };
+
+						}else{
+						
+							networks_to_set = null;
+						}
+					}
+										
 					dwbal =
 						new DownloadWillBeAddedListener()
 						{
@@ -360,7 +404,37 @@ ResourceDownloaderTorrentImpl
 									try{
 										if ( Arrays.equals( download.getTorrentHash(), torrent.getHash())){
 
-											PluginCoreUtils.unwrap( download ).getDownloadState().setNetworks( AENetworkClassifier.AT_NON_PUBLIC );
+											com.biglybt.core.download.DownloadManager dm = PluginCoreUtils.unwrap( download );
+											
+											if ( networks_to_set != null ){
+											
+												dm.getDownloadState().setNetworks( networks_to_set );
+											}
+											
+											try{
+												TagManager tm = TagManagerFactory.getTagManager();
+												
+												TagType tt = tm.getTagType( TagType.TT_DOWNLOAD_MANUAL );
+												
+												String tag_name = "tag.name.product.updates";
+												
+												Tag tag = tt.getTag( tag_name, false );
+												
+												if ( tag == null ){
+													
+													tag = tt.createTag( tag_name, false );
+													
+													tag.setImageID( "logo16" );
+													
+													tt.addTag( tag );
+												}
+												
+												tag.addTaggable( dm );
+												
+											}catch( Throwable e ){
+												
+												Debug.out( e );
+											}
 										}
 									}catch( Throwable e ){
 
@@ -368,71 +442,39 @@ ResourceDownloaderTorrentImpl
 									}
 								}
 							};
-
+	
 					download_manager.addDownloadWillBeAddedListener( dwbal );
-					
-				}else{
-					
-						// if torrent includes i2p url and i2p installed then enable network
-					
-					Set<String> hosts = TorrentUtils.getUniqueTrackerHosts( torrent );
-					
-					boolean	has_i2p = false;
-					
-					for ( String host: hosts ) {
 						
-						if ( AENetworkClassifier.categoriseAddress( host ) == AENetworkClassifier.AT_I2P ){
-					
-							has_i2p = true;
-						}
+					if ( persistent ){
+	
+						download = download_manager.addDownload( t, torrent_file, data_dir );
+	
+					}else{
+	
+						download = download_manager.addNonPersistentDownload( t, torrent_file, data_dir );
 					}
-					
-					if ( has_i2p && I2PHelpers.isI2PInstalled()){
-						
-						dwbal =
-							new DownloadWillBeAddedListener()
-							{
-									@Override
-									public void
-									initialised(
-										Download download )
-									{
-										try{
-											if ( Arrays.equals( download.getTorrentHash(), torrent.getHash())){
-
-												PluginCoreUtils.unwrap( download ).getDownloadState().setNetworks(
-														new String[]{ AENetworkClassifier.AT_PUBLIC, AENetworkClassifier.AT_I2P });
-											}
-										}catch( Throwable e ){
-
-											Debug.out( e );
-										}
-									}
-								};
-
-						download_manager.addDownloadWillBeAddedListener( dwbal );
+				}finally{
+	
+					if ( dwbal != null ){
+	
+						download_manager.removeDownloadWillBeAddedListener( dwbal );
 					}
 				}
-
-				if ( persistent ){
-
-					download = download_manager.addDownload( t, torrent_file, data_dir );
-
-				}else{
-
-					download = download_manager.addNonPersistentDownload( t, torrent_file, data_dir );
-				}
-			}finally{
-
-				if ( dwbal != null ){
-
-					download_manager.removeDownloadWillBeAddedListener( dwbal );
-				}
+			}else{
+				
+				download = existing;
+				
+				torrent_file = FileUtil.newFile( download.getTorrentFileName());
+				
+				data_dir = FileUtil.newFile(download.getSavePath()).getParentFile();
 			}
 
 			download.moveTo(1);
 
-			download.setForceStart( true );
+			if ( !download.isComplete()){
+			
+				download.setForceStart( true );
+			}
 
 				// Prevents any move-on-completion or move-on-removal behaviour happening.
 
@@ -472,7 +514,7 @@ ResourceDownloaderTorrentImpl
 					@Override
 					public void
 					stateChanged(
-						final Download		download,
+						Download		download,
 						int				old_state,
 						int				new_state )
 					{
@@ -482,18 +524,11 @@ ResourceDownloaderTorrentImpl
 
 							download.removeListener( this );
 
-							PluginInitializer.getDefaultInterface().getUtilities().createThread(
-								"resource complete event dispatcher",
-								new Runnable()
-								{
-									@Override
-									public void
-									run()
-									{
-										downloadSucceeded( download, torrent_file, data_dir );
-									}
-								});
-
+							AEThread2.createAndStartDaemon(	"resource complete event dispatcher", ()->{
+								
+								downloadSucceeded( download, torrent_file, data_dir );
+								
+							});
 						}
 					}
 
@@ -507,56 +542,45 @@ ResourceDownloaderTorrentImpl
 					}
 				});
 
-			Thread	t =
-				new AEThread( "RDTorrent percentage checker")
-				{
-					@Override
-					public void
-					runSupport()
-					{
-						int	last_percentage = 0;
+			AEThread2.createAndStartDaemon( "RDTorrent percentage checker",()->{
 
-						while( result == null ){
+				int	last_percentage = 0;
 
-							int	this_percentage = download.getStats().getDownloadCompleted(false)/10;
+				while( result == null ){
 
-							long	total	= torrent.getSize();
+					int	this_percentage = download.getStats().getDownloadCompleted(false)/10;
 
-							if ( this_percentage != last_percentage ){
+					if ( this_percentage != last_percentage ){
 
-								reportPercentComplete( ResourceDownloaderTorrentImpl.this, this_percentage );
+						reportPercentComplete( ResourceDownloaderTorrentImpl.this, this_percentage );
 
-								last_percentage = this_percentage;
-							}
-
-							try{
-								Thread.sleep(1000);
-
-							}catch( Throwable e ){
-
-								Debug.printStackTrace( e );
-							}
-						}
+						last_percentage = this_percentage;
 					}
-				};
 
-			t.setDaemon( true );
+					try{
+						Thread.sleep(1000);
 
-			t.start();
+					}catch( Throwable e ){
+
+						Debug.printStackTrace( e );
+					}
+				}
+			});
+	
 			
 			int state = download.getState();
-			
-			if ( state == Download.ST_STOPPED ){
-
-					// might have been added-stopped, start if so
-		
-				download.start();
-				
-			}else if ( state == Download.ST_SEEDING ){
+							
+			if ( state == Download.ST_SEEDING || download.isComplete()){
 
 					// its possible that the d/l has already occurred and it is seeding!
 
 				downloadSucceeded( download, torrent_file, data_dir );
+				
+			}else if ( state == Download.ST_STOPPED ){
+
+					// might have been added-stopped, start if so
+		
+				download.start();
 			}
 		}catch( Throwable e ){
 

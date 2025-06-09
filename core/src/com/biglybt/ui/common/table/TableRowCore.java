@@ -40,8 +40,10 @@ public interface TableRowCore extends TableRow
 	public void invalidate(boolean mustRefresh);
 
 	/**
-	 * Delete the row
+	 * Don't call this directly to delete a row, it won't work - it is for internal use to allow
+	 * an implementation to take action on deleting
 	 */
+	
 	public void delete();
 
 	/** Refresh all the cells in the row
@@ -192,6 +194,13 @@ public interface TableRowCore extends TableRow
 
 	public int getHeight();
 
+	/**
+	 * @return Height in px of one standard line of text.<br/>
+	 *         # of rows of text can be calculated by using 
+	 *         {@link #getHeight()} / {@link #getLineHeight()}
+	 */
+	public int getLineHeight();
+
 	public TableRowCore getSubRow(int i);
 
 	public void setSortColumn(String... columnIDs);
@@ -200,7 +209,7 @@ public interface TableRowCore extends TableRow
 
 	public boolean
 	sortSubRows( 
-		TableColumnCore col );
+		List<TableColumnCore> cols );
 	
 	/**
 	 * forces the cell to be refreshed/repainted onto an off-screen area so that any side-effects of the process

@@ -69,8 +69,8 @@ public class UISWTViewBuilderCore
 	private UISWTViewEventListenerInstantiator listenerInstantiator;
 	
 	private String parentEntryID;
-
-	private Boolean canClone = null;
+	
+	private boolean defaultVisibility = true;
 
 	public UISWTViewBuilderCore(String viewID, PluginInterface pi) {
 		this.viewID = viewID;
@@ -195,8 +195,6 @@ public class UISWTViewBuilderCore
 				eventListener = listenerInstantiator.createNewInstance(this, view);
 			} else if (aClass != null) {
 				eventListener = aClass.newInstance();
-			} else if (listener instanceof UISWTViewEventListenerEx) {
-				eventListener = ((UISWTViewEventListenerEx) listener).getClone();
 			}
 
 			if (eventListener != null) {
@@ -308,13 +306,16 @@ public class UISWTViewBuilderCore
 
 	@Override
 	public UISWTViewBuilderCore setListenerInstantiator(
-			boolean canHandleMultipleViews,
 			UISWTViewEventListenerInstantiator listenerInstantiator) {
-		this.canClone = canHandleMultipleViews;
 		this.listenerInstantiator = listenerInstantiator;
 		return this;
 	}
 
+	public UISWTViewEventListenerInstantiator
+	getListenerInstantiator()
+	{
+		return( listenerInstantiator );
+	}
 	/**
 	 * @param preferredAfterID
 	 *    If you prefix the 'preferedAfterID' string with '~' then the operation 
@@ -349,21 +350,36 @@ public class UISWTViewBuilderCore
 		return this;
 	}
 
+	public boolean
+	getDefaultVisibility()
+	{
+		return( defaultVisibility );
+	}
+	
+	public void
+	setDefaultVisibility(
+		boolean	b )
+	{
+		defaultVisibility = b;
+	}
+	
 	/**
 	 * Can we create multiple views using this builder?
 	 */
 	public boolean isListenerCloneable() {
-		if (canClone != null) {
-			return canClone;
+
+		if ( listenerInstantiator != null ){
+			
+			return( listenerInstantiator.supportsMultipleViews());
 		}
-		if (listenerInstantiator != null) {
-			return true;
-		}
+		
 		Class<? extends UISWTViewEventListener> cla = getListenerClass();
-		if (cla != null) {
-			return true;
+		
+		if ( cla != null ){
+			
+			return( true );
 		}
-		return getListener() instanceof UISWTViewEventListenerEx;
+		return( false );
 	}
 
 	public String toDebugString() {

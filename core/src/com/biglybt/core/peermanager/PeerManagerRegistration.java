@@ -21,6 +21,7 @@ package com.biglybt.core.peermanager;
 
 import java.util.List;
 
+import com.biglybt.core.networkmanager.NetworkConnection;
 import com.biglybt.core.peer.impl.PEPeerControl;
 import com.biglybt.core.torrent.TOTorrentFile;
 
@@ -47,6 +48,11 @@ PeerManagerRegistration
 		throws Exception;
 
 	public void
+	route(
+		NetworkConnection 			connection,
+		PeerManagerRoutingListener	listener );
+	
+	public void
 	activate(
 		PEPeerControl	peer_control );
 
@@ -55,15 +61,11 @@ PeerManagerRegistration
 
 	public void
 	unregister();
-
-    // XXX: Doesn't appear to be used.
-    public String
-	getDescription();
     
     public List<PeerManagerRegistration>
     getOtherRegistrationsForHash();
     
     public int 
-    getLocalPort(
+    getHashOverrideLocalPort(
     	boolean	only_if_allocated );
 }

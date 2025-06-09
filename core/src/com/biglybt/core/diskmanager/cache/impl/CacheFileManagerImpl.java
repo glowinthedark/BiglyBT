@@ -36,6 +36,7 @@ import com.biglybt.core.logging.Logger;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.*;
+import com.biglybt.core.util.StringInterner.FileKey;
 
 public class
 CacheFileManagerImpl
@@ -225,7 +226,7 @@ CacheFileManagerImpl
 	public CacheFile
 	createFile(
 		final CacheFileOwner	owner,
-		File					file,
+		StringInterner.FileKey	file,
 		int						type,
 		boolean					force )
 
@@ -268,6 +269,13 @@ CacheFileManagerImpl
 						getControlFileDir( )
 						{
 							return( owner.getCacheFileControlFileDir( ));
+						}
+						@Override
+						public FileKey 
+						getFileLink(
+							FileKey file )
+						{
+							return( owner.getCacheFileLink(file));
 						}
 					}, file, fm_type, force );
 
@@ -950,12 +958,23 @@ CacheFileManagerImpl
 	{
 		Throwable 	cause = e.getCause();
 
+		CacheFileManagerException result;
+		
 		if ( cause != null ){
 
-			throw( new CacheFileManagerException( file, e.getMessage(), cause ));
-		}
+			result = new CacheFileManagerException( file, e.getMessage(), cause );
+			
+		}else{
 
-		throw( new CacheFileManagerException( file, e.getMessage(), e ));
+			result = new CacheFileManagerException( file, e.getMessage(), e );
+		}
+		
+		if ( e.getType() == FMFileManagerException.ET_FILE_OR_DIR_MISSING ){
+			
+			result.setType( CacheFileManagerException.ET_FILE_OR_DIR_MISSING );
+		}
+		
+		throw( result );
 	}
 
 	@Override
@@ -1025,14 +1044,5 @@ CacheFileManagerImpl
 
 			writer.exdent();
 		}
-	}
-
-	@Override
-	public void
-	setFileLinks(
-		TOTorrent		torrent,
-		LinkFileMap		links )
-	{
-		file_manager.setFileLinks( torrent, links );
 	}
 }

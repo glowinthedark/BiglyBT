@@ -54,6 +54,9 @@ public class Colors implements ParameterListener {
   public static final int FADED_LIGHTEST = 0;
   public static final int FADED_DARKEST = 9;
 
+  	// sometimes we just want static colours (e.g when on Linux in dark mode the dynamic blues ain't great)
+  
+  public static final Color[] bluesFixed  = new Color[BLUES_DARKEST + 1];
   public static Color[] blues = new Color[BLUES_DARKEST + 1];
   public static Color[] faded = new Color[FADED_DARKEST + 1];
   public static Color colorProgressBar;
@@ -62,6 +65,7 @@ public class Colors implements ParameterListener {
   public static Color colorShiftRight;
   public static Color colorError;
   public static Color colorErrorBG;
+  public static Color colorAltRowDefault;	// Hack for non-dark tables when "dark tables" enabled
   public static Color colorAltRow;
   public static Color colorWarning;
   public static Color black;
@@ -79,7 +83,8 @@ public class Colors implements ParameterListener {
   public static Color background;
   public static Color red_ConsoleView;
   public static Color cyan;
-
+  public static Color orange;
+  
   private static final AEMonitor	class_mon	= new AEMonitor( "Colors" );
 	public static int diffHue;
 	public static float diffSatPct;
@@ -96,6 +101,22 @@ public class Colors implements ParameterListener {
 	private final ParameterListener configListener;
 
   private void allocateBlues() {
+	  
+	  Color[] temp = {
+		  new Color(display, 255, 255, 255 ),
+		  new Color(display, 226, 240, 255 ),
+		  new Color(display, 198, 226, 255 ),
+		  new Color(display, 169, 212, 254 ),
+		  new Color(display, 141, 198, 254 ),
+		  new Color(display, 113, 184, 255 ),
+		  new Color(display, 84, 170, 254 ),
+		  new Color(display, 56, 156, 255 ),
+		  new Color(display, 28, 142, 255 ),
+		  new Color(display, 0, 128, 255 )
+	  };
+	  
+	  System.arraycopy( temp, 0, bluesFixed, 0, temp.length );
+	  
 	  int r = COConfigurationManager.getIntParameter("Color Scheme.red");
 	  int g = COConfigurationManager.getIntParameter("Color Scheme.green");
 	  int b = COConfigurationManager.getIntParameter("Color Scheme.blue");
@@ -127,7 +148,7 @@ public class Colors implements ParameterListener {
             - ((float) i / (float) (blues.length - 1));
         hslColor.blend(tR, tG, tB, blendBy);
         blues[i] = ColorCache.getColor(display, hslColor.getRed(),
-						hslColor.getGreen(), hslColor.getBlue());
+						hslColor.getGreen(), hslColor.getBlue());        
         int iSat = hslColor.getSaturation();
         int luminence = hslColor.getLuminence();
         if (luminence < 20) {
@@ -242,6 +263,44 @@ public class Colors implements ParameterListener {
 		}, false);
 	}
 
+	public RGB
+	getAlternativeRowColor(
+		Color		normal )
+	{
+		HSLColor hslColor = new HSLColor();
+		hslColor.initHSLbyRGB(normal.getRed(), normal.getGreen(),
+				normal.getBlue());
+
+		int lum = hslColor.getLuminence();
+		int sat = hslColor.getSaturation();
+		int hue = hslColor.getHue();
+		if (lum > 127) {
+			lum -= 10;
+			sat = 127;
+			hue = 155;
+		} else {
+			lum += 30; // it's usually harder to see difference in darkness
+		}
+		hslColor.setLuminence(lum);
+		hslColor.setHue(hue);
+		hslColor.setSaturation(sat);
+
+		//HSLColor blueHSL = new HSLColor();
+		//RGB rgb = blues[BLUES_DARKEST].getRGB();
+		//blueHSL.initHSLbyRGB(rgb.red, rgb.green, rgb.blue);
+		//int blueHue = blueHSL.getHue();
+		//int altHue = hslColor.getHue();
+		//if (blueHue > altHue) {
+		//	altHue += 11;
+		//} else {
+		//	altHue -= 11;
+		//}
+		//hslColor.setHue(blueHue);
+		
+		return( new RGB(hslColor.getRed(),
+						hslColor.getGreen(), hslColor.getBlue()));
+	}
+	
 	public void allocateColorAltRow() {
 		if (display == null || display.isDisposed())
 			return;
@@ -250,37 +309,10 @@ public class Colors implements ParameterListener {
 			@Override
 			public void runSupport() {
 				Color colorTables = TablePaintedUtils.getColour(display, SWT.COLOR_LIST_BACKGROUND);
-				HSLColor hslColor = new HSLColor();
-				hslColor.initHSLbyRGB(colorTables.getRed(), colorTables.getGreen(),
-						colorTables.getBlue());
 
-				int lum = hslColor.getLuminence();
-				int sat = hslColor.getSaturation();
-				int hue = hslColor.getHue();
-				if (lum > 127) {
-					lum -= 10;
-					sat = 127;
-					hue = 155;
-				} else {
-					lum += 30; // it's usually harder to see difference in darkness
-				}
-				hslColor.setLuminence(lum);
-				hslColor.setHue(hue);
-				hslColor.setSaturation(sat);
-
-				//HSLColor blueHSL = new HSLColor();
-				//RGB rgb = blues[BLUES_DARKEST].getRGB();
-				//blueHSL.initHSLbyRGB(rgb.red, rgb.green, rgb.blue);
-				//int blueHue = blueHSL.getHue();
-				//int altHue = hslColor.getHue();
-				//if (blueHue > altHue) {
-				//	altHue += 11;
-				//} else {
-				//	altHue -= 11;
-				//}
-				//hslColor.setHue(blueHue);
-				colorAltRow = new AllocateColor("altRow", new RGB(hslColor.getRed(),
-						hslColor.getGreen(), hslColor.getBlue()), colorAltRow).getColor();
+				RGB altRGB = getAlternativeRowColor( colorTables );
+				
+				colorAltRow = new AllocateColor("altRow", altRGB, colorAltRow).getColor();
 
 				alternatingColors[1] = colorAltRow;
 			}
@@ -370,6 +402,8 @@ public class Colors implements ParameterListener {
 		background = ColorCache.getColor(display, 248, 248, 248);
 		red_ConsoleView = ColorCache.getColor(display, 255, 192, 192);
 		cyan = ColorCache.getColor(display, 0, 255, 255);
+		orange = ColorCache.getColor(display, 240, 120, 0);
+		colorAltRowDefault = ColorCache.getColor( display, 240,244,250);
 		
 		allocateColorWarning();
 		allocateColorError();
@@ -520,54 +554,85 @@ public class Colors implements ParameterListener {
       allocateColorAltRow();
     }
   }
+  	public static Color
+  	getWindowsDarkSystemColor(
+  		Device	d,
+  		int		id )
+  	{
+		switch( id ){
+		
+			case SWT.COLOR_WIDGET_FOREGROUND:
+			case SWT.COLOR_LIST_FOREGROUND:{
+				return( ColorCache.getColor( d, 204, 204, 204 ));
+			}
+			case SWT.COLOR_WIDGET_BACKGROUND:{
+				
+				return( ColorCache.getColor( d,  47, 47, 47 ));
+			}
+			case SWT.COLOR_LIST_BACKGROUND:{
+				
+				return( ColorCache.getColor( d,  38, 38, 38 ));
+			}
+			case SWT.COLOR_WIDGET_NORMAL_SHADOW:{
+				
+				return( ColorCache.getColor( d,  51, 51, 51 ));
+			}
+			case SWT.COLOR_WIDGET_LIGHT_SHADOW:{
+				
+				return( ColorCache.getColor( d,  77, 77, 77 ));
+			}
+			case SWT.COLOR_WIDGET_HIGHLIGHT_SHADOW:{
+				
+				return( ColorCache.getColor( d,  119, 119, 119 ));
+			}
+			case SWT.COLOR_WIDGET_BORDER:{
+				
+				return( ColorCache.getColor( d,  100, 100, 100 ));
+			}
+		}
+		
+		return( null );
+  	}
 
-	public static Color getSystemColor (Device d, int id) {
-		if (Utils.isGTK3) {
-			if (id == SWT.COLOR_INFO_BACKGROUND) {
-				return ColorCache.getColor(d, 0, 0,0 );
-			}else  if (id == SWT.COLOR_INFO_FOREGROUND) {
-				return ColorCache.getColor(d, 255, 255,255 );
-			}else {
-				if ( Utils.isDarkAppearancePartial()) {
-					if ( id == SWT.COLOR_BLACK ) {
-						return( white );
-					}else if ( id == SWT.COLOR_WHITE ) {
-						return( black );
+	public static Color 
+	getSystemColor(
+		Device	d, 
+		int		id ) 
+	{
+		if ( Utils.isDarkAppearanceNativeWindows()){
+			
+			Color c = getWindowsDarkSystemColor( d, id );
+			
+			if ( c != null ){
+				
+				return( c );
+			}
+		}else if ( !Utils.isDarkAppearanceNative()){
+			if (Utils.isGTK3) {
+				if (id == SWT.COLOR_INFO_BACKGROUND) {
+					return ColorCache.getColor(d, 0, 0,0 );
+				}else  if (id == SWT.COLOR_INFO_FOREGROUND) {
+					return ColorCache.getColor(d, 255, 255,255 );
+				}else {
+					if ( Utils.isDarkAppearancePartial()) {
+						if ( id == SWT.COLOR_BLACK ) {
+							return( white );
+						}else if ( id == SWT.COLOR_WHITE ) {
+							return( black );
+						}
 					}
 				}
 			}
 		}
-		return d.getSystemColor(id);
-	}
-	
-	public Color
-	getFadedColor(
-		Color	c )
-	{
-		HSLColor hslColor = new HSLColor();
-		hslColor.initHSLbyRGB(c.getRed(), c.getGreen(), c.getBlue());
 		
-		int iSat = hslColor.getSaturation();
-		int luminence = hslColor.getLuminence();
-		if (luminence < 20) {
-			if (iSat > 10) {
-				hslColor.setSaturation(iSat / 2);
-				hslColor.brighten(1.25f);
-			}
-		} else {
-			if (iSat > 10) {
-				hslColor.setSaturation(iSat / 2);
-				hslColor.brighten(0.75f);
-			} 
-		}
-
-		return( ColorCache.getColor(display, hslColor.getRed(),	hslColor.getGreen(), hslColor.getBlue()));
+		return d.getSystemColor(id);
 	}
 	
 	public Color
 	getSlightlyFadedColor(
 		Color	c )
 	{
+		boolean darkMode = Utils.isDarkAppearanceNative();
 		HSLColor hslColor = new HSLColor();
 		hslColor.initHSLbyRGB(c.getRed(), c.getGreen(), c.getBlue());
 		
@@ -575,13 +640,13 @@ public class Colors implements ParameterListener {
 		int luminence = hslColor.getLuminence();
 		if (luminence < 20) {
 			if (iSat > 10) {
-				hslColor.setSaturation((int)(iSat / 1.25));
-				hslColor.brighten(1.12f);
+				hslColor.setSaturation((int)(iSat / (darkMode?1.12:1.25)));
+				hslColor.brighten((darkMode?1.06f:1.12f));
 			}
 		} else {
 			if (iSat > 10) {
-				hslColor.setSaturation((int)(iSat / 1.25));
-				hslColor.brighten(0.63f);
+				hslColor.setSaturation((int)(iSat / (darkMode?1.12:1.25)));
+				hslColor.brighten(darkMode?0.80f:0.63f);
 			} 
 		}
 
@@ -631,7 +696,7 @@ public class Colors implements ParameterListener {
 		double brightness = Math.sqrt(
 				red * red * 0.299 + green * green * 0.587 + blue * blue * 0.114);
 		
-		return brightness >= 130;
+		return brightness >= 150;
 	}
 	
 	public Color getReadableColor(Color forBG) {

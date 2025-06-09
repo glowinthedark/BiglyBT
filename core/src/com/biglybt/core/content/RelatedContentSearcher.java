@@ -30,20 +30,19 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import com.biglybt.core.content.RelatedContentManager.ContentCache;
 import com.biglybt.core.content.RelatedContentManager.DownloadInfo;
-import com.biglybt.core.dht.DHT;
 import com.biglybt.core.dht.transport.udp.DHTTransportUDP;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
+import com.biglybt.core.tag.TagUtils;
 import com.biglybt.core.util.*;
 import com.biglybt.core.util.bloom.BloomFilter;
 import com.biglybt.core.util.bloom.BloomFilterFactory;
 import com.biglybt.pif.ddb.*;
 import com.biglybt.pif.utils.search.*;
 import com.biglybt.pifimpl.local.ddb.DDBaseImpl;
-import com.biglybt.plugin.dht.DHTPlugin;
+import com.biglybt.pifimpl.local.utils.UtilitiesImpl;
+import com.biglybt.plugin.dht.DHTPluginBasicInterface;
 import com.biglybt.plugin.dht.DHTPluginContact;
-import com.biglybt.plugin.dht.DHTPluginInterface;
 import com.biglybt.plugin.dht.DHTPluginInterface.DHTInterface;
 import com.biglybt.plugin.net.buddy.BuddyPluginBeta;
 import com.biglybt.plugin.net.buddy.BuddyPluginUtils;
@@ -55,8 +54,6 @@ public class
 RelatedContentSearcher
 	implements DistributedDatabaseTransferHandler
 {
-	static final boolean	SEARCH_CVS_ONLY_DEFAULT		= System.getProperty(SystemProperties.SYSPROP_RCM_SEARCH_CVS_ONLY, "0" ).equals( "1" );
-	
 	private static final boolean	TRACE_SEARCH				= false;
 
 	private static final int	SEARCH_MIN_SEEDS_DEFAULT		= -1;
@@ -119,9 +116,9 @@ RelatedContentSearcher
 
 	final AsyncDispatcher	harvest_dispatcher			= new AsyncDispatcher();
 
-	final RelatedContentManager					manager;
+	final RelatedContentManager							manager;
 	private final DistributedDatabaseTransferType		transfer_type;
-	final DHTPluginInterface					dht_plugin;
+	final DHTPluginBasicInterface						dht_plugin;
 
 	DistributedDatabase				ddb;
 
@@ -129,20 +126,20 @@ RelatedContentSearcher
 	RelatedContentSearcher(
 		RelatedContentManager				_manager,
 		DistributedDatabaseTransferType		_transfer_type,
-		DHTPluginInterface					_dht_plugin,
+		DHTPluginBasicInterface				_dht_plugin,
 		boolean								_defer_ddb_check )
 	{
 		manager			= _manager;
 		transfer_type	= _transfer_type;
 		dht_plugin 		= _dht_plugin;
-
+		
 		if ( !_defer_ddb_check ){
 
 			checkDDB();
 		}
 	}
 
-	protected DHTPluginInterface
+	protected DHTPluginBasicInterface
 	getDHTPlugin()
 	{
 		return( dht_plugin );
@@ -172,7 +169,7 @@ RelatedContentSearcher
 
 		checkKeyBloom();
 
-		testKeyBloom();
+		// testKeyBloom();
 	}
 
 	private void
@@ -181,7 +178,7 @@ RelatedContentSearcher
 		if ( ddb == null ){
 
 			try{
-				List<DistributedDatabase> ddbs = DDBaseImpl.getDDBs( new String[]{ dht_plugin.getNetwork() });
+				List<DistributedDatabase> ddbs = DDBaseImpl.getDDBs( new String[]{ dht_plugin.getAENetwork() });
 
 				if ( ddbs.size() > 0 ){
 
@@ -203,7 +200,29 @@ RelatedContentSearcher
 
 		throws SearchException
 	{
-		final String	term = fixupTerm( (String)search_parameters.get( SearchProvider.SP_SEARCH_TERM ));
+		final String	term 		= fixupTerm( (String)search_parameters.get( SearchProvider.SP_SEARCH_TERM ));
+
+		final long		file_size;
+		
+		if ( term != null ){
+			
+			long f = -1;
+			
+			if ( term.startsWith( "{file-size=") && term.endsWith( "}" )){
+				
+				try{
+					
+					f = Long.parseLong( term.substring(11,term.length()-1));
+					
+				}catch( Throwable e ){
+					
+				}
+			}
+			
+			file_size = f;
+		}else{
+			file_size = -1;
+		}
 
 		final boolean	is_popular = isPopularity( term );
 
@@ -229,8 +248,6 @@ RelatedContentSearcher
 			observer.complete();
 
 		}else{
-
-			boolean hasIPV4 = NetworkAdmin.getSingleton().hasIPV4Potential();
 			
 			new AEThread2( "RCM:search", true )
 			{
@@ -238,13 +255,66 @@ RelatedContentSearcher
 				public void
 				run()
 				{
-					boolean search_cvs_only = SEARCH_CVS_ONLY_DEFAULT;
+					if ( file_size > 0 ){
+												
+						try{
+							manager.lookupContent( 
+									file_size,
+								new RelatedContentLookupListener()
+								{
+									public void
+									lookupStart()
+									{
+										
+									}
+	
+									public void
+									contentFound(
+										RelatedContent[]	content )
+									{
+										for ( final RelatedContent c: content ){
+											
+											try{
+												observer.resultReceived(si, mapResult( c ));
+												
+											}catch( Throwable e ){
+												
+												Debug.out( e );
+											}
+										}
+									}
+									
+	
+									public void
+									lookupComplete()
+									{
+										observer.complete();
+									}
+	
+									public void
+									lookupFailed(
+										ContentException 	error )
+									{
+										observer.complete();
+									}
+								});
+						}catch( Throwable e ){
+							
+							Debug.out( e );
+							
+							observer.complete();
+						}
+						
+						return;
+					}
+					
+					boolean hasIPV4 = NetworkAdmin.getSingleton().hasIPV4Potential();
 
 					final Set<String>	hashes_sync_me = new HashSet<>();
 
 					try{
 
-						List<RelatedContent>	matches = matchContent( term, min_seeds, min_leechers, max_age_secs, true, search_cvs_only );
+						List<RelatedContent>	matches = matchContent( term, min_seeds, min_leechers, max_age_secs, true );
 
 						for ( final RelatedContent c: matches ){
 
@@ -257,104 +327,7 @@ RelatedContentSearcher
 
 							hashes_sync_me.add( Base32.encode( hash ));
 
-							SearchResult result =
-								new SearchResult()
-								{
-									@Override
-									public Object
-									getProperty(
-										int		property_name )
-									{
-										if ( property_name == SearchResult.PR_VERSION ){
-
-											return( new Long( c.getVersion()));
-
-										}else if ( property_name == SearchResult.PR_NAME ){
-
-											return( c.getTitle());
-
-										}else if ( property_name == SearchResult.PR_SIZE ){
-
-											return( c.getSize());
-
-										}else if ( property_name == SearchResult.PR_HASH ){
-
-											return( hash );
-
-										}else if ( property_name == SearchResult.PR_RANK ){
-
-												// this rank isn't that accurate, scale down
-
-											return( new Long( c.getRank() / 4 ));
-
-										}else if ( property_name == SearchResult.PR_SEED_COUNT ){
-
-											return( new Long( c.getSeeds()));
-
-										}else if ( property_name == SearchResult.PR_LEECHER_COUNT ){
-
-											return( new Long( c.getLeechers()));
-
-										}else if ( property_name == SearchResult.PR_SUPER_SEED_COUNT ){
-
-												return( new Long( 0 ));
-
-										}else if ( property_name == SearchResult.PR_PUB_DATE ){
-
-											long	date = c.getPublishDate();
-
-											if ( date <= 0 ){
-
-												return( null );
-											}
-
-											return( new Date( date ));
-
-										}else if ( 	property_name == SearchResult.PR_TORRENT_LINK ||
-													property_name == SearchResult.PR_DOWNLOAD_LINK ||
-													property_name == SearchResult.PR_DOWNLOAD_BUTTON_LINK ){
-
-											byte[] hash = c.getHash();
-
-											if ( hash != null ){
-
-												return( UrlUtils.getMagnetURI( hash, c.getTitle(), c.getNetworks()));
-											}
-										}else if ( property_name == SearchResult.PR_CATEGORY ){
-
-											String[] tags = c.getTags();
-
-											if ( tags != null ){
-
-												for ( String tag: tags ){
-
-													if ( !tag.startsWith( "_" )){
-
-														return( tag );
-													}
-												}
-											}
-
-										}else if ( property_name == RelatedContentManager.RCM_SEARCH_PROPERTY_TRACKER_KEYS ){
-
-											return( c.getTrackerKeys());
-
-										}else if ( property_name == RelatedContentManager.RCM_SEARCH_PROPERTY_WEB_SEED_KEYS ){
-
-											return( c.getWebSeedKeys());
-
-										}else if ( property_name == RelatedContentManager.RCM_SEARCH_PROPERTY_TAGS ){
-
-											return( c.getTags());
-
-										}else if ( property_name == RelatedContentManager.RCM_SEARCH_PROPERTY_NETWORKS ){
-
-											return( c.getNetworks());
-										}
-
-										return( null );
-									}
-								};
+							SearchResult result = mapResult( c );
 
 							observer.resultReceived( si, result );
 						}
@@ -386,8 +359,6 @@ RelatedContentSearcher
 
 								DHTInterface[]	dhts = dht_plugin.getDHTInterfaces();
 
-								boolean public_dht = dht_plugin.getNetwork() == AENetworkClassifier.AT_PUBLIC;
-
 								for ( DHTInterface dht: dhts ){
 
 									if ( dht.isIPV6() && hasIPV4 ){
@@ -396,13 +367,6 @@ RelatedContentSearcher
 									}
 
 									int	network = dht.getNetwork();
-
-									if ( public_dht && search_cvs_only && network != DHT.NW_AZ_CVS ){
-
-										logSearch( "Search: ignoring main DHT" );
-
-										continue;
-									}
 
 									DHTPluginContact[] contacts = dht.getReachableContacts();
 
@@ -440,13 +404,6 @@ RelatedContentSearcher
 										}
 
 										int	network = dht.getNetwork();
-
-										if ( public_dht && search_cvs_only && network != DHT.NW_AZ_CVS ){
-
-											logSearch( "Search: ignoring main DHT" );
-
-											continue;
-										}
 
 										DHTPluginContact[] contacts = dht.getRecentContacts();
 
@@ -704,6 +661,145 @@ RelatedContentSearcher
 
 		return( si );
 	}
+	
+	private SearchResult
+	mapResult(
+		RelatedContent		c )
+	{
+		SearchResult result =
+			new SearchResult()
+			{
+				@Override
+				public Object
+				getProperty(
+					int		property_name )
+				{
+					switch( property_name ){
+					
+						case SearchResult.PR_VERSION:{
+
+							return( new Long( c.getVersion()));
+						}
+						case SearchResult.PR_NAME:{
+
+							return( c.getTitle());
+						}
+						case SearchResult.PR_SIZE:{
+
+							return( c.getSize());
+						}
+						case SearchResult.PR_HASH:{
+
+							return( c.getHash());
+						}
+						case SearchResult.PR_RANK:{
+
+								// this rank isn't that accurate, scale down
+
+							return( new Long( c.getRank() / 4 ));
+						}
+						case SearchResult.PR_SEED_COUNT:{	
+
+							return( new Long( c.getSeeds()));
+						}
+						case SearchResult.PR_LEECHER_COUNT:{
+
+							return( new Long( c.getLeechers()));
+						}
+						case SearchResult.PR_SUPER_SEED_COUNT:{
+
+							return( new Long( 0 ));
+						}
+						case SearchResult.PR_COMPLETED_COUNT:{
+
+							return( new Long( -1 ));
+						}
+						case SearchResult.PR_PUB_DATE:{
+
+							long	date = c.getPublishDate();
+
+							if ( date <= 0 ){
+
+								return( null );
+							}
+
+							return( new Date( date ));
+						}
+						case SearchResult.PR_TORRENT_LINK:
+						case SearchResult.PR_DOWNLOAD_LINK:
+						case SearchResult.PR_DOWNLOAD_BUTTON_LINK:{
+
+							byte[] hash = c.getHash();
+
+							if ( hash != null ){
+
+								return( UrlUtils.getMagnetURI( hash, c.getTitle(), c.getNetworks()));
+							}
+							
+							return( null );
+						}
+						case SearchResult.PR_CATEGORY:{
+
+							String[] tags = c.getTags();
+
+							if ( tags != null ){
+
+								for ( String tag: tags ){
+
+									if ( !TagUtils.isInternalTagName( tag )){
+
+										return( tag );
+									}
+								}
+							}
+							return( null );
+						}
+						case SearchResult.PR_TAGS:{
+
+							String[] tags = c.getTags();
+							
+							if ( tags != null ){
+
+								List<String> result = new ArrayList<>( tags.length );
+
+								for ( String tag: tags ){
+
+									if ( !TagUtils.isInternalTagName( tag )){
+
+										result.add( tag );
+									}
+								}
+								
+								return( result.toArray( new String[result.size()]));
+							}
+							return( null );
+						}
+						case RelatedContentManager.RCM_SEARCH_PROPERTY_TRACKER_KEYS:{
+
+							return( c.getTrackerKeys());
+						}
+						case RelatedContentManager.RCM_SEARCH_PROPERTY_WEB_SEED_KEYS:{
+
+							return( c.getWebSeedKeys());
+						}
+						case RelatedContentManager.RCM_SEARCH_PROPERTY_TAGS:{
+
+							return( c.getTags());
+						}
+						case RelatedContentManager.RCM_SEARCH_PROPERTY_NETWORKS:{
+
+							return( c.getNetworks());
+						}
+						default:{
+							
+							return( null );
+						}
+					}
+				}
+			};
+			
+		return( result );
+	}
 
 	private String
 	fixupTerm(
@@ -805,8 +901,30 @@ RelatedContentSearcher
 		int					min_seeds,
 		int					min_leechers,
 		int					max_age_secs,
-		boolean				is_local,
-		boolean				search_cvs_only )
+		boolean				is_local )
+	{
+		if ( is_local ){
+			
+			return( matchContent0( term, min_seeds, min_leechers, max_age_secs, is_local ));
+			
+		}else{
+			
+			return( 
+				UtilitiesImpl.runAtLowPriority(
+				"remsearch",
+				()->{
+					return( matchContent0( term, min_seeds, min_leechers, max_age_secs, is_local ));
+				}));
+		}
+	}
+	
+	List<RelatedContent>
+	matchContent0(
+		final String		term,
+		int					min_seeds,
+		int					min_leechers,
+		int					max_age_secs,
+		boolean				is_local )
 	{
 		if ( !is_local ){
 			
@@ -914,7 +1032,7 @@ RelatedContentSearcher
 
 		Map<String,RelatedContent>	result = new HashMap<>();
 
-		Iterator<DownloadInfo>	it1 = getDHTInfos( search_cvs_only ).iterator();
+		Iterator<DownloadInfo>	it1 = getDHTInfos().iterator();
 
 		Iterator<DownloadInfo>	it2;
 
@@ -1179,11 +1297,6 @@ RelatedContentSearcher
 
 			request.put( "t", term );
 
-			if ( SEARCH_CVS_ONLY_DEFAULT ){
-
-				request.put( "n", "c" );
-			}
-
 			if ( min_seeds > 0 ){
 				request.put( "s", (long)min_seeds );
 			}
@@ -1255,90 +1368,118 @@ RelatedContentSearcher
 								int		property_name )
 							{
 								try{
-									if ( property_name == SearchResult.PR_VERSION ){
+									switch( property_name ){
+										case SearchResult.PR_VERSION:{
 
-										return( MapUtils.importLong( map, "v", RelatedContent.VERSION_INITIAL ));
+											return( MapUtils.importLong( map, "v", RelatedContent.VERSION_INITIAL ));
+										}
+										case SearchResult.PR_NAME:{
 
-									}else if ( property_name == SearchResult.PR_NAME ){
+											return( title );
+										}
+										case SearchResult.PR_SIZE:{
 
-										return( title );
+											return( MapUtils.importLong( map, "s", 0 ));
+										}
+										case SearchResult.PR_HASH:{
 
-									}else if ( property_name == SearchResult.PR_SIZE ){
+											return( hash );
+										}
+										case SearchResult.PR_RANK:{
 
-										return( MapUtils.importLong( map, "s", 0 ));
+											return( MapUtils.importLong( map, "r", 0 ) / 4 );
+										}
+										case SearchResult.PR_SUPER_SEED_COUNT:{
 
-									}else if ( property_name == SearchResult.PR_HASH ){
+											return( 0L );
+										}
+										case SearchResult.PR_SEED_COUNT:{
 
-										return( hash );
+											return( MapUtils.importLong( map, "z", 0 ));
+										}
+										case SearchResult.PR_LEECHER_COUNT:{
 
-									}else if ( property_name == SearchResult.PR_RANK ){
+											return( MapUtils.importLong( map, "l", 0 ));
+										}
+										case SearchResult.PR_PUB_DATE:{
 
-										return( MapUtils.importLong( map, "r", 0 ) / 4 );
+											long date = MapUtils.importLong( map, "p", 0 )*60*60*1000L;
 
-									}else if ( property_name == SearchResult.PR_SUPER_SEED_COUNT ){
+											if ( date <= 0 ){
 
-										return( 0L );
+												return( null );
+											}
 
-									}else if ( property_name == SearchResult.PR_SEED_COUNT ){
+											return( new Date( date ));
+										}
+										case SearchResult.PR_TORRENT_LINK:
+										case SearchResult.PR_DOWNLOAD_LINK:
+										case SearchResult.PR_DOWNLOAD_BUTTON_LINK:{
 
-										return( MapUtils.importLong( map, "z", 0 ));
-
-									}else if ( property_name == SearchResult.PR_LEECHER_COUNT ){
-
-										return( MapUtils.importLong( map, "l", 0 ));
-
-									}else if ( property_name == SearchResult.PR_PUB_DATE ){
-
-										long date = MapUtils.importLong( map, "p", 0 )*60*60*1000L;
-
-										if ( date <= 0 ){
-
+											byte[] hash = (byte[])map.get( "h" );
+	
+											if ( hash != null ){
+	
+												return( UrlUtils.getMagnetURI( hash, title, RelatedContentManager.convertNetworks((byte) MapUtils.importLong( map, "o", RelatedContentManager.NET_PUBLIC ))));
+											}
 											return( null );
 										}
+										case SearchResult.PR_CATEGORY:{
 
-										return( new Date( date ));
-
-									}else if ( 	property_name == SearchResult.PR_TORRENT_LINK ||
-												property_name == SearchResult.PR_DOWNLOAD_LINK ||
-												property_name == SearchResult.PR_DOWNLOAD_BUTTON_LINK ){
-
-										byte[] hash = (byte[])map.get( "h" );
-
-										if ( hash != null ){
-
-											return( UrlUtils.getMagnetURI( hash, title, RelatedContentManager.convertNetworks((byte) MapUtils.importLong( map, "o", RelatedContentManager.NET_PUBLIC ))));
-										}
-
-									}else if ( property_name == SearchResult.PR_CATEGORY ){
-
-										String[] tags = manager.decodeTags((byte[])map.get( "g" ));
-
-										if ( tags != null ){
-
-											for ( String tag: tags ){
-
-												if ( !tag.startsWith( "_" )){
-
-													return( tag );
+											String[] tags = manager.decodeTags((byte[])map.get( "g" ));
+	
+											if ( tags != null ){
+	
+												for ( String tag: tags ){
+	
+													if ( !TagUtils.isInternalTagName( tag )){
+	
+														return( tag );
+													}
 												}
 											}
+											return( null );
 										}
+										case SearchResult.PR_TAGS:{
 
-									}else if ( property_name == RelatedContentManager.RCM_SEARCH_PROPERTY_TRACKER_KEYS ){
+											String[] tags = manager.decodeTags((byte[])map.get( "g" ));
+	
+											if ( tags != null ){
+	
+												List<String> result = new ArrayList<>( tags.length );
+												
+												for ( String tag: tags ){
+	
+													if ( !TagUtils.isInternalTagName( tag )){
+	
+														result.add( tag );
+													}
+												}
+												
+												return( result.toArray( new String[ result.size()]));
+											}
+											return( null );
+										}
+										case RelatedContentManager.RCM_SEARCH_PROPERTY_TRACKER_KEYS:{
 
-										return( map.get( "k" ));
+											return( map.get( "k" ));
+										}
+										case RelatedContentManager.RCM_SEARCH_PROPERTY_WEB_SEED_KEYS:{
 
-									}else if ( property_name == RelatedContentManager.RCM_SEARCH_PROPERTY_WEB_SEED_KEYS ){
+											return( map.get( "w" ));
+										}
+										case RelatedContentManager.RCM_SEARCH_PROPERTY_TAGS:{
 
-										return( map.get( "w" ));
+											return( manager.decodeTags((byte[])map.get( "g" )));
+										}
+										case RelatedContentManager.RCM_SEARCH_PROPERTY_NETWORKS:{
 
-									}else if ( property_name == RelatedContentManager.RCM_SEARCH_PROPERTY_TAGS ){
-
-										return( manager.decodeTags((byte[])map.get( "g" )));
-
-									}else if ( property_name == RelatedContentManager.RCM_SEARCH_PROPERTY_NETWORKS ){
-
-										return( RelatedContentManager.convertNetworks((byte) MapUtils.importLong( map, "o", RelatedContentManager.NET_PUBLIC )));
+											return( RelatedContentManager.convertNetworks((byte) MapUtils.importLong( map, "o", RelatedContentManager.NET_PUBLIC )));
+										}
+										default:{
+											
+											return( null );
+										}
 									}
 
 								}catch( Throwable e ){
@@ -1575,11 +1716,7 @@ RelatedContentSearcher
 				String	term = MapUtils.getMapString( request, "t", null );
 
 				term = fixupTerm( term );
-
-				String	network = MapUtils.getMapString( request, "n", "" );
-
-				boolean search_cvs_only = network.equals( "c" );
-
+				
 				int	min_seeds 		= MapUtils.importInt( request, "s", SEARCH_MIN_SEEDS_DEFAULT );
 				int	min_leechers 	= MapUtils.importInt( request, "l", SEARCH_MIN_LEECHERS_DEFAULT );
 				int	max_age_secs 	= MapUtils.importInt( request, "a", SEARCH_MAX_AGE_SECS_DEFAULT );
@@ -1594,7 +1731,7 @@ RelatedContentSearcher
 
 					if ( term != null ){
 
-						List<RelatedContent>	matches = matchContent( term, min_seeds, min_leechers, max_age_secs, false, search_cvs_only );
+						List<RelatedContent>	matches = matchContent( term, min_seeds, min_leechers, max_age_secs, false );
 
 						List<Map<String,Object>> l_list = new ArrayList<>();
 
@@ -1770,21 +1907,28 @@ RelatedContentSearcher
 	getDHTWords(
 		DownloadInfo	info )
 	{
-		String title = info.getTitle();
-
-		title = title.toLowerCase( Locale.US );
-
-		char[]	chars = title.toCharArray();
-
-		for ( int i=0;i<chars.length;i++){
-
-			if ( !Character.isLetterOrDigit( chars[i])){
-
-				chars[i] = ' ';
+		String[] words = info.getTitleWordCache();
+		
+		if ( words == null ){
+			
+			String title = info.getTitle();
+				
+			title = title.toLowerCase( Locale.US );
+	
+			char[]	chars = title.toCharArray();
+	
+			for ( int i=0;i<chars.length;i++){
+	
+				if ( !Character.isLetterOrDigit( chars[i])){
+	
+					chars[i] = ' ';
+				}
 			}
+	
+			words = new String( chars ).split( " " );
+			
+			info.setTitleWordCache( words );
 		}
-
-		String[] words = new String( chars ).split( " " );
 
 		List<String>	result = new ArrayList<>(words.length);
 
@@ -1834,7 +1978,7 @@ RelatedContentSearcher
 			Set<String>	dht_only_words 		= new HashSet<>();
 			Set<String>	non_dht_words 		= new HashSet<>();
 
-			List<DownloadInfo>		dht_infos		= getDHTInfos( SEARCH_CVS_ONLY_DEFAULT );
+			List<DownloadInfo>		dht_infos		= getDHTInfos();
 
 			Iterator<DownloadInfo>	it_dht 			= dht_infos.iterator();
 
@@ -1939,25 +2083,9 @@ RelatedContentSearcher
 	}
 
 	private List<DownloadInfo>
-	getDHTInfos(
-		boolean		search_cvs_only )
+	getDHTInfos()
 	{
-		List<DHTPluginValue> vals;
-
-		if ( search_cvs_only ){
-
-			if ( dht_plugin instanceof DHTPlugin ){
-
-				vals = ((DHTPlugin)dht_plugin).getValues( DHTPlugin.NW_AZ_CVS,  false );
-
-			}else{
-
-				vals = dht_plugin.getValues();
-			}
-		}else{
-
-			vals = dht_plugin.getValues();
-		}
+		List<DHTPluginValue> vals = dht_plugin.getValues();
 
 		Set<String>	unique_keys = new HashSet<>();
 
@@ -1992,6 +2120,7 @@ RelatedContentSearcher
 		return( dht_infos );
 	}
 
+	/*
 	private void
 	testKeyBloom()
 	{
@@ -2008,7 +2137,7 @@ RelatedContentSearcher
 
 				ContentCache cache = manager.loadRelatedContent();
 
-				List<DownloadInfo>		dht_infos		= getDHTInfos( false );
+				List<DownloadInfo>		dht_infos		= getDHTInfos( -1 );
 
 				Iterator<DownloadInfo>	it_dht 			= dht_infos.iterator();
 
@@ -2078,11 +2207,11 @@ RelatedContentSearcher
 					misses++;
 				}
 
-				List<RelatedContent> hits = matchContent( word, SEARCH_MIN_SEEDS_DEFAULT, SEARCH_MIN_LEECHERS_DEFAULT, SEARCH_MAX_AGE_SECS_DEFAULT, true, false );
+				List<RelatedContent> hits = matchContent( word, SEARCH_MIN_SEEDS_DEFAULT, SEARCH_MIN_LEECHERS_DEFAULT, SEARCH_MAX_AGE_SECS_DEFAULT, true, -1 );
 
 				if ( hits.size() == 0 ){
 
-					hits = matchContent( word, SEARCH_MIN_SEEDS_DEFAULT, SEARCH_MIN_LEECHERS_DEFAULT, SEARCH_MAX_AGE_SECS_DEFAULT, true, false );
+					hits = matchContent( word, SEARCH_MIN_SEEDS_DEFAULT, SEARCH_MIN_LEECHERS_DEFAULT, SEARCH_MAX_AGE_SECS_DEFAULT, true, -1 );
 
 					match_fails++;
 				}
@@ -2095,7 +2224,8 @@ RelatedContentSearcher
 			e.printStackTrace();
 		}
 	}
-
+	*/
+	
 	private void
 	harvestBlooms()
 	{
@@ -2184,13 +2314,6 @@ outer:
 								}
 
 								int	network = dht.getNetwork();
-
-								if ( SEARCH_CVS_ONLY_DEFAULT && network != DHT.NW_AZ_CVS ){
-
-									logSearch( "Harvest: ignoring main DHT" );
-
-									continue;
-								}
 
 								DHTPluginContact[] contacts = dht.getReachableContacts();
 
@@ -2282,12 +2405,8 @@ outer:
 			return( ddb.importContact( contact.exportToMap()));
 
 		}else{
-
-			return( 
-				ddb.importContact( 
-					address, 
-					DHTTransportUDP.PROTOCOL_VERSION_MIN_AZ, 
-					network==DHT.NW_AZ_CVS?DistributedDatabase.DHT_AZ_CVS:DistributedDatabase.DHT_AZ_MAIN ));
+			
+			return( ddb.importContact( address,	DHTTransportUDP.PROTOCOL_VERSION_MIN_AZ, network ));
 		}
 	}
 
@@ -2310,6 +2429,10 @@ outer:
 	isPopularity(
 		String		term )
 	{
+		if ( term == null ){
+			
+			return( false );
+		}
 		return( term.equals( "(.)" ));
 	}
 
@@ -2488,16 +2611,26 @@ outer:
 		return( result );
 	}
 
-	static void
+	void
 	logSearch(
 		String		str )
 	{
 		if ( TRACE_SEARCH ){
-			System.out.println( str );
+			
+			DHTInterface[] intfs =  dht_plugin.getDHTInterfaces();
+			
+			String prefix = "";
+			
+			for ( DHTInterface intf: intfs ){
+				
+				prefix += (prefix.isEmpty()?"":",") + intf.getNetwork();
+			}
+			
+			System.out.println( dht_plugin.getAENetwork() + ":" + prefix + " " + str );
 		}
 	}
 
-	private static class
+	private class
 	MySearchObserver
 		implements SearchObserver
 	{

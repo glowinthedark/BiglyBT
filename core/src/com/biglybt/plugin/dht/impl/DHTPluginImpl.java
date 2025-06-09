@@ -64,7 +64,7 @@ import com.biglybt.util.MapUtils;
 
 public class
 DHTPluginImpl
-	implements DHTInterface
+	implements DHTInterface, DHTPluginBasicInterface
 {
 	private static final String	SEED_ADDRESS_V4	= Constants.DHT_SEED_ADDRESS_V4;
 	private static final String	SEED_ADDRESS_V6	= Constants.DHT_SEED_ADDRESS_V6;
@@ -73,7 +73,8 @@ DHTPluginImpl
 	private static final long	MIN_ROOT_SEED_IMPORT_PERIOD	= 8*60*60*1000;
 
 
-	private PluginInterface plugin_interface;
+	private final DHTPlugin			dht_plugin;
+	private final PluginInterface	plugin_interface;
 
 	private int					status;
 	private String				status_text;
@@ -92,6 +93,8 @@ DHTPluginImpl
 
 	private long				last_root_seed_import_time;
 
+	private volatile boolean	healthy = true;
+	
 	private LoggerChannel		log;
 	private DHTLogger			dht_log;
 
@@ -99,6 +102,7 @@ DHTPluginImpl
 
 	public
 	DHTPluginImpl(
+		DHTPlugin				_dht_plugin,
 		PluginInterface			_plugin_interface,
 		DHTNATPuncherAdapter	_nat_adapter,
 		DHTPluginImplAdapter	_adapter,
@@ -113,6 +117,7 @@ DHTPluginImpl
 		LoggerChannel			_log,
 		DHTLogger				_dht_log )
 	{
+		dht_plugin			= _dht_plugin;
 		plugin_interface	= _plugin_interface;
 		protocol_version	= _protocol_version;
 		network				= _network;
@@ -130,8 +135,8 @@ DHTPluginImpl
 
 			final PluginConfig conf = plugin_interface.getPluginconfig();
 
-			int	send_delay = conf.getPluginIntParameter( "dht.senddelay", 25 );
-			int	recv_delay	= conf.getPluginIntParameter( "dht.recvdelay", 10 );
+			int	send_delay	= conf.getPluginIntParameter( "dht.senddelay", 25 );
+			int	recv_delay	= conf.getPluginIntParameter( "dht.recvdelay", 5 );
 
 			boolean	bootstrap	= conf.getPluginBooleanParameter( "dht.bootstrapnode", false );
 
@@ -149,8 +154,10 @@ DHTPluginImpl
 						_port,
 						3,
 						1,
-						10000, 	// udp timeout - tried less but a significant number of
+						5000, 	// udp timeout - tried less but a significant number of
 								// premature timeouts occurred
+								// reduced from 10s to 5s on 2024/03 as observing few
+								// responses received after 5s
 						send_delay, recv_delay,
 						bootstrap,
 						initial_reachable,
@@ -282,6 +289,47 @@ DHTPluginImpl
 		}
 	}
 
+	@Override
+	public String 
+	getAENetwork()
+	{
+		return( dht_plugin.getNetwork());
+	}
+	
+	@Override
+	public DHTInterface[] 
+	getDHTInterfaces()
+	{
+		return( new DHTInterface[]{ this });
+	}
+	
+	@Override
+	public boolean 
+	isEnabled()
+	{
+		return( dht_plugin.isEnabled());
+	}
+	
+	@Override
+	public boolean 
+	isInitialising()
+	{
+		return( dht_plugin.isInitialising());
+	}
+	
+	@Override
+	public boolean 
+	isSleeping()
+	{
+		return( dht_plugin.isSleeping());
+	}
+	
+	public boolean
+	isHealthy()
+	{
+		return( healthy );
+	}
+	
 	public void
 	updateStats(
 		int		sample_stats_ticks )
@@ -500,6 +548,13 @@ DHTPluginImpl
 
 				}else{
 
+					if ( healthy ){
+					
+						log.log( "Healthy -> BAD" );
+						
+						healthy = false;
+					}
+					
 					log.log( "Less than 32 live contacts, reseeding" );
 				}
 
@@ -645,6 +700,14 @@ outer:
 
 					log.log( "No valid peers found to reseed from" );
 				}
+			}else{
+				
+				if ( !healthy ){
+				
+					log.log( "Healthy -> OK" );
+					
+					healthy = true;
+				}
 			}
 
 		}catch( Throwable e ){
@@ -781,6 +844,18 @@ outer:
 		final String						description,
 		final byte[]						value,
 		final byte							flags,
+		final boolean						high_priority,
+		final DHTPluginOperationListener	listener)
+	{
+		putEx( key, description, value, (short)(flags&0x00ff), high_priority, listener );
+	}
+	
+	public void
+	putEx(
+		final byte[]						key,
+		final String						description,
+		final byte[]						value,
+		final short							flags,
 		final boolean						high_priority,
 		final DHTPluginOperationListener	listener)
 	{
@@ -1035,12 +1110,14 @@ outer:
 
 	public void
 	remove(
-		final byte[]						key,
-		final String						description,
-		final DHTPluginOperationListener	listener )
+		byte[]						key,
+		String						description,
+		short						flags,
+		DHTPluginOperationListener	listener )
 	{
 		dht.remove( 	key,
 						description,
+						flags,
 						new DHTOperationListener()
 						{
 							private boolean started;

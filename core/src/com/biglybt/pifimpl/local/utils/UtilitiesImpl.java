@@ -34,6 +34,7 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.util.*;
+import java.util.function.Supplier;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.ipchecker.extipchecker.ExternalIPChecker;
@@ -526,14 +527,52 @@ UtilitiesImpl
 
 				rd.setProperty( "URL_HOST", plugin_proxy.getURLHostRewrite() + (feed_location.getPort()==-1?"":(":" + feed_location.getPort())));
 
+			}else if ( lc_feed_str.startsWith( "i2p:" )){
+
+				String target_resource = feed_str.substring( 4 );
+
+				try{
+					feed_location = new URL( target_resource );
+
+				}catch( MalformedURLException e ){
+
+					throw( new ResourceDownloaderException( e ));
+				}
+
+				Map<String,Object>	options = new HashMap<>();
+				
+				options.put( AEProxyFactory.PO_PREFERRED_PROXY_TYPE, "HTTP" );
+				options.put( AEProxyFactory.PO_FORCE_PROXY, true );
+
+				plugin_proxy =
+						AEProxyFactory.getPluginProxy(
+							"RSS Feed download of '" + feed_location + "'",
+							feed_location,
+							options,
+							true );
+
+				if ( plugin_proxy == null ){
+
+					throw( new ResourceDownloaderException( "No I2p plugin proxy available for '" + feed_str + "'" ));
+				}
+
+				rd = getResourceDownloaderFactory().create( plugin_proxy.getURL(), plugin_proxy.getProxy());
+
+				rd.setProperty( "URL_HOST", plugin_proxy.getURLHostRewrite() + (feed_location.getPort()==-1?"":(":" + feed_location.getPort())));
+
 			}else{
 
 				if ( AENetworkClassifier.categoriseAddress( feed_location.getHost()) != AENetworkClassifier.AT_PUBLIC ){
+
+					Map<String,Object>	options = new HashMap<>();
+					
+					options.put( AEProxyFactory.PO_PREFERRED_PROXY_TYPE, "HTTP" );
 
 					plugin_proxy =
 							AEProxyFactory.getPluginProxy(
 								"RSS Feed download of '" + feed_location + "'",
 								feed_location,
+								options,
 								true );
 
 					if ( plugin_proxy == null ){
@@ -1126,6 +1165,53 @@ UtilitiesImpl
 		return addDelayedTask(pi.getPluginName(), target);
 	}
 
+	public static <T> T
+	runAtLowPriority(
+		String				name,
+		Supplier<T>			r )
+	{
+		Object [] result = { null };
+		
+		AESemaphore sem = new AESemaphore( name );
+		
+		AEThread2.createAndStartDaemon(
+			name,
+			()->{
+				try{
+					Thread t = Thread.currentThread();
+					
+					int p = t.getPriority();
+					
+					t.setPriority( Thread.MIN_PRIORITY );
+					
+					try{
+					
+						T res = r.get();
+					
+						synchronized( result ){
+							
+							result[0] = res;
+						}
+						
+						
+					}finally{
+												
+						t.setPriority( p );
+					}
+				}finally{
+					
+					sem.release();
+				}
+			});
+		
+		sem.reserve();
+		
+		synchronized( result ){
+			
+			return( (T)result[0]);
+		}
+	}
+	
 	private static List			delayed_tasks = new ArrayList();
 	private static AESemaphore	delayed_tasks_sem	= new AESemaphore( "Utilities:delayedTask" );
 	private static AEThread2	delayed_task_thread;

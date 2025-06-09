@@ -46,6 +46,8 @@ import com.biglybt.util.StringCompareUtils;
 public class
 TextWithHistory
 {
+	public static final String HISTORY_POPUP_DISABLE = "TextWithHistory::popup.disable";
+	
 	private static final int MAX_MATCHES	= 10;
 	private static final int MAX_HISTORY	= 64;
 
@@ -169,6 +171,22 @@ TextWithHistory
 				}
 			});
 
+			// we rely on getting key events before other components - in particular
+			// the arrow_down event to move into the search history area has to be grabbed by us
+			// before the table view gets it and uses it to move focus into the table
+		
+			// obviously messing with listener ordering is not the best solution but it works (for now...)
+		
+		Listener[] old_down = text.getListeners( SWT.KeyDown );
+		Listener[] old_up	= text.getListeners( SWT.KeyUp );
+		
+		for ( Listener l: old_down ){
+			text.removeListener( SWT.KeyDown, l );
+		}
+		for ( Listener l: old_up ){
+			text.removeListener( SWT.KeyUp, l );
+		}
+		
 		text.addKeyListener(new KeyAdapter(){
 			@Override
 			public void keyPressed(KeyEvent e) {
@@ -212,6 +230,13 @@ TextWithHistory
 			}
 		});
 		
+		for ( Listener l: old_down ){
+			text.addListener( SWT.KeyDown, l );
+		}
+		for ( Listener l: old_up ){
+			text.addListener( SWT.KeyUp, l );
+		}
+		
 			// double-click with no current search shows history
 		
 		text.addListener(SWT.MouseDoubleClick,(e)->{
@@ -239,6 +264,11 @@ TextWithHistory
 		String		current_text,
 		boolean		force )
 	{
+		if ( text.getData( HISTORY_POPUP_DISABLE ) != null ){
+			
+			return;
+		}
+		
 		List<String>	current_matches = match( current_text );
 
 		if ( current_text.length() == 0 || current_matches.size() == 0 ){
@@ -478,9 +508,12 @@ TextWithHistory
 
 			String chars = selection[0];
 
-			text.setText( chars );
-
-			text.setSelection( chars.length());
+			if ( !text.isDisposed()){
+				
+				text.setText( chars );
+	
+				text.setSelection( chars.length());
+			}
 
 			if ( current_shell != null ){
 

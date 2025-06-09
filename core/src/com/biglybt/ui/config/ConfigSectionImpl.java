@@ -176,6 +176,10 @@ public abstract class ConfigSectionImpl
 		if (defaultUITypes != null) {
 			param.setAllowedUiTypes(defaultUITypes);
 		}
+		
+		if (param instanceof ParameterGroupImpl) {
+			((ParameterGroupImpl) param).setId(key);
+		}
 
 		mapPluginParams.put(key, param);
 		
@@ -300,7 +304,16 @@ public abstract class ConfigSectionImpl
 
 	public static String getSectionNameKey(String sectionID) {
 	
-		String section_key = L10N_SECTION_PREFIX + sectionID;
+		String section_key;
+		
+		if ( sectionID.startsWith( "!" ) && sectionID.endsWith( "!" )){
+			
+			section_key = sectionID;
+			
+		}else{
+			
+			section_key = L10N_SECTION_PREFIX + sectionID;
+		}
 
 		// Plugins don't use prefix by default (via UIManager.createBasicPluginConfigModel).
 		// However, when a plugin overrides the name via BasicPluginConfigModel.setLocalizedName(..)

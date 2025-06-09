@@ -109,6 +109,10 @@ public class VuzeMessageBox
 		return 0;
 	}
 
+	@Override
+	public void setStyle(int style){
+	}
+	
 	/* (non-Javadoc)
 	 * @see UIFunctionsUserPrompter#getHtml()
 	 */
@@ -354,12 +358,7 @@ public class VuzeMessageBox
 				if (dlg != null) {
 					Shell shell = dlg.getShell();
 					if (shell != null) {
-						Display d = shell.getDisplay();
-						while (!shell.isDisposed()) {
-							if (!d.readAndDispatch()) {
-								d.sleep();
-							}
-						}
+						Utils.readAndDispatchLoop( shell );
 					}
 					skinDialogClosed(dlg);
 					return buttonsArea.getButtonVal(result);

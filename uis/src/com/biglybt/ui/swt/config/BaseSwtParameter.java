@@ -39,7 +39,7 @@ import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.mainwindow.ClipboardCopy;
 import com.biglybt.ui.swt.mainwindow.Colors;
-
+import com.biglybt.ui.swt.views.ConfigView;
 import com.biglybt.pif.ui.config.Parameter;
 import com.biglybt.pif.ui.config.ParameterValidator.ValidationInfo;
 import com.biglybt.pif.ui.config.ParameterWithSuffix;
@@ -47,8 +47,6 @@ import com.biglybt.pif.ui.config.ParameterWithSuffix;
 public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>, VALUETYPE>
 	implements SwtParameter<VALUETYPE>
 {
-	public final static String KEY_LABEL_ADDCOPYTOCLIPMENU = "AddCopyMenu";
-
 	protected final String paramID;
 
 	private Control relatedControl;
@@ -78,6 +76,8 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 
 	private Control mainControl;
 
+	private boolean disposed;
+	
 	public BaseSwtParameter(String paramID) {
 		this.paramID = paramID;
 	}
@@ -102,7 +102,9 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 	@Override
 	public Control[] getControls() {
 		List<Control> list = new ArrayList<>();
-		list.add(mainControl);
+		if ( mainControl != null ){
+			list.add(mainControl);
+		}
 		if (relatedControl != null && relatedControl != mainControl) {
 			list.add(relatedControl);
 		}
@@ -214,10 +216,9 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 				return;
 			}
 			// Note: for Spinner in Windows, getBackground always seems to return white
-			mainControl.setBackground(
-					validationInfo.valid ? null : Colors.colorErrorBG);
-			mainControl.setForeground(
-					validationInfo.valid ? null : Colors.colorError);
+			
+			Utils.setSkinnedForeground(mainControl, validationInfo.valid ? null : Colors.colorError);
+			Utils.setSkinnedBackground(mainControl, validationInfo.valid ? null : Colors.colorErrorBG);
 		});
 	}
 
@@ -293,13 +294,16 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 		Utils.execSWTThread(() -> {
 			for (Control c : getControls()) {
 
+				if ( c == null ){
+					getControls();
+				}
+				
 				if (!c.isDisposed()) {
 					c.setEnabled(enabled);
-					//noinspection ConstantConditions
-					if (c.getClass().equals(Composite.class)) {
-						// for the color of the fancy indent
-						c.redraw();
-					}
+				}
+				
+				if ( fancyPaintListener != null ){
+					fancyPaintListener.redraw();
 				}
 			}
 		});
@@ -499,7 +503,6 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 			// rely on current value)
 			curControl.forceFocus();
 		}
-		boolean add_copy = curControl.getData(KEY_LABEL_ADDCOPYTOCLIPMENU) != null;
 
 		if (valueProcessor != null) {
 			if (!valueProcessor.isDefaultValue(thisTyped)) {
@@ -513,13 +516,29 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 				item.addListener(SWT.Selection, event -> resetToDefault());
 			} else if (valueProcessor.getDefaultValue(thisTyped) != null) {
 				MenuItem item = new MenuItem(menu, SWT.PUSH);
-				item.setText("Currently set to default value");
+				Messages.setLanguageText(item, "menu.config.is.default");
 				item.setEnabled(false);
 			}
 		}
-		if (add_copy && (curControl instanceof Label)) {
-			ClipboardCopy.addCopyToClipMenu(menu,
-					() -> ((Label) curControl).getText().trim());
+		String message = Messages.getLanguageForControl( curControl );
+		if ( message != null && !message.trim().isEmpty()){
+			
+			if ( menu.getItemCount() > 0 ){
+				new MenuItem( menu, SWT.SEPARATOR );
+			}
+			
+			message = message.trim();
+			
+			String context = ConfigView.getSectionContext( curControl );
+			
+			if ( context != null ){
+				
+				message = context + ": " + message;
+			}
+			
+			String f_message = message;
+			
+			ClipboardCopy.addCopyToClipMenu(menu, "copy.config.param.name", ()->f_message );
 		}
 	}
 
@@ -647,7 +666,13 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 		return enabled;
 	}
 
-	public void dispose() {
+	protected void dispose() {
+			// been seeing some crashes in this area, not sure of cause but possible that
+			// we are recursively entering here so prevent that
+		if ( disposed ){
+			return;
+		}
+		disposed = true;
 		validators.clear();
 		change_listeners = null;
 		if (valueProcessor != null) {
@@ -667,6 +692,7 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 			Link link = new Link(parent, SWT.NONE);
 			label = link;
 			link.addListener(SWT.Selection, event -> Utils.launch(event.text));
+			ClipboardCopy.addCopyToClipMenu(link);
 		} else {
 			label = new Label(parent, SWT.NONE);
 		}
@@ -693,7 +719,7 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 		});
 	}
 
-	protected static class IndentPaintListener
+	protected class IndentPaintListener
 		implements Listener
 	{
 		private final Control control;
@@ -725,6 +751,14 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 			Utils.execSWTThread(() -> parent.removeListener(SWT.Paint, this));
 		}
 
+		protected void
+		redraw()
+		{
+			if ( !parent.isDisposed()){
+				
+				parent.redraw();
+			}
+		}
 		@Override
 		public void handleEvent(Event event) {
 			if (parent == null || control.isDisposed()) {
@@ -751,8 +785,21 @@ public abstract class BaseSwtParameter<PARAMTYPE extends SwtParameter<VALUETYPE>
 				3,
 				2
 			});
-			gc.setForeground(display.getSystemColor(parent.isEnabled()
-					? SWT.COLOR_WIDGET_FOREGROUND : SWT.COLOR_WIDGET_LIGHT_SHADOW));
+			
+			boolean enabled = BaseSwtParameter.this.isEnabled();
+						
+			if ( Utils.isDarkAppearanceNativeWindows()){
+				
+				gc.setForeground(display.getSystemColor(enabled
+						? SWT.COLOR_WIDGET_LIGHT_SHADOW : SWT.COLOR_WIDGET_FOREGROUND));
+
+			}else{
+				
+				gc.setForeground(
+					display.getSystemColor(
+						enabled?SWT.COLOR_WIDGET_FOREGROUND : (Utils.isDarkAppearanceNative()?39/*SWT.COLOR_WIDGET_DISABLED_FOREGROUND*/:SWT.COLOR_WIDGET_LIGHT_SHADOW)));
+			}
+			
 			gc.drawLine(x, y, x, y2);
 			gc.drawLine(x, y2, x2, y2);
 

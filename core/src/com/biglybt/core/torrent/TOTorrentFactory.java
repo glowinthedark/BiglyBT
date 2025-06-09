@@ -27,6 +27,7 @@ import java.net.URL;
 import java.util.Map;
 
 import com.biglybt.core.torrent.impl.TOTorrentCreateImpl;
+import com.biglybt.core.torrent.impl.TOTorrentCreateV2Impl;
 import com.biglybt.core.torrent.impl.TOTorrentCreatorImpl;
 import com.biglybt.core.torrent.impl.TOTorrentDeserialiseImpl;
 import com.biglybt.core.torrent.impl.TOTorrentImpl;
@@ -52,7 +53,7 @@ TOTorrentFactory
 								 512*1024, 768*1024, 1024*1024,
 								 1536*1024, 2*1024*1024, 3*1024*1024, 4*1024*1024,
 								 8*1024*1024, 16*1024*1024, 32*1024*1024,
-								 // 64*1024*1024 , 128*1024*1024, 256*1024*1024,
+								 64*1024*1024 , 128*1024*1024, 256*1024*1024,
 							 };
 
 		// deserialisation methods
@@ -83,10 +84,10 @@ TOTorrentFactory
 	{
 		return( new TOTorrentDeserialiseImpl( is ));
 	}
-
+	
     public static TOTorrent
     deserialiseFromBEncodedByteArray(
-        byte[]      bytes )
+    	TorrentDataHolder      bytes )
 
         throws TOTorrentException
     {
@@ -245,6 +246,15 @@ TOTorrentFactory
 		return( TOTorrentCreateImpl.getPieceCount( total_size, piece_size ));
 	}
 	
+	public static byte[]
+	getV2RootHash(
+		File		file )
+	
+		throws TOTorrentException
+	{
+		return( TOTorrentCreateV2Impl.getV2RootHash( file ));
+	}
+	
 	public static void
 	addTorrentListener(
 		TOTorrentListener		listener )
@@ -257,5 +267,30 @@ TOTorrentFactory
 		TOTorrentListener		listener )
 	{
 		TOTorrentImpl.removeGlobalListener( listener );
+	}
+	
+	public static class
+	TorrentDataHolder
+	{
+		private byte[] bytes;
+		
+		public
+		TorrentDataHolder(
+			byte[]		_bytes )
+		{
+			bytes = _bytes;
+		}
+		
+		public byte[] 
+		getBytes()
+		{
+			return( bytes );
+		}
+		
+		public void 
+		release()
+		{
+			bytes = null;
+		}
 	}
 }

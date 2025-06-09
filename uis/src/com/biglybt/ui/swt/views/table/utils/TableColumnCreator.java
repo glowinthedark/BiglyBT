@@ -27,6 +27,7 @@ import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.DownloadTypeComplete;
 import com.biglybt.pif.download.DownloadTypeIncomplete;
 import com.biglybt.pif.ui.tables.TableColumn;
+import com.biglybt.pif.ui.tables.TableColumnCreationListener;
 import com.biglybt.ui.swt.views.columnsetup.ColumnTC_ChosenColumn;
 import com.biglybt.ui.swt.views.columnsetup.ColumnTC_NameInfo;
 import com.biglybt.ui.swt.views.columnsetup.ColumnTC_Sample;
@@ -223,6 +224,7 @@ public class TableColumnCreator
 		c.put(SizeItem.COLUMN_ID, new cInfo(SizeItem.class, SizeItem.DATASOURCE_TYPE));
 		c.put(ColumnSizeWithDND.COLUMN_ID, new cInfo(ColumnSizeWithDND.class, ColumnSizeWithDND.DATASOURCE_TYPE));
 		c.put(DoneItem.COLUMN_ID, new cInfo(DoneItem.class, DoneItem.DATASOURCE_TYPE));
+		c.put(DoneBytesItem.COLUMN_ID, new cInfo(DoneBytesItem.class, DoneItem.DATASOURCE_TYPE));
 		c.put(ColumnDoneWithDND.COLUMN_ID, new cInfo(ColumnDoneWithDND.class, ColumnDoneWithDND.DATASOURCE_TYPE));
 		c.put(StatusItem.COLUMN_ID, new cInfo(StatusItem.class, StatusItem.DATASOURCE_TYPE));
 		c.put(ETAItem.COLUMN_ID, new cInfo(ETAItem.class, ETAItem.DATASOURCE_TYPE));
@@ -256,7 +258,9 @@ public class TableColumnCreator
 		c.put(TagIconsItem.COLUMN_ID, new cInfo(TagIconsItem.class, TagIconsItem.DATASOURCE_TYPE));
 		c.put(CategoryIconsItem.COLUMN_ID, new cInfo(CategoryIconsItem.class, CategoryIconsItem.DATASOURCE_TYPE));
 		c.put(TagAddedToDateItem.COLUMN_ID, new cInfo(TagAddedToDateItem.class, TagAddedToDateItem.DATASOURCE_TYPE));
+		c.put(TagSortItem.COLUMN_ID, new cInfo(TagSortItem.class, TagSortItem.DATASOURCE_TYPE));
 		c.put(NetworksItem.COLUMN_ID, new cInfo(NetworksItem.class, NetworksItem.DATASOURCE_TYPE));
+		c.put(NetworksIconsItem.COLUMN_ID, new cInfo(NetworksIconsItem.class, NetworksIconsItem.DATASOURCE_TYPE));
 		c.put(PeerSourcesItem.COLUMN_ID, new cInfo(PeerSourcesItem.class, PeerSourcesItem.DATASOURCE_TYPE));
 		c.put(AvailabilityItem.COLUMN_ID, new cInfo(AvailabilityItem.class, AvailabilityItem.DATASOURCE_TYPE));
 		c.put(AvgAvailItem.COLUMN_ID, new cInfo(AvgAvailItem.class, AvgAvailItem.DATASOURCE_TYPE));
@@ -282,6 +286,9 @@ public class TableColumnCreator
 		c.put(DateFileCompletedItem.COLUMN_ID, new cInfo(DateFileCompletedItem.class, DateFileCompletedItem.DATASOURCE_TYPE));
 		c.put(DateAddedItem.COLUMN_ID, new cInfo(DateAddedItem.class, DateAddedItem.DATASOURCE_TYPE));
 		c.put(DateLastActiveItem.COLUMN_ID, new cInfo(DateLastActiveItem.class, DateLastActiveItem.DATASOURCE_TYPE));
+		c.put(DateLastQueuedItem.COLUMN_ID, new cInfo(DateLastQueuedItem.class, DateLastQueuedItem.DATASOURCE_TYPE));
+		c.put(DateLastXferItem.COLUMN_ID, new cInfo(DateLastXferItem.class, DateLastXferItem.DATASOURCE_TYPE));
+		c.put(LastScrapeTimeItem.COLUMN_ID, new cInfo(LastScrapeTimeItem.class, LastScrapeTimeItem.DATASOURCE_TYPE));
 		
 		c.put(IPFilterItem.COLUMN_ID, new cInfo(IPFilterItem.class, IPFilterItem.DATASOURCE_TYPE));
 		c.put(AlertsItem.COLUMN_ID, new cInfo(AlertsItem.class, AlertsItem.DATASOURCE_TYPE));
@@ -309,7 +316,25 @@ public class TableColumnCreator
 
 		c.put(DiskLatencyItem.COLUMN_ID, new cInfo(DiskLatencyItem.class, DiskLatencyItem.DATASOURCE_TYPE));
 		c.put(UploadHealthItem.COLUMN_ID, new cInfo(UploadHealthItem.class, UploadHealthItem.DATASOURCE_TYPE));
+		c.put(DownloadHealthItem.COLUMN_ID, new cInfo(DownloadHealthItem.class, DownloadHealthItem.DATASOURCE_TYPE));
+		c.put(ConnectHealthItem.COLUMN_ID, new cInfo(ConnectHealthItem.class, ConnectHealthItem.DATASOURCE_TYPE));
+		c.put(SwarmTagsItem.COLUMN_ID, new cInfo(SwarmTagsItem.class, SwarmTagsItem.DATASOURCE_TYPE));
+		c.put(MaskedItem.COLUMN_ID, new cInfo(MaskedItem.class, MaskedItem.DATASOURCE_TYPE));
+		c.put(UploadPriorityItem.COLUMN_ID, new cInfo(UploadPriorityItem.class, UploadPriorityItem.DATASOURCE_TYPE));
+		c.put(FilePrioritiesItem.COLUMN_ID, new cInfo(FilePrioritiesItem.class, FilePrioritiesItem.DATASOURCE_TYPE));
 
+		c.put(	PrivateItem.COLUMN_ID, 
+				new cInfo(
+					PrivateItem.class, 
+					PrivateItem.DATASOURCE_TYPE,
+					new TableColumnCreationListener() {
+						@Override
+						public void tableColumnCreated(TableColumn column) {
+							new PrivateItem(column);
+						}
+					}));
+
+		
 		// Core columns are implementors of TableColumn to save one class creation
 		// Otherwise, we'd have to create a generic TableColumnImpl class, pass it
 		// to another class so that it could manipulate it and act upon changes.
@@ -323,23 +348,28 @@ public class TableColumnCreator
 			                                             String tableID, String columnID) {
 				cInfo info = (cInfo) c.get(columnID);
 
-				try {
-					Constructor constructor = info.cla.getDeclaredConstructor(new Class[] {
-						String.class
-					});
-					TableColumnCore column = (TableColumnCore) constructor.newInstance(new Object[] {
-						tableID
-					});
-					return column;
-				} catch (Exception e) {
-					Debug.out(e);
+				if ( info.listener == null ){
+					try {
+						Constructor constructor = info.cla.getDeclaredConstructor(new Class[] {
+							String.class
+						});
+						TableColumnCore column = (TableColumnCore) constructor.newInstance(new Object[] {
+							tableID
+						});
+						return column;
+					} catch (Exception e) {
+						Debug.out(e);
+					}
 				}
-
 				return null;
 			}
 
 			@Override
 			public void tableColumnCreated(TableColumn column) {
+				cInfo info = (cInfo) c.get(column.getName());
+				if ( info.listener != null ){
+					info.listener.tableColumnCreated(column);
+				}
 			}
 		};
 
@@ -355,10 +385,18 @@ public class TableColumnCreator
 	private static class cInfo {
 		public Class cla;
 		public Class forDataSourceType;
+		public TableColumnCreationListener	listener;
 
 		public cInfo(Class cla, Class forDataSourceType) {
 			this.cla = cla;
 			this.forDataSourceType = forDataSourceType;
 		}
+		
+		public cInfo(Class cla, Class forDataSourceType, TableColumnCreationListener l) {
+			this.cla = cla;
+			this.forDataSourceType = forDataSourceType;
+			this.listener = l;
+		}
+		
 	}
 }

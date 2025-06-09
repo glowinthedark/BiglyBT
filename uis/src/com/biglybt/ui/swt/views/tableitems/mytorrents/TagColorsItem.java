@@ -46,6 +46,7 @@ import com.biglybt.ui.swt.views.table.CoreTableColumnSWT;
 import com.biglybt.ui.swt.views.table.TableCellSWT;
 import com.biglybt.ui.swt.views.table.TableCellSWTPaintListener;
 import com.biglybt.ui.swt.views.table.TableRowSWT;
+import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagManager;
 import com.biglybt.core.tag.TagManagerFactory;
@@ -69,7 +70,7 @@ public class TagColorsItem
 
 	private static String CFG_SHOW_DEF_COLOURS = "TagColorsItem.showdefcolours";
 	
-	private static TableRowSWT.ColorRequester	color_requester = ()-> 10;
+	private static TableViewSWT.ColorRequester	color_requester = ()-> 10;
 	
 	private static boolean show_default_colours;
 	
@@ -333,10 +334,7 @@ public class TagColorsItem
 
 			Rectangle bounds = cell.getBounds();
 
-			bounds.x+=1;
-			bounds.y+=1;
-			bounds.width-=1;
-			bounds.height-=1;
+			Utils.setClipping(gc, new Rectangle( bounds.x, bounds.y+1, bounds.width-1, bounds.height-2 ));
 
 			if ( num_colors == 1 ){
 

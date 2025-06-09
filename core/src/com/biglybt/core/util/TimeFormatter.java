@@ -44,6 +44,7 @@ public class TimeFormatter {
 	public static final String[] 	TIME_SUFFIXES 	= { "s", "m", "h", "d", "y" };
 
 	public static final String[] 	TIME_SUFFIXES_2 		= { "sec", "min", "hr", "day", "wk", "mo", "yr" };
+	public static final String[] 	TIME_SUFFIXES_2_LONG	= { "second", "minute", "hour", "day", "week", "month", "year" };
 	
 	public static final long[]		TIME_SUFFIXES_2_MULT	 = { 1, 60, 60*60, 24*60*60, 7*24*60*60, 30*24*60*60, 365L*24*60*60 };
 
@@ -93,12 +94,37 @@ public class TimeFormatter {
 				
 				if ( bit.length() > 0 ){
 					
+						// CrowdIn has this bug whereby a source string with a '' ends up being
+						// ingested as ' 
+					
+					boolean added = false;
+					
 					try{
 						new SimpleDateFormat( bit );
 					
 						list.add( bit );
+					
+						added = true;
 						
 					}catch( Throwable e ){
+						
+						if ( bit.contains( "'" )){
+							
+							bit = bit.replaceAll( "'", "''" );
+							
+							try{
+								new SimpleDateFormat( bit );
+							
+								list.add( bit );
+								
+								added = true;
+								
+							}catch( Throwable f ){
+							}
+						}
+					}
+					
+					if ( !added ){
 						
 						System.err.println( "Invalid date format: " + bit );
 					}
@@ -162,6 +188,15 @@ public class TimeFormatter {
 		TIME_SUFFIXES_2[4]	= MessageText.getString( "ConfigView.section.stats.weeks.medium" );
 		TIME_SUFFIXES_2[5]	= MessageText.getString( "ConfigView.section.stats.months.medium" );
 		TIME_SUFFIXES_2[6]	= MessageText.getString( "ConfigView.section.stats.years.medium" );
+		
+		TIME_SUFFIXES_2_LONG[0]	= MessageText.getString( "ConfigView.section.stats.seconds.full" );
+		TIME_SUFFIXES_2_LONG[1]	= MessageText.getString( "ConfigView.section.stats.minutes.full" );
+		TIME_SUFFIXES_2_LONG[2]	= MessageText.getString( "ConfigView.section.stats.hours.full" );
+		TIME_SUFFIXES_2_LONG[3]	= MessageText.getString( "ConfigView.section.stats.days" );
+		TIME_SUFFIXES_2_LONG[4]	= MessageText.getString( "ConfigView.section.stats.weeks" );
+		TIME_SUFFIXES_2_LONG[5]	= MessageText.getString( "ConfigView.section.stats.months" );
+		TIME_SUFFIXES_2_LONG[6]	= MessageText.getString( "ConfigView.section.stats.years" );
+
 		
 		MS_SUFFIX = " " + MessageText.getString( "ConfigView.section.stats.millis.short" );
 	}

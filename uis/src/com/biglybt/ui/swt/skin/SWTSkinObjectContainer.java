@@ -23,6 +23,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.FormLayout;
+import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
@@ -65,6 +66,9 @@ public class SWTSkinObjectContainer
 		} else {
 			createOn = (Composite) parent.getControl();
 		}
+		if ( createOn == null ){
+			Debug.out("");
+		}
 		createComposite(createOn);
 	}
 
@@ -103,11 +107,12 @@ public class SWTSkinObjectContainer
 		minWidth = properties.getPxValue(sConfigID + ".minwidth", -1);
 		minHeight = properties.getPxValue(sConfigID + ".minheight", -1);
 
-		final Composite parentComposite;
+		
+		Composite parentComposite;
 		if (skin.DEBUGLAYOUT) {
 			System.out.println("linkIDtoParent: Create Composite " + sID + " on "
 					+ createOn);
-			parentComposite = new Group(createOn, style);
+			parentComposite = Utils.createSkinnedGroup(createOn, style);
 			((Group) parentComposite).setText(sConfigID == null ? sID : sConfigID);
 			parentComposite.setData("DEBUG", "1");
 		} else {
@@ -118,16 +123,25 @@ public class SWTSkinObjectContainer
   			parentComposite = new CompositeMinSize(createOn, style);
   			((CompositeMinSize) parentComposite).setMinSize(new Point(minWidth, minHeight));
 			} else {
-  			parentComposite = new Group(createOn, style);
+  			parentComposite = Utils.createSkinnedGroup(createOn, style);
 			}
 		}
 
+		if ( properties.getBooleanValue(sConfigID + ".vscroll", false)) {
+		
+			parentComposite.setLayout( Utils.getSimpleGridLayout(1));
+			parentComposite.setLayoutData(Utils.getFilledFormData());
+			parentComposite = Utils.createScrolledComposite( parentComposite );
+		}
+		
 		parentComposite.setLayout(new FormLayout());
 
 		control = parentComposite;
 
 		if ( properties.getBooleanValue(sConfigID + ".auto.defer.layout", false)) {
 
+			final Composite f_p = parentComposite;
+			
 			Listener show_hide_listener =
 				new Listener()
 				{
@@ -136,7 +150,7 @@ public class SWTSkinObjectContainer
 					handleEvent(
 						Event event )
 					{
-						parentComposite.setLayoutDeferred( event.type == SWT.Hide );
+						f_p.setLayoutDeferred( event.type == SWT.Hide );
 					}
 				};
 
@@ -290,6 +304,9 @@ public class SWTSkinObjectContainer
 		Utils.execSWTThreadLater(0, new AERunnable() {
 			@Override
 			public void runSupport() {
+				if ( getComposite().isDisposed()){
+					return;
+				}
 				SWTSkinObject[] children = getChildren();
 				if (children.length == 0) {
 					return;

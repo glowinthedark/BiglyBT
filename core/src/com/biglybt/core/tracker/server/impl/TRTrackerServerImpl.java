@@ -20,6 +20,7 @@
 
 package com.biglybt.core.tracker.server.impl;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URL;
 import java.net.URLDecoder;
@@ -32,9 +33,11 @@ import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.ipfilter.IpFilter;
 import com.biglybt.core.ipfilter.IpFilterManagerFactory;
+import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.proxy.AEProxyFactory;
 import com.biglybt.core.tracker.server.*;
 import com.biglybt.core.util.*;
+import com.biglybt.pif.tracker.Tracker;
 
 public abstract class
 TRTrackerServerImpl
@@ -121,12 +124,26 @@ TRTrackerServerImpl
 								
 								if ( tr_enable ){
 									
+									InetAddress bind = NetworkAdmin.getSingleton().getSingleHomedServiceBindAddress();
+									
+									String bind_option = null;
+									
+									if ( bind != null && !bind.isAnyLocalAddress()){
+										
+										bind_option = bind.getHostAddress();
+									}
+
 									if ( i2p_enable ) {
 										
 										Map<String,Object>	options = new HashMap<>();
 					
 										options.put( AEProxyFactory.SP_PORT, port );
 					
+										if ( bind_option != null ){
+											
+											options.put( AEProxyFactory.SP_BIND, bind_option );
+										}
+										
 										Map<String,Object> reply =
 												AEProxyFactory.getPluginServerProxy(
 													"Tracker",
@@ -160,6 +177,11 @@ TRTrackerServerImpl
 					
 										options.put( AEProxyFactory.SP_PORT, port );
 					
+										if ( bind_option != null ){
+											
+											options.put( AEProxyFactory.SP_BIND, bind_option );
+										}
+
 										Map<String,Object> reply =
 												AEProxyFactory.getPluginServerProxy(
 													"Tracker",
@@ -327,7 +349,7 @@ TRTrackerServerImpl
 		return( support_experimental_extensions );
 	}
 
-	protected final IpFilter	ip_filter	= IpFilterManagerFactory.getSingleton().getIPFilter();
+	private final IpFilter	ip_filter	= IpFilterManagerFactory.getSingleton().getIPFilter();
 
 	private long		current_announce_retry_interval;
 	private long		current_scrape_retry_interval;
@@ -338,7 +360,13 @@ TRTrackerServerImpl
 
 	private final TRTrackerServerStatsImpl	stats = new TRTrackerServerStatsImpl( this );
 
-	private final String	name;
+	private final String				name;
+	private final boolean				apply_ip_filter;
+
+	private final Map<String,Object>	properties;
+	
+	private final boolean				reverse_proxy;
+	
 	private boolean	web_password_enabled;
 	private boolean	web_password_https_only;
 
@@ -371,13 +399,20 @@ TRTrackerServerImpl
 
 	public
 	TRTrackerServerImpl(
-		String		_name,
-		boolean		_start_up_ready )
+		String					_name,
+		boolean					_apply_ip_filter,
+		boolean					_start_up_ready,
+		Map<String,Object>		_properties )
 	{
-		name		= _name==null?DEFAULT_NAME:_name;
-		is_ready	= _start_up_ready;
+		name			= _name==null?DEFAULT_NAME:_name;
+		apply_ip_filter	= _apply_ip_filter;
+		is_ready		= _start_up_ready;
+		properties		= _properties==null?new HashMap<>():_properties;
 
-
+		Boolean b_rp = (Boolean)properties.get( Tracker.PR_REVERSE_PROXY );
+		
+		reverse_proxy = b_rp==null?false:b_rp;
+		
 		config_listener =
 			new COConfigurationListener()
 			{
@@ -442,7 +477,7 @@ TRTrackerServerImpl
 
 		key_enabled = COConfigurationManager.getBooleanParameter("Tracker Key Enable Server");
 	}
-
+	
 	@Override
 	public void
 	setReady()
@@ -484,6 +519,20 @@ TRTrackerServerImpl
 		return( keep_alive_enabled );
 	}
 
+	protected boolean
+	isIPFiltered(
+		String		ip )
+	{
+		if ( apply_ip_filter && ip_filter.isInRange( ip, "Tracker", null )){
+			
+			return( true );
+			
+		}else{
+			
+			return( false );
+		}
+	}
+	
 	public TRTrackerServerTorrent
 	addLink(
 		String					link,
@@ -602,13 +651,17 @@ TRTrackerServerImpl
 		String				password )
 	{
 		if ( headers.toLowerCase( Locale.US ).contains( "x-real-ip")){
-		
-				// someone messing about
+				
+			if ( !reverse_proxy ){
 			
-			return( false );
-		}
+					// someone messing about
+				
+				return( false );
+			}		
+		}else{
 		
-		headers = headers.trim() + "\r\nX-Real-IP: " + AddressUtils.getHostAddress( remote_ip ) + "\r\n\r\n";
+			headers = headers.trim() + "\r\nX-Real-IP: " + AddressUtils.getHostAddress( remote_ip ) + "\r\n\r\n";
+		}
 
 		for (int i=0;i<auth_listeners.size();i++){
 

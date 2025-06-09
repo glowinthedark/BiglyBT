@@ -54,8 +54,6 @@ public class RelocatedItem
 
     }else{
 
-    	File source = fileInfo.getFile( false );
-
     	int index = fileInfo.getIndex();
     	
     	if ( index < 0 ){
@@ -64,7 +62,9 @@ public class RelocatedItem
     		
     	}else{
     		
-	    	File target = fileInfo.getDownloadManager().getDownloadState().getFileLink( index, source );
+        	File source = fileInfo.getFile( false );
+
+	    	File target = fileInfo.getDownloadManager().getDownloadState().getFileLink( index );
 	
 	    	if ( target == null ){
 	

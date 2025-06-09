@@ -32,6 +32,7 @@ import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.TrackersUtil;
 import com.biglybt.core.util.UrlUtils;
 import com.biglybt.ui.swt.Messages;
+import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.wizard.AbstractWizardPanel;
 import com.biglybt.ui.swt.wizard.IWizardPanel;
 
@@ -99,7 +100,7 @@ public class ModePanel extends AbstractWizardPanel<NewTorrentWizard> {
 
     final String[] localTrackerUrl = new String[1];
 
-    // there's a potential oversize issue with the howToLocal string, and attemtping to force wrap has no effect -
+    // there's a potential oversize issue with the howToLocal string, and attempting to force wrap has no effect -
     // therefore, provide more room and remove extraneous labeling
 
     final boolean showLocal = TRTrackerUtils.isTrackerEnabled();
@@ -262,7 +263,7 @@ public class ModePanel extends AbstractWizardPanel<NewTorrentWizard> {
     //Line:
     // ------------------------------
 
-    Label label = new Label(panel, SWT.SEPARATOR | SWT.HORIZONTAL);
+    Control label = Utils.createSkinnedLabelSeparator(panel, SWT.HORIZONTAL);
     gridData = new GridData(GridData.FILL_HORIZONTAL);
     gridData.horizontalSpan = 4;
     label.setLayoutData(gridData);
@@ -329,7 +330,7 @@ public class ModePanel extends AbstractWizardPanel<NewTorrentWizard> {
     //Line:
     // ------------------------------
 
-    Label label1 = new Label(panel, SWT.SEPARATOR | SWT.HORIZONTAL);
+    Control label1 = Utils.createSkinnedLabelSeparator(panel, SWT.HORIZONTAL);
     gridData = new GridData(GridData.FILL_HORIZONTAL);
     gridData.horizontalSpan = 6;
     label1.setLayoutData(gridData);
@@ -489,8 +490,9 @@ public class ModePanel extends AbstractWizardPanel<NewTorrentWizard> {
   }
 
   void activateMode(int mode) {
+	  // BYO is the only mode used, directory+single file panels are dead...
     wizard.setCurrentInfo(MessageText.getString(mode==NewTorrentWizard.MODE_SINGLE_FILE? "wizard.maketorrent.singlefile.help" :(mode==NewTorrentWizard.MODE_DIRECTORY? "wizard.maketorrent.directory.help" :"wizard.newtorrent.byo.help")));
-    ((NewTorrentWizard) wizard).create_mode = mode;
+    //((NewTorrentWizard) wizard).create_mode = mode;
   }
 
   void updateTrackerURL() {

@@ -198,7 +198,7 @@ public class MainStatusBar
 	 */
 	public MainStatusBar() {
 		numberFormat = NumberFormat.getInstance();
-		// Proably need to wait for core to be running to make sure dht plugin is fully avail
+		// Probably need to wait for core to be running to make sure dht plugin is fully avail
 		CoreFactory.addCoreRunningListener(new CoreRunningListener() {
 			@Override
 			public void coreRunning(Core core) {
@@ -847,6 +847,10 @@ public class MainStatusBar
 					return;
 				}
 
+				if ( current_alert != null && current_added && current_alert.isNative ){
+					return;
+				}
+				
 				ArrayList<LogAlert> alerts = Alerts.getUnviewedLogAlerts();
 				int count = alerts.size();
 
@@ -1030,7 +1034,7 @@ public class MainStatusBar
 							String url = "feedback.start?" + Utils.getWidgetBGColorURLParam()
 							+ "&fromWeb=false&os.name=" + UrlUtils.encode(Constants.OSName)
 							+ "&os.version="
-							+ UrlUtils.encode(System.getProperty("os.version"))
+							+ UrlUtils.encode(Constants.OSVersion)
 							+ "&java.version=" + UrlUtils.encode(Constants.JAVA_VERSION);
 
 							// Utils.launch( url );
@@ -1042,7 +1046,7 @@ public class MainStatusBar
 
 					Utils.setTT(feedback,MessageText.getString("statusbar.feedback.tooltip"));
 					feedback.setCursor(display.getSystemCursor(SWT.CURSOR_HAND));
-					feedback.setForeground(Colors.blue);
+					Utils.setLinkForeground(feedback);
 					feedback.addListener(SWT.MouseUp, feedback_listener);
 					feedback.addListener(SWT.MouseDoubleClick, feedback_listener);
 
@@ -1141,9 +1145,7 @@ public class MainStatusBar
 	 * @since 4.0.0.1
 	 */
 	private void addStatusBarMenu(Composite cSB) {
-		if (!Constants.isCVSVersion()) {
-			return;
-		}
+
 		Menu menu = new Menu(cSB);
 		cSB.setMenu(menu);
 
@@ -1736,7 +1738,9 @@ public class MainStatusBar
 		// IP Filter Status Section
 		IpFilter ip_filter = core.getIpFilterManager().getIPFilter();
 
-		ipBlocked.setForeground( display.getSystemColor(ip_filter.isEnabled()? SWT.COLOR_WIDGET_FOREGROUND : SWT.COLOR_WIDGET_NORMAL_SHADOW));
+		Color fg = Colors.getSystemColor( ipBlocked.getDisplay(), ip_filter.isEnabled()? SWT.COLOR_WIDGET_FOREGROUND : SWT.COLOR_WIDGET_NORMAL_SHADOW);
+		
+		ipBlocked.setForeground( fg );
 
 		ipBlocked.setText("IPs: "
 				+ numberFormat.format(ip_filter.getNbRanges())
@@ -1797,6 +1801,9 @@ public class MainStatusBar
 
 		private Image bgImage;
 
+		private String lastTextComputed;
+		private Point lastTextSizeComputed;
+		
 		/**
 		 * Default Constructor
 		 *
@@ -1963,13 +1970,25 @@ public class MainStatusBar
 				lastSize.y = bounds.height;
 			}
 
-			GC gc = new GC(this);
-			GCStringPrinter sp = new GCStringPrinter(gc, getText(), new Rectangle(0,
-					0, 10000, 20), true, true, SWT.LEFT);
-			sp.calculateMetrics();
-			Point lastTextSize = sp.getCalculatedSize();
-			gc.dispose();
-
+			Point lastTextSize;
+			
+			String text = getText();
+			
+			if ( lastTextComputed != null && lastTextComputed.equals( text )){
+				
+				lastTextSize = lastTextSizeComputed;
+			}else{
+				GC gc = new GC(this);
+				GCStringPrinter sp = new GCStringPrinter(gc, text, new Rectangle(0,
+						0, 10000, 20), true, true, SWT.LEFT);
+				sp.calculateMetrics();
+				lastTextSize = sp.getCalculatedSize();
+				gc.dispose();
+				
+				lastTextComputed		= text;
+				lastTextSizeComputed	= lastTextSize;
+			}
+			
 			lastSize.x += lastTextSize.x + 10;
 			lastSize.y = Math.max(lastSize.y, lastTextSize.y);
 
@@ -2274,7 +2293,7 @@ public class MainStatusBar
 		{
 			if ( eventType == MANAGER_EVENT_UPDATED ){
 
-					// reduce pointless refreshes due to multple update events
+					// reduce pointless refreshes due to multiple update events
 
 				synchronized( pending_updates ){
 

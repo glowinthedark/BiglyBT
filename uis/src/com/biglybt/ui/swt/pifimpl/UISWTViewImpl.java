@@ -46,6 +46,7 @@ import com.biglybt.pifimpl.local.PluginCoreUtils;
 import com.biglybt.ui.common.ToolBarItem;
 import com.biglybt.ui.common.updater.UIUpdatable;
 import com.biglybt.ui.common.updater.UIUpdater;
+import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.debug.ObfuscateImage;
@@ -128,6 +129,8 @@ public class UISWTViewImpl
 	private final Set<UIPluginViewToolBarListener> setToolBarEnablers = new HashSet<>();
 	private UISWTViewBuilderCore eventListenerBuilder;
 
+	private ViewTitleInfo	viewTitleInfo;
+	
 	public UISWTViewImpl(String id) {
 		this.id = id;
 	}
@@ -143,6 +146,9 @@ public class UISWTViewImpl
 		}
 		this.initialDatasource = builder.getInitialDataSource();
 		this.datasource = initialDatasource;
+		
+		eventListener.eventOccurred(new UISWTViewEventImpl(this, UISWTViewEvent.TYPE_PRE_CREATE, null));
+		
 		setEventListener(eventListener, builder, doCreate);
 	}
 
@@ -211,6 +217,31 @@ public class UISWTViewImpl
 		return eventListenerBuilder;
 	}
 
+	@Override
+	public void 
+	setViewTitleInfo(
+		ViewTitleInfo info)
+	{
+		viewTitleInfo = info;
+	}
+	
+	@Override
+	public ViewTitleInfo 
+	getViewTitleInfo()
+	{
+		if ( viewTitleInfo != null ){
+			
+			return( viewTitleInfo );
+		}
+		
+		if ( eventListener instanceof ViewTitleInfo ){
+			
+			return((ViewTitleInfo)eventListener);
+		}
+		
+		return( null );
+	}
+	
 	/* (non-Javadoc)
 	 * @see com.biglybt.ui.swt.pif.UISWTView#getInitialDataSource()
 	 */
@@ -381,10 +412,12 @@ public class UISWTViewImpl
 		if (eventType == UISWTViewEvent.TYPE_DATASOURCE_CHANGED) {
 			Object newDataSource = PluginCoreUtils.convert(data, true);
 			if (DataSourceUtils.areSame(datasource, newDataSource)) {
-				if (DEBUG_TRIGGERS) {
-					System.out.println("  -> same DS, skip");
+				if ( eventListener == null || !eventListener.informOfDuplicates(UISWTViewEvent.TYPE_DATASOURCE_CHANGED )){
+					if (DEBUG_TRIGGERS) {
+						System.out.println("  -> same DS, skip");
+					}
+					return true;
 				}
-				return true;
 			}
 			datasource = newDataSource;
 			data = PluginCoreUtils.convert(datasource, useCoreDataSource);
@@ -892,7 +925,7 @@ public class UISWTViewImpl
 	public static SWTSkinObjectContainer
 	buildStandAlone(
 		SWTSkinObjectContainer		soParent,
-		SWTSkin skin,
+		SWTSkin 					skin,
 		String						id,
 		Object						datasource,
 		int							controlType,
@@ -954,6 +987,7 @@ public class UISWTViewImpl
 				// without this some views get messed up layouts (chat view for example)
 
 				viewComposite.setData( Utils.RELAYOUT_UP_STOP_HERE, true );
+				viewComposite.setData( "UISWTView", view  );
 
 				soContents.addListener((skinObject, eventType, params) -> {
 					if ( eventType == SWTSkinObjectListener.EVENT_OBFUSCATE ){
@@ -999,7 +1033,7 @@ public class UISWTViewImpl
 
 						@Override
 						public String getUpdateUIName() {
-							return ("Popout-" + view.getViewID());
+							return ("StandAlone:" + view.getFullTitle());
 						}
 					});
 
@@ -1021,7 +1055,7 @@ public class UISWTViewImpl
 
 								@Override
 								public String getUpdateUIName() {
-									return ("Popout-" + view.getViewID());
+									return ("StandAlone:" + view.getFullTitle());
 								}
 							});
 					}
@@ -1050,12 +1084,14 @@ public class UISWTViewImpl
 	}
 
 	@Override
-	public boolean canBuildStandAlone() {
+	public boolean 
+	canBuildStandAlone() 
+	{
 		if (eventListenerBuilder != null
 				&& eventListenerBuilder.isListenerCloneable()) {
 			return true;
 		}
 
-		return getEventListener() instanceof UISWTViewEventListenerEx;
+		return( false );
 	}
 }

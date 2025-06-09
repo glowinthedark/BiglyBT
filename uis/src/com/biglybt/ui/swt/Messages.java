@@ -37,6 +37,11 @@ import com.biglybt.util.StringCompareUtils;
  */
 public class Messages {
 
+	private static final boolean DARK_MODE = Utils.isDarkAppearanceNative();
+	
+	private static final String THEME_SUFFIX = DARK_MODE?"._dark":null;
+	
+	private static final String MESSAGE_KEY 		= "com.biglybt.ui.swt.Messages:msg";
 	private static final String RESOURCE_KEY 		= "com.biglybt.ui.swt.Messages:res";
 	private static final String RESOURCE_TT_KEY 	= "com.biglybt.ui.swt.Messages:ttres";
 
@@ -207,6 +212,8 @@ public class Messages {
 		String message = params == null ? MessageText.getString(key)
 				: MessageText.getString(key, params);
 
+		widget.setData(MESSAGE_KEY,message);
+		
 		if (widget instanceof Label) {
 			// Disable Mnemonic when & is before a space.  Otherwise, it's most
 			// likely meant to be a Mnemonic
@@ -261,6 +268,10 @@ public class Messages {
 		}
 	}
 
+	public static String getLanguageForControl( Widget widget ){
+		return((String)widget.getData(MESSAGE_KEY));
+	}
+	
 	private static void updateToolTipFromData(Widget widget, boolean showKey) {
 		
 		String tt_key = (String)widget.getData(RESOURCE_TT_KEY);
@@ -317,6 +328,24 @@ public class Messages {
 	}
 
 
+	public static String 
+	getLanguageText( String key )
+	{
+		if ( THEME_SUFFIX != null ){
+			
+				// doesn't work with platform-specific strings yet...
+			
+			String result = MessageText.getString( key + THEME_SUFFIX );
+			
+			if ( result != null ){
+				
+				return( result );
+			}
+		}
+		
+		return( MessageText.getString( key ));
+	}
+	
 	public static void setLanguageTooltip(Widget widget, String key) {
 		if (widget == null || widget.isDisposed()) {
 			return;

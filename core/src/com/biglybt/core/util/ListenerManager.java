@@ -29,13 +29,16 @@ package com.biglybt.core.util;
  * This class exists to support the invocation of listeners while *not* synchronized.
  * This is important as in general it is a bad idea to invoke an "external" component
  * whilst holding a lock on something as unexpected deadlocks can result.
- * It has been introduced to reduce the likelyhood of such deadlocks
+ * It has been introduced to reduce the likelihood of such deadlocks
  */
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
@@ -67,18 +70,18 @@ ListenerManager<T>
 	private final String	name;
 
 	private final ListenerManagerDispatcher<T>				target;
-	private ListenerManagerDispatcherWithException		target_with_exception;
+	private ListenerManagerDispatcherWithException<T>		target_with_exception;
 
 	private final boolean		async;
-	private AEThread2	async_thread;
+	private AEThread2			async_thread;
 
-	private List<T>			listeners		= new ArrayList<>(0);
+	private CopyOnWriteList<T>			listeners		= new CopyOnWriteList<>();
 
 	private List<Object[]>	dispatch_queue;
 	private AESemaphore		dispatch_sem;
 
-	private boolean	logged_too_many_listeners;
-
+	private int		logged_too_many_count_next	= 50;
+	
 	protected
 	ListenerManager(
 		String								_name,
@@ -91,7 +94,7 @@ ListenerManager<T>
 
 		if ( target instanceof ListenerManagerDispatcherWithException ){
 
-			target_with_exception = (ListenerManagerDispatcherWithException)target;
+			target_with_exception = (ListenerManagerDispatcherWithException<T>)target;
 		}
 
 		if ( async ){
@@ -118,9 +121,7 @@ ListenerManager<T>
 
 		synchronized( this ){
 
-			ArrayList<T>	new_listeners	= new ArrayList<>(listeners);
-
-			if (new_listeners.contains(listener)) {
+			if ( listeners.contains(listener)) {
 				if ( Constants.IS_CVS_VERSION ){
 					Debug.out( "check this out: listener added twice" );
 				}
@@ -128,22 +129,38 @@ ListenerManager<T>
 						"addListener called but listener already added for " + name
 								+ "\n\t" + Debug.getStackTrace(true, false)));
 			}
-			new_listeners.add( listener );
+			
+			listeners.add( listener );
 
-			if (new_listeners.size() > 50) {
+			int num_listeners = listeners.size();
+			
+			if ( num_listeners == logged_too_many_count_next ){
+				
+				logged_too_many_count_next *= 5;
+				
+				Logger.log(
+					new LogEvent(
+						LogIDs.CORE, LogEvent.LT_WARNING,
+						num_listeners + " listeners added for " + name + "\n\t" + Debug.getStackTrace(true, false)));
+
 				if ( Constants.IS_CVS_VERSION ){
-					Debug.out( "check this out: lots of listeners (" + new_listeners.size()  + ") !" );
-					if (!logged_too_many_listeners){
-						logged_too_many_listeners= true;
-						Debug.out( String.valueOf( new_listeners ));
+															
+					List<String> strings = listeners.getList().stream().map((o)->String.valueOf( o.getClass())).collect( Collectors.toList());
+					
+					Map<String,Integer> counts = new HashMap<>();
+					
+					for( String str: strings ){
+						counts.put(str, counts.getOrDefault(str, 0) + 1);
 					}
+					
+					List<String> sorted = 
+						counts.entrySet().stream().
+							sorted(( a, b )->b.getValue().compareTo(a.getValue())).
+								map((e)->{return(e.getValue() + " * " + e.getKey());}).collect( Collectors.toList());
+					
+					Debug.outNoStack( num_listeners + " listeners added for " + name + "\n\t" + Debug.getStackTrace(true, false) + "\n\t" + sorted );
 				}
-				Logger.log(new LogEvent(LogIDs.CORE, LogEvent.LT_WARNING,
-						"addListener: over 50 listeners added for " + name
-								+ "\n\t" + Debug.getStackTrace(true, false)));
 			}
-
-			listeners	= new_listeners;
 
 			if ( async && async_thread == null ){
 
@@ -164,17 +181,13 @@ ListenerManager<T>
 
 	public void
 	removeListener(
-		Object		listener )
+		T		listener )
 	{
 		synchronized( this ){
 
-			ArrayList<T>	new_listeners = new ArrayList<>(listeners);
+			listeners.remove( listener );
 
-			new_listeners.remove( listener );
-
-			listeners	= new_listeners;
-
-			if ( async && listeners.size() == 0 ){
+			if ( async && listeners.isEmpty()){
 
 				async_thread = null;
 
@@ -189,10 +202,7 @@ ListenerManager<T>
 	hasListener(
 		T		listener )
 	{
-		synchronized( this ){
-
-			return( listeners.contains( listener ));
-		}
+		return( listeners.contains( listener ));
 	}
 
 	public void
@@ -200,7 +210,7 @@ ListenerManager<T>
 	{
 		synchronized( this ){
 
-			listeners	= new ArrayList<>();
+			listeners.clear();
 
 			if ( async ){
 
@@ -217,11 +227,7 @@ ListenerManager<T>
 	getListenersCopy()
 	{
 			// we can just return the listeners as we copy on update
-
-		synchronized( this ){
-
-			return( listeners );
-		}
+		return( listeners.getList());
 	}
 
 	public void
@@ -251,7 +257,7 @@ ListenerManager<T>
 
 					// if there's nobody listening then no point in queueing
 
-				if ( listeners.size() == 0 ){
+				if ( listeners.isEmpty()){
 
 					return;
 				}
@@ -259,7 +265,7 @@ ListenerManager<T>
 					// listeners are "copy on write" updated, hence we grab a reference to the
 					// current listeners here. Any subsequent change won't affect our listeners
 
-				dispatch_queue.add(new Object[]{listeners, new Integer(type), value, sem });
+				dispatch_queue.add(new Object[]{listeners.getList(), new Integer(type), value, sem });
 
 				if ( async_thread == null ){
 
@@ -290,15 +296,8 @@ ListenerManager<T>
 				throw( new RuntimeException( "call dispatchWithException, not dispatch"));
 			}
 
-			List<T>	listeners_ref;
-
-			synchronized( this ){
-
-				listeners_ref = listeners;
-			}
-
 			try{
-				dispatchInternal( listeners_ref, type, value );
+				dispatchInternal( listeners.getList(), type, value );
 
 			}catch( Throwable e ){
 
@@ -314,14 +313,7 @@ ListenerManager<T>
 
 		throws Throwable
 	{
-		List<T>	listeners_ref;
-
-		synchronized( this ){
-
-			listeners_ref = listeners;
-		}
-
-		dispatchInternal( listeners_ref, type, value );
+		dispatchInternal( listeners.getList(), type, value );
 	}
 
 	public void
@@ -528,7 +520,7 @@ ListenerManager<T>
 
 		while(true){
 
-			dispatch_sem.reserve();
+			boolean got_sem = dispatch_sem.reserve(20*1000);
 
 			Object[] data = null;
 
@@ -540,19 +532,35 @@ ListenerManager<T>
 						// "returned" to the pool in case it represents a valid  entry
 						// to be picked up by another thread
 
-					dispatch_sem.release();
+					if ( got_sem ){
+					
+						dispatch_sem.release();
+					}
 
 					break;
 				}
 
-				if ( dispatch_queue.size() > 0 ){
+				if ( dispatch_queue.isEmpty()){
 
+					if ( !got_sem ){
+						
+						if ( async_thread != null && async_thread.isCurrentThread()){
+							
+								// idle timeout
+						
+							async_thread = null;
+														
+							break;
+						}
+					}
+				}else{
+					
 					data = (Object[])dispatch_queue.remove(0);
 				}
 			}
 
 			if ( data != null ){
-
+				
 				try{
 					if ( data.length == 4 ){
 
@@ -668,10 +676,7 @@ ListenerManager<T>
 	public long
 	size()
 	{
-		synchronized( this ){
-
-			return( listeners.size());
-		}
+		return( listeners.size());
 	}
 }
 

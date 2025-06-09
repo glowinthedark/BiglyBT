@@ -1123,7 +1123,7 @@ public class ImageLoader
 		return noImage;
 	}
 	
-	private static Image getNullImage() {
+	private Image getNullImage() {
 
 		if (nullImage == null) {
 			Display display = Display.getDefault();
@@ -1188,27 +1188,42 @@ public class ImageLoader
 		return 100;
 	}
 
-	public Image getUrlImage(String url, ImageDownloaderListener l) {
-		return getUrlImage(url, null, l);
+	public void 
+	getUrlImage(
+		String url, 
+		ImageDownloaderListener l)
+	{
+		getUrlImage(url, null, l);
 	}
 
 	/**
 	 * Get an {@link Image} from an url.  URL will be the key, which you
 	 * can use later to {@link #releaseImage(String)}
 	 */
-	public Image getUrlImage(String url, final Point maxSize,
-			final ImageDownloaderListener l) {
-		if (!Utils.isThisThreadSWT()) {
-			Debug.out("Called on non-SWT thread");
-			return null;
+	public void 
+	getUrlImage(
+		String url, 
+		final Point maxSize,
+		final ImageDownloaderListener l) 
+	{
+		
+		if ( l == null || url == null ){
+			
+			Debug.out( "eh" );
+			
+			return;
 		}
-		if (l == null || url == null) {
-			return null;
+		
+		if (!Utils.isThisThreadSWT()){
+			
+			Utils.execSWTThread(()->{ getUrlImage( url, maxSize, l );});
+			
+			return;
 		}
 
 		String imageKey = url;
 		
-		return( getUrlImageSupport( url, imageKey, maxSize, l ));
+		getUrlImageSupport( url, imageKey, maxSize, l );
 	}
 	
 	/**
@@ -1220,21 +1235,24 @@ public class ImageLoader
 	 * @return
 	 */
 	
-	public Image 
+	public void 
 	getFileImage( 
 		File 		file, 
 		Point 		maxSize,
-		final 		ImageDownloaderListener l) 
+		final 		ImageDownloaderListener l ) 
 	{
 		if (!Utils.isThisThreadSWT()) {
 			
 			Debug.out("Called on non-SWT thread");
 			
-			return null;
+			return;
 		}
 		
-		if (l == null || file == null) {
-			return null;
+		if ( l == null || file == null ){
+			
+			Debug.out( "eh?" );
+			
+			return;
 		}
 		
 		try{
@@ -1249,17 +1267,15 @@ public class ImageLoader
 				imageKey += ";" + lastModified;
 			}
 			
-			return( getUrlImageSupport( url, imageKey, maxSize, l ));
+			getUrlImageSupport( url, imageKey, maxSize, l );
 			
 		}catch( MalformedURLException e ){
 			
 			Debug.out( e );
-			
-			return( null );
 		}
 	}
 	
-	private Image 
+	private void 
 	getUrlImageSupport(
 		String 						url, 
 		String 						baseImageKey,
@@ -1281,12 +1297,12 @@ public class ImageLoader
 		if ( refInfoFromImageMap != null ){
 			Image[] images = refInfoFromImageMap.getImages();
 			if ( images == null || images.length == 0 ){
-				return( null );
+				return;
 			}
 			Image image = images[0];
 			refInfoFromImageMap.addref();
 			l.imageDownloaded(image, sizedImageKey, true);
-			return image;
+			return;
 		}
 
 		final String cache_key = baseImageKey.hashCode() + ".ico";
@@ -1316,7 +1332,7 @@ public class ImageLoader
 						}
 						putRefInfoToImageMap(sizedImageKey, new ImageLoaderRefInfo(image));
 						l.imageDownloaded(image, sizedImageKey, true);
-						return image;
+						return;
 					} finally {
 						fis.close();
 					}
@@ -1380,7 +1396,6 @@ public class ImageLoader
 						});
 					}
 				});
-		return null;
 	}
 
 	public Image resizeImageIfLarger(Image image, Point maxSize) {
@@ -1391,7 +1406,7 @@ public class ImageLoader
 
 		Rectangle bounds = image.getBounds();
 		if (maxSize.y > 0 && bounds.height > maxSize.y) {
-			int newX = bounds.width * maxSize.y / bounds.height;
+			int newX = Math.max( 1, bounds.width * maxSize.y / bounds.height );
 			if (maxSize.x <= 0 || newX <= maxSize.x) {
 				ImageData scaledTo = image.getImageData().scaledTo(newX, maxSize.y);
 				Device device = image.getDevice();
@@ -1399,7 +1414,7 @@ public class ImageLoader
 			}
 		}
 		if (maxSize.x > 0 && bounds.width > maxSize.x) {
-			int newY = bounds.height * maxSize.x / bounds.width;
+			int newY = Math.max( 1, bounds.height * maxSize.x / bounds.width );
 			ImageData scaledTo = image.getImageData().scaledTo(maxSize.x, newY);
 			Device device = image.getDevice();
 			return new Image(device, scaledTo);
@@ -1551,7 +1566,7 @@ public class ImageLoader
 						if ( images != null ){
 							for (int j = 0; j < images.length; j++) {
 								Image image = images[j];
-								if (isRealImage(image)) {
+								if (isRealImage(image) && image != nullImage){
 									image.dispose();
 								}
 							}

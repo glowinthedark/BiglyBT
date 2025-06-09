@@ -212,7 +212,7 @@ public class BTPeerIDByteDecoderDefinitions {
 	 *
 	 * Good place for information about BT peer ID conventions:
 	 *  http://wiki.theory.org/BitTorrentSpecification
-	 *  http://transmission.m0k.org/trac/browser/trunk/libtransmission/clients.c (hello Transmission authors!) :)
+	 *  https://github.com/transmission/transmission/blob/master/libtransmission/clients.cc (hello Transmission authors!) :)
 	 *  http://rufus.cvs.sourceforge.net/rufus/Rufus/g3peerid.py?view=log (for older clients)
 	 *  http://shareaza.svn.sourceforge.net/viewvc/shareaza/trunk/shareaza/BTClient.cpp?view=markup
 	 *  http://libtorrent.rakshasa.no/browser/trunk/libtorrent/src/torrent/peer/client_list.cc
@@ -253,7 +253,7 @@ public class BTPeerIDByteDecoderDefinitions {
 		addAzStyle("bk", "BitKitten (libtorrent)");
 		addAzStyle("BR", "BitRocket", "1.2(34)");
 		addAzStyle("BS", "BTSlave");
-		addAzStyle("BW", "BitWombat");
+		// addAzStyle("BW", "BitWombat");	dead apparently and re-used by BitTorrent Web
 		addAzStyle("BX", "BittorrentX");
 		addAzStyle("CB", "Shareaza Plus");
 		addAzStyle("CD", "Enhanced CTorrent", VER_AZ_TWO_MAJ_TWO_MIN);
@@ -376,6 +376,8 @@ public class BTPeerIDByteDecoderDefinitions {
 		addSimpleClient("XanTorrent", "DansClient");
 		addSimpleClient("MediaGet",     "-MG1");
 		addSimpleClient("MediaGet2 2.1", "-MG21");
+		addSimpleClient("MediaGet2 3", "MG-3");
+		addSimpleClient("FDM", "FD");			// whatever, can't be bothered
 
 		/**
 		 * This is interesting - it uses Mainline style, except uses two characters instead of one.
@@ -474,7 +476,13 @@ public class BTPeerIDByteDecoderDefinitions {
 		client = addSimpleClient("Aria2", "A2-");
 		addVersionedClient(client, VER_TWO_BYTE_MAINLINE, 6, 3);
 
+		client = addSimpleClient("FDM", "FD");
+		addVersionedClient(client, "a", 1);
+
 		addAzStyle( "PI", "PicoTorrent", VER_AZ_ONE_MAJ_TWO_MIN_ONE_TRAIL);
+
+		client = addSimpleClient("UW", "-UW");
+		addVersionedClient(client, VER_BYTE_BLOCK_DOTTED_NUM, 4);
 
 	}
 

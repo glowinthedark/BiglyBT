@@ -79,6 +79,14 @@ TagManager
 	registerTaggableResolver(
 		TaggableResolver	resolver );
 
+	public TagConstraint
+	compileConstraint(
+		String		expression );
+	
+	public Tag
+	duplicate(
+		Tag				tag );
+	
 	public VuzeFile
 	exportTags(
 		List<Tag>		tags );

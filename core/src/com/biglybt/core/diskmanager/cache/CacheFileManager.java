@@ -19,10 +19,7 @@
 
 package com.biglybt.core.diskmanager.cache;
 
-import java.io.File;
-
-import com.biglybt.core.torrent.TOTorrent;
-import com.biglybt.core.util.LinkFileMap;
+import com.biglybt.core.util.StringInterner;
 
 
 /**
@@ -35,18 +32,13 @@ CacheFileManager
 {
 	public CacheFile
 	createFile(
-		CacheFileOwner	owner,
-		File			file,
-		int				type,
-		boolean			force )
+		CacheFileOwner			owner,
+		StringInterner.FileKey	file,
+		int						type,
+		boolean					force )
 
 		throws CacheFileManagerException;
 
 	public CacheFileManagerStats
 	getStats();
-
-	public void
-	setFileLinks(
-		TOTorrent				torrent,
-		LinkFileMap				links );
 }

@@ -341,15 +341,7 @@ AuthenticatorWindow
 
 				dialog[0] = new authDialog( sem, display, realm, is_tracker, location, details );
 
-				while ( !( display.isDisposed() || sem.isReleasedForever())){
-
-					if ( !display.readAndDispatch()){
-
-						display.sleep();
-					}
-				}
-
-				if ( display.isDisposed()){
+				if ( Utils.readAndDispatchLoop(()->sem.isReleasedForever())){
 
 					return( null );
 				}
@@ -447,7 +439,7 @@ AuthenticatorWindow
 				return;
 			}
 
-	 		shell = ShellFactory.createMainShell(SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
+	 		shell = ShellFactory.createMainShell( SWT.DIALOG_TRIM ); // removed model due to user request | SWT.APPLICATION_MODAL);
 
 	 		Utils.setShellIcon(shell);
 		 	Messages.setLanguageText(shell, "authenticator.title");
@@ -575,7 +567,7 @@ AuthenticatorWindow
 
 			// line
 
-			Label labelSeparator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
+			Control labelSeparator = Utils.createSkinnedLabelSeparator(shell, SWT.HORIZONTAL);
 			gridData = new GridData(GridData.FILL_HORIZONTAL);
 			gridData.horizontalSpan = 3;
 			labelSeparator.setLayoutData(gridData);

@@ -69,13 +69,13 @@ FMFileAccessLinear
 		throws FMFileManagerException
 	{
 		try{
-			AEThread2.setDebug( owner );
+			// AEThread2.setDebug( owner );
 
 			return( fa.getLength());
 
 		}catch( Throwable e ){
 
-			throw( new FMFileManagerException( "getLength fails", e ));
+			throw( new FMFileManagerException( FMFileManagerException.OP_READ, "getLength fails", e ));
 		}
 	}
 
@@ -88,7 +88,7 @@ FMFileAccessLinear
 		throws FMFileManagerException
 	{
 		try{
-			AEThread2.setDebug( owner );
+			// AEThread2.setDebug( owner );
 
 			try{
 				fa.setLength( length );
@@ -110,18 +110,15 @@ FMFileAccessLinear
 
 					if ( required > 0 ){
 
-						if ( FileUtil.getUsableSpaceSupported()){
+						long	usable		= FileUtil.getUsableSpace( owner.getLinkedFile().getParentFile());
 
-							long	usable		= FileUtil.getUsableSpace( owner.getLinkedFile().getParentFile());
+							// usable is -1 if something went wrong
 
-								// usable is -1 if something went wrong
+						if (  usable >= 0 && usable < required ){
 
-							if (  usable >= 0 && usable < required ){
+							// 	looks like a valid error
 
-								// 	looks like a valid error
-
-								throw( e );
-							}
+							throw( e );
 						}
 					}
 
@@ -158,7 +155,7 @@ FMFileAccessLinear
 
 		}catch( Throwable e ){
 
-			throw( new FMFileManagerException( "setLength fails", e ));
+			throw( new FMFileManagerException( FMFileManagerException.OP_WRITE, "setLength fails", e ));
 		}
 	}
 
@@ -191,7 +188,7 @@ FMFileAccessLinear
 	{
 		if ( fa == null){
 
-			throw new FMFileManagerException( "read: fa is null" );
+			throw new FMFileManagerException( FMFileManagerException.OP_READ, "read failed: accessor is null" );
 		}
 
 		FileChannel fc = fa.getChannel();
@@ -200,10 +197,10 @@ FMFileAccessLinear
 
 			Debug.out("FileChannel is closed: " + owner.getName());
 
-			throw( new FMFileManagerException( "read - file is closed"));
+			throw( new FMFileManagerException( FMFileManagerException.OP_READ, "read failed: file is closed"));
 		}
 
-		AEThread2.setDebug( owner );
+		// AEThread2.setDebug( owner );
 
 		try{
 			if(USE_MMAP)
@@ -224,7 +221,7 @@ FMFileAccessLinear
 
 			Debug.printStackTrace( e );
 
-			throw( new FMFileManagerException( "read fails", e ));
+			throw( new FMFileManagerException( FMFileManagerException.OP_READ, "read failed", e ));
 		}
 	}
 
@@ -239,7 +236,7 @@ FMFileAccessLinear
 	{
 		if ( fa == null ){
 
-			throw new FMFileManagerException( "read: fa is null" );
+			throw new FMFileManagerException( FMFileManagerException.OP_READ, "read failed: accessor is null" );
 		}
 
 		FileChannel fc = fa.getChannel();
@@ -248,10 +245,10 @@ FMFileAccessLinear
 
 			Debug.out("FileChannel is closed: " + owner.getName());
 
-			throw( new FMFileManagerException( "read - file is closed"));
+			throw( new FMFileManagerException( FMFileManagerException.OP_READ, "read failed: file is closed"));
 		}
 
-		AEThread2.setDebug( owner );
+		// AEThread2.setDebug( owner );
 
 		int[]	original_positions = new int[buffers.length];
 
@@ -329,7 +326,7 @@ FMFileAccessLinear
 
 									if ( loop == READ_RETRY_LIMIT ){
 										Debug.out( "FMFile::read: zero length read - abandoning" );
-										throw( new FMFileManagerException( "read fails: retry limit exceeded"));
+										throw( new FMFileManagerException( FMFileManagerException.OP_READ, "read fails: retry limit exceeded"));
 									}
 
 									if ( DEBUG_VERBOSE )
@@ -338,7 +335,7 @@ FMFileAccessLinear
 									try{
 										Thread.sleep( READ_RETRY_DELAY*loop );
 									}catch( InterruptedException e ){
-										throw( new FMFileManagerException( "read fails: interrupted" ));
+										throw( new FMFileManagerException( FMFileManagerException.OP_READ, "read fails: interrupted" ));
 									}
 
 								}
@@ -353,7 +350,7 @@ FMFileAccessLinear
 								loop++;
 								if ( loop == READ_RETRY_LIMIT ){
 									Debug.out( "FMFile::read: zero length read - abandoning" );
-									throw( new FMFileManagerException( "read fails: retry limit exceeded"));
+									throw( new FMFileManagerException( FMFileManagerException.OP_READ, "read fails: retry limit exceeded"));
 								}
 								if ( DEBUG_VERBOSE )
 									Debug.out( "FMFile::read: zero length read - retrying" );
@@ -361,7 +358,7 @@ FMFileAccessLinear
 								try{
 									Thread.sleep( READ_RETRY_DELAY*loop );
 								}catch( InterruptedException e ){
-									throw( new FMFileManagerException( "read fails: interrupted" ));
+									throw( new FMFileManagerException( FMFileManagerException.OP_READ, "read fails: interrupted" ));
 								}
 
 							}
@@ -393,7 +390,7 @@ FMFileAccessLinear
 				}
 			}
 
-			throw( new FMFileManagerException( "read fails", e ));
+			throw( new FMFileManagerException( FMFileManagerException.OP_READ, "read failed", e ));
 
 		}finally{
 
@@ -416,7 +413,8 @@ FMFileAccessLinear
 		throws FMFileManagerException
 	{
 		if ( fa == null){
-			throw( new FMFileManagerException( "write fails: raf is null" ));
+			
+			throw( new FMFileManagerException( FMFileManagerException.OP_WRITE, "write failed: accessor is null" ));
 		}
 
 		FileChannel fc = fa.getChannel();
@@ -425,10 +423,10 @@ FMFileAccessLinear
 
 			Debug.out("FileChannel is closed: " + owner.getName());
 
-			throw( new FMFileManagerException( "read - file is closed"));
+			throw( new FMFileManagerException( FMFileManagerException.OP_WRITE, "write failed: file is closed"));
 		}
 
-		AEThread2.setDebug( owner );
+		// AEThread2.setDebug( owner );
 
 		int[]	original_positions = new int[buffers.length];
 
@@ -499,7 +497,7 @@ FMFileAccessLinear
 							loop++;
 							if ( loop == WRITE_RETRY_LIMIT ){
 								Debug.out( "FMFile::write: zero length write - abandoning" );
-								throw( new FMFileManagerException( "write fails: retry limit exceeded"));
+								throw( new FMFileManagerException( FMFileManagerException.OP_WRITE, "write fails: retry limit exceeded"));
 							}
 
 							if ( DEBUG_VERBOSE )
@@ -508,7 +506,7 @@ FMFileAccessLinear
 							try{
 								Thread.sleep( WRITE_RETRY_DELAY*loop );
 							}catch( InterruptedException e ){
-								throw( new FMFileManagerException( "write fails: interrupted" ));
+								throw( new FMFileManagerException( FMFileManagerException.OP_WRITE, "write fails: interrupted" ));
 							}
 						}
 					}
@@ -517,7 +515,7 @@ FMFileAccessLinear
 				if ( DEBUG ){
 					if ( expected_write != actual_write ){
 						Debug.out( "FMFile::write: **** partial write **** failed: expected = " + expected_write + ", actual = " + actual_write );
-						throw( new FMFileManagerException( "write fails: expected write/actual write mismatch" ));
+						throw( new FMFileManagerException( FMFileManagerException.OP_WRITE, "write fails: expected write/actual write mismatch" ));
 					}
 					if ( partial_write && DEBUG_VERBOSE )
 						Debug.out( "FMFile::write: **** partial write **** completed ok" );
@@ -542,7 +540,7 @@ FMFileAccessLinear
 				}
 			}
 
-			throw( new FMFileManagerException( "write fails", e ));
+			throw( new FMFileManagerException( FMFileManagerException.OP_WRITE, "write failed", e ));
 		}
 	}
 

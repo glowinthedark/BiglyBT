@@ -33,7 +33,6 @@ import java.util.Set;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.diskmanager.file.FMFile;
 import com.biglybt.core.diskmanager.file.FMFileManagerException;
-import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.*;
 
@@ -104,16 +103,20 @@ FMFileAccessController
 
 			}else{
 
-				throw( new FMFileManagerException( "Compact storage not supported: no control file available" ));
+				throw( new FMFileManagerException( FMFileManagerException.OP_OPEN,"Compact storage not supported: no control file available" ));
 			}
 
 		}else{
 
-			if ( FileUtil.newFile( control_dir, controlFileName ).exists()){
+			if ( FMFileAccessCompact.isCompact(
+					owner,
+					owner.getOwner().getTorrentFile(),
+					control_dir, controlFileName,
+					_target_type )){
 
 				type = FMFile.FT_COMPACT;
 
-			}else if ( FileUtil.newFile( control_dir, controlFileName + REORDER_SUFFIX ).exists()){
+			}else if ( FileUtil.existsWithCache( control_dir, controlFileName + REORDER_SUFFIX )){
 
 				type = _target_type==FMFile.FT_PIECE_REORDER?FMFile.FT_PIECE_REORDER:FMFile.FT_PIECE_REORDER_COMPACT;
 
@@ -123,7 +126,7 @@ FMFileAccessController
 
 					File	target_file = owner.getLinkedFile();
 
-					if ( target_file.exists()){
+					if ( FileUtil.exists( target_file )){
 
 						FMFileAccessPieceReorderer.recoverConfig(
 							owner.getOwner().getTorrentFile(),
@@ -141,6 +144,8 @@ FMFileAccessController
 
 			if ( type == FMFile.FT_LINEAR ){
 
+					// note, this will be converted to compact if required below...
+				
 				file_access = new FMFileAccessLinear( owner );
 
 			}else if ( type == FMFile.FT_COMPACT ){
@@ -223,7 +228,7 @@ FMFileAccessController
 				return;
 			}
 
-			throw( new FMFileManagerException( "Conversion to/from piece-reorder not supported" ));
+			throw( new FMFileManagerException( FMFileManagerException.OP_OPEN, "Conversion to/from piece-reorder not supported (current=" + type + ", target=" + target_type + ")" ));
 		}
 
 		File	file = owner.getLinkedFile();
@@ -247,7 +252,7 @@ FMFileAccessController
 										new FMFileAccessLinear( owner ));
 			}
 
-			if ( file.exists()){
+			if ( FileUtil.exists( file )){
 
 				fa = FileUtil.newFileAccessor( file, FMFileImpl.WRITE_ACCESS_MODE);
 
@@ -343,7 +348,7 @@ FMFileAccessController
 
 			Debug.printStackTrace( e );
 
-			throw( new FMFileManagerException( "convert fails", e ));
+			throw( new FMFileManagerException( FMFileManagerException.OP_OPEN, "convert fails", e ));
 
 		}finally{
 
@@ -361,7 +366,7 @@ FMFileAccessController
 
 							ok	= false;
 
-							throw( new FMFileManagerException( "convert fails", e ));
+							throw( new FMFileManagerException( FMFileManagerException.OP_OPEN, "convert fails", e ));
 						}
 					}
 				}
@@ -396,34 +401,10 @@ FMFileAccessController
 
 		}else{
 
-			TOTorrent	torrent = tf.getTorrent();
+			int	file_index = tf.getIndex();
 
-			TOTorrentFile[]	files = torrent.getFiles();
-
-			int	file_index = -1;
-
-			for (int i=0;i<files.length;i++){
-
-				if ( files[i] == tf ){
-
-					file_index = i;
-
-					break;
-				}
-			}
-
-			if ( file_index == -1 ){
-
-				Debug.out("File '" + owner.getName() + "' not found in torrent!" );
-
-				controlFileName = null;
-				control_dir 	= null;
-
-			}else{
-
-				control_dir 	= owner.getOwner().getControlFileDir( );
-				controlFileName =  StringInterner.intern("fmfile" + file_index + ".dat");
-			}
+			control_dir 	= owner.getOwner().getControlFileDir( );
+			controlFileName = "fmfile" + file_index + ".dat";
 		}
 	}
 
@@ -557,7 +538,7 @@ FMFileAccessController
 		
 			throws FileNotFoundException
 		{
-			if ( enable_sparse_files && !file.exists()){
+			if ( enable_sparse_files && !FileUtil.exists( file )){
 				
 				try{
 					Set<OpenOption>	options = new HashSet<>();
@@ -633,6 +614,13 @@ FMFileAccessController
 			throws IOException
 		{
 			raf.close();
+		}
+		
+		@Override
+		public String 
+		getString()
+		{
+			return( "raf" );
 		}
 	}
 	
@@ -714,6 +702,13 @@ FMFileAccessController
 			throws IOException
 		{
 			fc.close();
+		}
+		
+		@Override
+		public String 
+		getString()
+		{
+			return( "fc" );
 		}
 	}
 }

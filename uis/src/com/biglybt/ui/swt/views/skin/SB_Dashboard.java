@@ -23,6 +23,8 @@ import java.util.*;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
+import org.eclipse.swt.custom.CTabFolder2Adapter;
+import org.eclipse.swt.custom.CTabFolderEvent;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.dnd.Clipboard;
@@ -42,7 +44,10 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.*;
 import com.biglybt.pifimpl.local.PluginInitializer;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
+import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfoListener;
+import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfoManager;
 import com.biglybt.ui.mdi.*;
+import com.biglybt.ui.skin.SkinConstants;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.SimpleTextEntryWindow;
 import com.biglybt.ui.swt.Utils;
@@ -54,14 +59,21 @@ import com.biglybt.ui.swt.pif.UISWTInstance;
 import com.biglybt.ui.swt.pif.UISWTView;
 import com.biglybt.ui.swt.pif.UISWTViewEvent;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
+import com.biglybt.ui.swt.pifimpl.UISWTViewCore;
 import com.biglybt.ui.swt.pifimpl.UISWTViewCoreEventListener;
 import com.biglybt.ui.swt.shells.GCStringPrinter;
+import com.biglybt.ui.swt.shells.PopOutManager;
 import com.biglybt.ui.swt.shells.main.MainMDISetup;
 import com.biglybt.ui.swt.skin.SWTSkin;
+import com.biglybt.ui.swt.skin.SWTSkinFactory;
 import com.biglybt.ui.swt.skin.SWTSkinObjectContainer;
+import com.biglybt.ui.swt.skin.SWTSkinUtils;
 import com.biglybt.ui.swt.views.IViewAlwaysInitialize;
 import com.biglybt.ui.swt.views.ViewManagerSWT;
 import com.biglybt.ui.swt.views.skin.sidebar.SideBar;
+import com.biglybt.ui.swt.widgets.TabFolderRenderer;
+import com.biglybt.ui.swt.widgets.TabFolderRenderer.Adapter;
+import com.biglybt.ui.swt.widgets.TabFolderRenderer.TabbedEntry;
 import com.biglybt.util.MapUtils;
 
 import com.biglybt.pif.PluginInterface;
@@ -78,272 +90,464 @@ import com.biglybt.pif.ui.menus.MenuManager;
 public class SB_Dashboard
 {
 	private static final String[][] examples = {
-			{ "dashboard.example.1", "d5:itemsld4:_uidi76e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Libraryed4:_uidi81e12:control_typei0e14:event_listenerd4:name43:com.biglybt.ui.swt.views.stats.ActivityViewe2:id9:SpeedView3:mdi6:tabbed7:skin_id25:com.biglybt.ui.skin.skin35:title8:Activityed4:_uidi145e12:control_typei0e14:event_listenerd4:name56:com.aelitis.azureus.plugins.view3d.Plugin3D$ViewListener9:plugin_id6:3dview11:plugin_name7:3D Viewe2:id23:view3d.most.active.name3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title21:3D View (Most Active)ee6:layout28:76,76,145;76,76,145;81,81,818:use_tabsi0e7:weights15:670,325;700,297e" },
-			{ "dashboard.example.2", "d5:itemsld4:_uidi76e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Libraryed4:_uidi96e12:control_typei0e11:data_sourced6:exportd2:dn12:Shares: Sent3:key27:Dashboard: Anonymous Shares7:network3:I2P2:vti2ee8:exporter44:com.biglybt.plugin.net.buddy.BuddyPluginBetae14:event_listenerd4:name41:com.biglybt.plugin.net.buddy.swt.ChatViewe2:id53:Chat_I2P:IRQXG2DCN5QXEZB2EBAW433OPFWW65LTEBJWQYLSMVZQ3:mdi7:sidebar9:parent_id12:ChatOverview7:skin_id25:com.biglybt.ui.skin.skin35:title19:Anon - Shares: Sented4:_uidi100e12:control_typei0e11:data_sourced6:exportd4:anoni1e4:h_cmi1e5:h_dlnl3:I2Pe2:id16:UHQOFCLPP5YEIFRO7:versioni2e2:voi1ee8:exporter50:com.biglybt.core.subs.impl.SubscriptionManagerImple14:event_listenerd4:name49:com.biglybt.ui.swt.subscriptions.SubscriptionViewe2:id111:Subscription_042F84BA33D7C69F5F0BBDF56771D065E56ECE405EF157C8B14389477F6260F62062DFBF5EC5FA2E4904AC0C361F8243923:mdi7:sidebar9:parent_id13:Subscriptions7:skin_id25:com.biglybt.ui.skin.skin35:title23:Anon - Shares: Receivedee6:layout48:76,96,-1,-1;76,100,-1,-1;-1,-1,-1,-1;-1,-1,-1,-17:weights15:672,325;500,500e" },
-			{ "dashboard.example.3", "d5:itemsld4:_uidi76e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Libraryed4:_uidi103e12:control_typei0e14:event_listenerd4:name39:com.biglybt.ui.swt.views.PeersSuperViewe2:id12:AllPeersView3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin35:title9:All Peersed4:_uidi104e12:control_typei0e2:id8:Activity3:mdi7:sidebar9:parent_id11:header.vuze7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref8:activity5:title13:Notificationsed4:_uidi105e12:control_typei0e2:id12:ChatOverview3:mdi7:sidebar9:parent_id16:header.discovery7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref9:chatsview5:title13:Chat Overviewed4:_uidi106e12:control_typei0e2:id14:RelatedContent3:mdi7:sidebar9:parent_id16:header.discovery7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:rcmview5:title17:Swarm Discoveriesed4:_uidi107e12:control_typei0e14:event_listenerd4:name35:com.biglybt.ui.swt.views.ConfigViewe2:id10:ConfigView3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title7:Optionsed4:_uidi108e12:control_typei0e14:event_listenerd4:name40:com.biglybt.ui.swt.views.stats.StatsViewe2:id9:StatsView3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title10:Statisticsee6:layout188:76,103,104,105,106,107,108;76,103,104,105,106,107,108;76,103,104,105,106,107,108;76,103,104,105,106,107,108;76,103,104,105,106,107,108;76,103,104,105,106,107,108;76,103,104,105,106,107,1088:use_tabsi1e7:weights0:e" },
-	};
+			// examples are bencoded - grab from stdout when using right-click "export to clipboard" (actual export is json)
+			
+		{ "dashboard.example.1", "d5:itemsld4:_uidi173e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Library8:title_id15:sidebar.Libraryed4:_uidi175e12:control_typei0e11:data_source17:TransferStatsView14:event_listenerd4:name43:com.biglybt.ui.swt.views.stats.ActivityViewe2:id9:SpeedView3:mdi6:tabbed7:skin_id25:com.biglybt.ui.skin.skin35:title8:Activity8:title_id20:SpeedView.title.fulled4:_uidi177e12:control_typei0e14:event_listenerd4:name56:com.aelitis.azureus.plugins.view3d.Plugin3D$ViewListener9:plugin_id6:3dview11:plugin_name7:3D Viewe2:id23:view3d.most.active.name3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title21:3D View (Most Active)8:title_id23:view3d.most.active.nameee6:layout35:173,173,177;173,173,177;175,175,1758:use_tabsi0e7:weights15:686,309;678,321e" },
+ 		{ "dashboard.example.2", "d5:itemsld4:_uidi178e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Library8:title_id15:sidebar.Libraryed4:_uidi181e12:control_typei0e11:data_sourced6:exportd4:anoni1e4:h_cmi1e5:h_dlnl3:I2Pe2:id16:UHQOFCLPP5YEIFRO7:versioni2e2:voi1ee8:exporter50:com.biglybt.core.subs.impl.SubscriptionManagerImple14:event_listenerd4:name49:com.biglybt.ui.swt.subscriptions.SubscriptionViewe2:id111:Subscription_042F84BA33D7C69F5F0BBDF56771D065E56ECE405EF157C8B14389477F6260F62062DFBF5EC5FA2E4904AC0C361F8243923:mdi7:sidebar9:parent_id13:Subscriptions7:skin_id25:com.biglybt.ui.skin.skin35:title23:Anon - Shares: Receiveded4:_uidi182e12:control_typei0e11:data_sourced6:exportd2:dn12:Shares: Sent3:key27:Dashboard: Anonymous Shares7:network3:I2P2:vti2ee8:exporter44:com.biglybt.plugin.net.buddy.BuddyPluginBetae14:event_listenerd4:name41:com.biglybt.plugin.net.buddy.swt.ChatViewe2:id53:Chat_I2P:IRQXG2DCN5QXEZB2EBAW433OPFWW65LTEBJWQYLSMVZQ3:mdi7:sidebar9:parent_id12:ChatOverview7:skin_id25:com.biglybt.ui.skin.skin35:title19:Anon - Shares: Sentee6:layout35:178,182,182;178,181,181;178,181,1818:use_tabsi0e7:weights15:713,284;200,200e" },
+		{ "dashboard.example.3", "d5:itemsld4:_uidi183e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Library8:title_id15:sidebar.Libraryed4:_uidi184e12:control_typei0e14:event_listenerd4:name39:com.biglybt.ui.swt.views.PeersSuperViewe2:id12:AllPeersView3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin35:title9:All Peers8:title_id23:AllPeersView.title.fulled4:_uidi185e12:control_typei0e2:id8:Activity3:mdi7:sidebar9:parent_id11:header.vuze7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref8:activity5:title13:Notifications8:title_id16:sidebar.Activityed4:_uidi192e12:control_typei0e2:id12:ChatOverview3:mdi7:sidebar9:parent_id16:header.discovery7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref9:chatsview5:title13:Chat Overview8:title_id18:chats.view.headinged4:_uidi193e12:control_typei0e2:id14:RelatedContent3:mdi7:sidebar9:parent_id16:header.discovery7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:rcmview5:title17:Swarm Discoveries8:title_id25:RelatedContent.title.fulled4:_uidi194e12:control_typei0e14:event_listenerd4:name35:com.biglybt.ui.swt.views.ConfigViewe2:id10:ConfigView3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title7:Options8:title_id21:ConfigView.title.fulled4:_uidi195e12:control_typei0e14:event_listenerd4:name40:com.biglybt.ui.swt.views.stats.StatsViewe2:id9:StatsView3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title10:Statistics8:title_id16:Stats.title.fullee6:layout195:183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,1958:use_tabsi1e7:weights0:e" },
+ 	};
 	
 	private DashboardInstance	main_dashboard = new DashboardInstance();
 	
-	private DashboardInstance	sidebar_dashboard = new DashboardInstance( "sidebar" );
+	private DashboardInstance	sidebar_dashboard = new DashboardInstance( "sidebar", true );
+	
+	private DashboardInstance	rightbar_dashboard = new DashboardInstance( "rightbarzzzzz", true );
+	
+	private DashboardInstance	topbar_dashboard = new DashboardInstance( "topbar", true );
 	
 	private final MultipleDocumentInterfaceSWT		mdi;
+	private final boolean							bigly_ui;
 	
 	private MdiEntry mdi_entry;
 		
 	public 
 	SB_Dashboard(
-		final MultipleDocumentInterfaceSWT _mdi ) 
+		MultipleDocumentInterfaceSWT 	_mdi,
+		boolean							_bigly_ui )
 	{
-		mdi		= _mdi;
+		mdi			= _mdi;
+		bigly_ui	= _bigly_ui;
 		
-		main_dashboard.readConfig();
-		
-		sidebar_dashboard.readConfig();
-		
-		sidebar_dashboard.setUseTabs( true );
-		
-		if ( !COConfigurationManager.getBooleanParameter( "dashboard.init.0", false )){
+		if ( bigly_ui ){
 			
-			COConfigurationManager.setParameter( "dashboard.init.0", true );
+			main_dashboard.readConfig();
 			
-			main_dashboard.startOfDay();
-		}
-		
-		PluginInterface pi = PluginInitializer.getDefaultInterface();
-		UIManager uim = pi.getUIManager();
-		MenuManager menuManager = uim.getMenuManager();
-		MenuItem menuItem;
+			if ( !COConfigurationManager.getBooleanParameter( "dashboard.init.0", false )){
+				
+				COConfigurationManager.setParameter( "dashboard.init.0", true );
+				
+				main_dashboard.startOfDay();
+			}
 
-		{
-			menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,
-					"menu.add.website");
-	
-			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-	
-			menuItem.addListener(new MenuItemListener() {
-				@Override
-				public void selected(MenuItem menu, Object target) {
+			sidebar_dashboard.readConfig();
 					
-					SimpleTextEntryWindow entryWindow = new SimpleTextEntryWindow(
-							"enter.url", "enter.website");
-	
-					entryWindow.prompt(new UIInputReceiverListener() {
-						@Override
-						public void UIInputReceiverClosed(UIInputReceiver receiver) {
-							if (!receiver.hasSubmittedInput()) {
-								return;
-							}
-	
-							String key = receiver.getSubmittedInput().trim();
-							
-							if ( !key.isEmpty()) {
-								
-								Map<String,Object>	map = new HashMap<>();
-								
-								map.put( "mdi", "sidebar" );
-								map.put( "skin_id", "com.biglybt.ui.skin.skin3" );
-								map.put( "parent_id", "header.dashboard" );
-								map.put( "skin_ref", "main.generic.browse" );
-								map.put( "id", "Browser: " + key );
-								map.put( "title", key );		
-								map.put( "data_source", key );
-								map.put( "control_type", 0L );
-								
-								main_dashboard.addItem( map );
-								
-								main_dashboard.fireChanged();
-							}
-						}});
-				}
-			});
+			rightbar_dashboard.readConfig();
 		}
 		
-		{
-			menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"sep0");
+		topbar_dashboard.readConfig();
+				
+		if ( !COConfigurationManager.getBooleanParameter( "dashboard.init.1", false )){
 			
+			COConfigurationManager.setParameter( "dashboard.init.1", true );
 			
-			menuItem.setStyle( MenuItem.STYLE_SEPARATOR );
+			addTopbarStartupItems( false );
 			
-			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+		}else{
+			
+			if ( !bigly_ui ){
+				
+				addTopbarStartupItems( true );
+			}
 		}
 		
-		{
-			final MenuItem menuExamples = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"label.examples");
-	
-			menuExamples.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-	
-			menuExamples.setStyle( MenuItem.STYLE_MENU );
+		if ( bigly_ui ){
 			
-			menuExamples.addFillListener( 
-				new MenuItemFillListener()
-				{
+			PluginInterface pi = PluginInitializer.getDefaultInterface();
+			
+			UIManager uim = pi.getUIManager();
+			
+			MenuManager menuManager = uim.getMenuManager();
+			
+			MenuItem menuItem;
+	
+			{
+				menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,
+						"menu.add.website");
+		
+				menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+		
+				menuItem.addListener(new MenuItemListener() {
 					@Override
-					public void
-					menuWillBeShown(
-						MenuItem	menu,
-						Object		_target )
-					{
-						menu.removeAllChildItems();
+					public void selected(MenuItem menu, Object target) {
 						
-						for ( final String[] entry: examples ){
-							
-							MenuItem menuItem = menuManager.addMenuItem(menuExamples, entry[0]);
-					
-							menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-					
-							menuItem.addListener(new MenuItemListener() {
-								@Override
-								public void selected(MenuItem menu, Object target) {
-									
-									main_dashboard.importDashboard( entry[1], false );
-									
-									SideBar sidebar = (SideBar) SkinViewManager.getByClass(SideBar.class);
-
-									if ( sidebar != null && sidebar.isVisible()) {
-										
-										sidebar.flipSideBarVisibility();
-									}
+						SimpleTextEntryWindow entryWindow = new SimpleTextEntryWindow(
+								"enter.url", "enter.website");
+		
+						entryWindow.prompt(new UIInputReceiverListener() {
+							@Override
+							public void UIInputReceiverClosed(UIInputReceiver receiver) {
+								if (!receiver.hasSubmittedInput()) {
+									return;
 								}
-							});
+		
+								String key = receiver.getSubmittedInput().trim();
+								
+								if ( !key.isEmpty()) {
+									
+									Map<String,Object>	map = new HashMap<>();
+									
+									map.put( "mdi", "sidebar" );
+									map.put( "skin_id", "com.biglybt.ui.skin.skin3" );
+									map.put( "parent_id", "header.dashboard" );
+									map.put( "skin_ref", "main.generic.browse" );
+									map.put( "id", "Browser: " + key );
+									map.put( "title", key );		
+									map.put( "data_source", key );
+									map.put( "control_type", 0L );
+									
+									main_dashboard.addItem( map );
+									
+									main_dashboard.fireChanged();
+								}
+							}});
+					}
+				});
+			}
+			
+			{
+				menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"sep0");
+				
+				
+				menuItem.setStyle( MenuItem.STYLE_SEPARATOR );
+				
+				menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+			}
+			
+			{
+				final MenuItem menuExamples = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"label.examples");
+		
+				menuExamples.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+		
+				menuExamples.setStyle( MenuItem.STYLE_MENU );
+				
+				menuExamples.addFillListener( 
+					new MenuItemFillListener()
+					{
+						@Override
+						public void
+						menuWillBeShown(
+							MenuItem	menu,
+							Object		_target )
+						{
+							menu.removeAllChildItems();
+							
+							for ( final String[] entry: examples ){
+								
+								MenuItem menuItem = menuManager.addMenuItem(menuExamples, entry[0]);
+						
+								menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+						
+								menuItem.addListener(new MenuItemListener() {
+									@Override
+									public void selected(MenuItem menu, Object target) {
+										
+										main_dashboard.importDashboard( entry[1], false );
+										
+										SideBar sidebar = (SideBar) SkinViewManager.getByClass(SideBar.class);
+	
+										if ( sidebar != null && sidebar.isVisible()) {
+											
+											sidebar.flipSideBarVisibility();
+										}
+									}
+								});
+							}
+						}
+					});
+			}
+			
+			{
+				menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"menu.export.to.clip");
+		
+				menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+		
+				menuItem.addListener(new MenuItemListener() {
+					@Override
+					public void selected(MenuItem menu, Object target) {
+						
+						String data = main_dashboard.exportDashboard();
+						
+						Clipboard cb = new Clipboard(Utils.getDisplay());
+						
+						try {
+						
+							cb.setContents(
+								  new Object[] {data },
+								  new Transfer[] {TextTransfer.getInstance()});
+							
+						}finally {
+							cb.dispose();
 						}
 					}
 				});
-		}
+			}
+			
+			{
+				menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"menu.import.from.clip");
 		
-		{
-			menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"menu.export.to.clip");
-	
-			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-	
-			menuItem.addListener(new MenuItemListener() {
-				@Override
-				public void selected(MenuItem menu, Object target) {
-					
-					String data = main_dashboard.exportDashboard();
-					
-					Clipboard cb = new Clipboard(Utils.getDisplay());
-					
-					try {
-					
-						cb.setContents(
-							  new Object[] {data },
-							  new Transfer[] {TextTransfer.getInstance()});
-						
-					}finally {
-						cb.dispose();
-					}
-				}
-			});
-		}
+				menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
 		
-		{
-			menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"menu.import.from.clip");
-	
-			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-	
-			menuItem.addListener(new MenuItemListener() {
-				@Override
-				public void selected(MenuItem menu, Object target) {
-					
-					Clipboard 		cb = new Clipboard( Utils.getDisplay());
-					
-					try {
-						TextTransfer 	transfer = TextTransfer.getInstance();
-	
-						String data = (String) cb.getContents(transfer);
+				menuItem.addListener(new MenuItemListener() {
+					@Override
+					public void selected(MenuItem menu, Object target) {
 						
-						if ( data != null && !data.isEmpty()) {
+						Clipboard 		cb = new Clipboard( Utils.getDisplay());
+						
+						try {
+							TextTransfer 	transfer = TextTransfer.getInstance();
+		
+							String data = (String) cb.getContents(transfer);
 							
-							main_dashboard.importDashboard( data, true );
+							if ( data != null && !data.isEmpty()) {
+								
+								main_dashboard.importDashboard( data, true );
+							}
+						}finally {
+						
+							cb.dispose();
 						}
-					}finally {
-					
-						cb.dispose();
 					}
-				}
-			});
-		}
-		
-		{
-			menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"sep1");
+				});
+			}
 			
-			
-			menuItem.setStyle( MenuItem.STYLE_SEPARATOR );
-			
-			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-		}
-		
-		{
-			MenuItem resetItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,
-					"Button.reset");
-	
-			resetItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-	
-			resetItem.setStyle( MenuItem.STYLE_MENU );
-
-			MenuItem resetDashsboard = menuManager.addMenuItem( resetItem, "sidebar.header.dashboard");
-			
-			resetDashsboard.addListener(new MenuItemListener() {
-				@Override
-				public void selected(MenuItem menu, Object target) {
-					
-					main_dashboard.reset();
-				}
-			});
-			
-			MenuItem resetSidebar= menuManager.addMenuItem( resetItem, "label.sidebar");
-			
-			resetSidebar.addListener(new MenuItemListener() {
-				@Override
-				public void selected(MenuItem menu, Object target) {
-					
-					sidebar_dashboard.clear();
-				}
-			});
-		}
-		
-		{		
-			menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"sep2");
-		
-			menuItem.setStyle( MenuItem.STYLE_SEPARATOR );
-		
-			menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
-		}		
-		
-		sidebar_dashboard.addAndFireListener(
-			new DashboardListener(){
+			{
+				menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"sep1");
 				
-				private final String	VIEW_ID = "SideBarDashboard";
-						
-				private boolean registered;
 				
-				@Override
-				public void itemsChanged(){
-					ViewManagerSWT vi = ViewManagerSWT.getInstance();
-
-					if ( sidebar_dashboard.getItemCount() > 0 ){
+				menuItem.setStyle( MenuItem.STYLE_SEPARATOR );
+				
+				menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+			}
+			
+			{
+				MenuItem resetItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,
+						"Button.reset");
+		
+				resetItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+		
+				resetItem.setStyle( MenuItem.STYLE_MENU );
+	
+				MenuItem resetDashsboard = menuManager.addMenuItem( resetItem, "sidebar.header.dashboard");
+				
+				resetDashsboard.addListener(new MenuItemListener() {
+					@Override
+					public void selected(MenuItem menu, Object target) {
 						
-						if ( !registered ){
-							
-							vi.registerView(
-								UISWTInstance.VIEW_SIDEBAR_AREA,
-								new UISWTViewBuilderCore(VIEW_ID,
-										null, SideBarDashboard.class));
-							
-							registered = true;
-						}
-					}else{
+						main_dashboard.reset();
+					}
+				});
+				
+				MenuItem resetTopbar= menuManager.addMenuItem( resetItem, "label.topbar");
+				
+				resetTopbar.addListener(new MenuItemListener() {
+					@Override
+					public void selected(MenuItem menu, Object target) {
+											
+						addTopbarStartupItems( false );
+					}
+				});
+				
+				MenuItem resetSidebar= menuManager.addMenuItem( resetItem, "label.sidebar");
+				
+				resetSidebar.addListener(new MenuItemListener() {
+					@Override
+					public void selected(MenuItem menu, Object target) {
 						
-						if ( registered ){
+						sidebar_dashboard.clear();
+					}
+				});
+				
+				MenuItem resetRightbar= menuManager.addMenuItem( resetItem, "label.rightbar");
+				
+				resetRightbar.addListener(new MenuItemListener() {
+					@Override
+					public void selected(MenuItem menu, Object target) {
+						
+						rightbar_dashboard.clear();
+					}
+				});
+			}
+			
+			{		
+				menuItem = menuManager.addMenuItem("sidebar." + MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD,	"sep2");
+			
+				menuItem.setStyle( MenuItem.STYLE_SEPARATOR );
+			
+				menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
+			}		
+			
+			sidebar_dashboard.addAndFireListener(
+				new DashboardListener(){
+					
+					private final String	VIEW_ID = "SideBarDashboard";
 							
-							vi.unregisterView( UISWTInstance.VIEW_SIDEBAR_AREA, VIEW_ID );
+					private boolean registered;
+					
+					@Override
+					public void itemsChanged(){
+						ViewManagerSWT vi = ViewManagerSWT.getInstance();
+	
+						if ( sidebar_dashboard.getItemCount() > 0 ){
 							
-							registered = false;
+							if ( !registered ){
+								
+								vi.registerView(
+									UISWTInstance.VIEW_SIDEBAR_AREA,
+									new UISWTViewBuilderCore(VIEW_ID,
+											null, SideBarDashboard.class));
+								
+								registered = true;
+							}
+						}else{
+							
+							if ( registered ){
+								
+								vi.unregisterView( UISWTInstance.VIEW_SIDEBAR_AREA, VIEW_ID );
+								
+								registered = false;
+							}
 						}
 					}
+				});
+			
+			rightbar_dashboard.addAndFireListener(
+					new DashboardListener()
+					{	
+						private final String	VIEW_ID = "RightBarDashboard";
+					
+						private boolean	first_time = true;
+						
+						private boolean registered;
+						
+						@Override
+						public void 
+						itemsChanged()
+						{
+							SWTSkin skin = SWTSkinFactory.getInstance();
+	
+							ViewManagerSWT vi = ViewManagerSWT.getInstance();
+	
+							if ( rightbar_dashboard.getItemCount() > 0 ){
+								
+								if ( !registered ){
+									
+									vi.registerView(
+										UISWTInstance.VIEW_RIGHTBAR_AREA,
+										new UISWTViewBuilderCore(VIEW_ID,
+												null, RightBarDashboard.class));
+									
+									registered = true;
+									
+								}
+									
+									// only force the right-bar visible when a new entry added, not at start of day
+								
+								if ( !first_time ){
+								
+									SWTSkinUtils.setVisibility(skin, SkinConstants.VIEWID_RIGHTBAR + ".visible", SkinConstants.VIEWID_RIGHTBAR, true, true);
+								}
+							}else{
+								
+								if ( registered ){
+									
+									vi.unregisterView( UISWTInstance.VIEW_RIGHTBAR_AREA, VIEW_ID );
+									
+									registered = false;
+								}
+								
+								SWTSkinUtils.setVisibility(skin, SkinConstants.VIEWID_RIGHTBAR + ".visible", SkinConstants.VIEWID_RIGHTBAR, false, true);
+							}
+							
+							first_time = false;
+						}
+					});
+		}
+		
+		topbar_dashboard.addAndFireListener(
+				new DashboardListener()
+				{	
+					private final String	VIEW_ID = "TopBarDashboard";
+				
+					private boolean	first_time = true;
+					
+					private boolean registered;
+					
+					@Override
+					public void 
+					itemsChanged()
+					{
+						SWTSkin skin = SWTSkinFactory.getInstance();
+
+						ViewManagerSWT vi = ViewManagerSWT.getInstance();
+
+						if ( topbar_dashboard.getItemCount() > 0 ){
+							
+							if ( !registered ){
+								
+								vi.registerView(
+									UISWTInstance.VIEW_TOPBAR,
+									new UISWTViewBuilderCore(VIEW_ID,
+											null, TopBarDashboard.class));
+								
+								registered = true;
+								
+							}
+								
+								// only force the right-bar visible when a new entry added, not at start of day
+							
+							if ( !first_time ){
+							
+								SWTSkinUtils.setVisibility(skin, SkinConstants.VIEWID_PLUGINBAR + ".visible", SkinConstants.VIEWID_PLUGINBAR, true, true);
+							}
+						}else{
+							
+							if ( registered ){
+								
+								vi.unregisterView( UISWTInstance.VIEW_TOPBAR, VIEW_ID );
+								
+								registered = false;
+							}
+							
+							SWTSkinUtils.setVisibility(skin, SkinConstants.VIEWID_PLUGINBAR + ".visible", SkinConstants.VIEWID_PLUGINBAR, false, true);
+						}
+						
+						first_time = false;
+					}
+				});
+		
+		ViewTitleInfoManager.addListener(
+			new ViewTitleInfoListener(){
+				
+				@Override
+				public void 
+				viewTitleInfoRefresh(
+					ViewTitleInfo titleInfo)
+				{
+					if ( bigly_ui ){
+					
+						main_dashboard.refresh( titleInfo );
+					
+						sidebar_dashboard.refresh( titleInfo );
+					
+						rightbar_dashboard.refresh( titleInfo );
+					}
+					
+					topbar_dashboard.refresh( titleInfo );
 				}
 			});
+		
+		MessageText.addListener((l1,l2)->{
+			if ( bigly_ui ){
+				
+				main_dashboard.updateLocale();
+			
+				sidebar_dashboard.updateLocale();
+			
+				rightbar_dashboard.updateLocale();
+			}
+			
+			topbar_dashboard.updateLocale();
+		});
 	}
 
 	public void
@@ -369,7 +573,7 @@ public class SB_Dashboard
 		BaseMdiEntry		entry )
 	{
 		Map<String,Object> map = entry.exportStandAlone();
-				
+		
 		sidebar_dashboard.addItem( map );
 		
 		sidebar_dashboard.fireChanged();
@@ -381,6 +585,91 @@ public class SB_Dashboard
 		return( sidebar_dashboard );
 	}
 		
+	public void
+	addItemToRightbar(
+		BaseMdiEntry		entry )
+	{
+		Map<String,Object> map = entry.exportStandAlone();
+				
+		rightbar_dashboard.addItem( map );
+		
+		rightbar_dashboard.fireChanged();
+	}
+
+	public DashboardInstance
+	getRightbarDashboard()
+	{
+		return( rightbar_dashboard );
+	}
+	
+	public void
+	addItemToTopbar(
+		BaseMdiEntry		entry )
+	{
+		Map<String,Object> map = entry.exportStandAlone();
+				
+		topbar_dashboard.addItem( map );
+		
+		topbar_dashboard.fireChanged();
+	}
+
+	public DashboardInstance
+	getTopbarDashboard()
+	{
+		return( topbar_dashboard );
+	}
+	
+	private void
+	addTopbarStartupItems(
+		boolean only_if_all_invisible )
+	{
+		if ( only_if_all_invisible ){
+			
+			int[][] layout = topbar_dashboard.getDashboardLayout();
+			
+			for ( DashboardInstance.DashboardItem item: topbar_dashboard.getItems()){
+				
+				if ( topbar_dashboard.isUIDInLayout( layout, item.getUID())){
+					
+					return;
+				}
+			}
+		}
+		
+		topbar_dashboard.clear();
+
+		String[][] data = {
+				{ "!TableColumn.header.downspeed!", "com.biglybt.ui.swt.views.ViewDownSpeedGraph" },
+				{ "!TableColumn.header.upspeed!", "com.biglybt.ui.swt.views.ViewUpSpeedGraph" },
+				{ "!label.quick.config!", "com.biglybt.ui.swt.views.ViewQuickConfig" },
+				{ "!label.quick.net.info!", "com.biglybt.ui.swt.views.ViewQuickNetInfo" },
+				{ "!label.quick.notifications!", "com.biglybt.ui.swt.views.ViewQuickNotifications" }
+		};
+		
+		List<Map>	items = new ArrayList<>();
+
+		for ( String[] entry: data ){
+		
+			Map<String,Object>	map = new HashMap<>();
+		
+			map.put( "skin_id", "com.biglybt.ui.skin.skin3" );
+			map.put( "title", entry[0] );				
+			map.put( "control_type", 0L );
+			
+			Map<String,Object> listener = new HashMap<>();
+			
+			listener.put( "name", entry[1] );
+			
+			map.put( "event_listener", listener );
+			
+			items.add( map );
+		}
+				
+		topbar_dashboard.addItems( items );
+		
+		topbar_dashboard.fireChanged();
+	}
+	
 	public void
 	dispose()
 	{
@@ -495,24 +784,34 @@ public class SB_Dashboard
 	DashboardInstance
 	{
 		private final String	config_prefix;
+		private final boolean	use_tabs_default;
 		
-		private List<DashboardItem>		items = new ArrayList<>();
+		Composite main_composite;
+		
+		private CopyOnWriteList<DashboardItem>		items = new CopyOnWriteList<>();
 		
 		private boolean	config_dirty;
 		
 		private CopyOnWriteList<DashboardListener>	listeners = new CopyOnWriteList<>();
 		
+		private volatile boolean config_active;
+		
 		private
 		DashboardInstance()
 		{
 			config_prefix = "dashboard";
+			
+			use_tabs_default = false;
 		}
 		
 		private
 		DashboardInstance(
-			String		id )
+			String		_id,
+			boolean		_use_tabs_default )
 		{
-			config_prefix = "dashboard." + id;
+			config_prefix = "dashboard." + _id;
+			
+			use_tabs_default = _use_tabs_default;
 		}
 		
 		private void
@@ -746,6 +1045,12 @@ public class SB_Dashboard
 			return( items.size());
 		}
 
+		private List<DashboardItem>
+		getItems()
+		{
+			return( items.getList());
+		}
+		
 		private void
 		addItem(
 			Map		map )
@@ -784,18 +1089,89 @@ public class SB_Dashboard
 		}
 		
 		private void
+		refresh(
+			ViewTitleInfo		info )
+		{
+			for ( DashboardItem item: items ){
+				
+				item.refresh( info );
+			}
+		}
+		
+		private void
+		updateLocale()
+		{
+			Utils.execSWTThread(()->{
+				
+				if ( main_composite == null || main_composite.isDisposed()){
+					
+					return;
+				}
+				
+				updateLocale( main_composite );
+			});
+		}
+		
+		private void
+		updateLocale(
+			Composite	comp )
+		{
+			if ( comp instanceof CTabFolder ){
+				
+				CTabItem[] items = ((CTabFolder)comp).getItems();
+				
+				for ( CTabItem item: items ){
+					
+					String title_id = (String)item.getData( "sb:itemtitleid" );
+					
+					if ( title_id != null ){
+						
+						String new_text = MessageText.getString( title_id );
+						
+						if ( new_text != null ){
+							
+							item.setText( new_text + (item.getText().endsWith( "..." )?"...":"" ));
+						}
+					}
+				}
+			}else if ( comp instanceof Group ){
+				
+				String title_id = (String)comp.getData( "sb:itemtitleid" );
+				
+				if ( title_id != null ){
+					
+					String new_text = MessageText.getString( title_id );
+					
+					if ( new_text != null ){
+						
+						((Group)comp).setText(new_text);
+					}
+				}
+			}
+			
+			Control[] kids = comp.getChildren();
+			
+			for ( Control k: kids ){
+				
+				if ( k instanceof Composite ){
+					
+					updateLocale((Composite)k);
+				}
+			}
+		}
+		private void
 		clear()
 		{
 			List<DashboardItem> copy;
 			
 			synchronized( items ){
 			
-				copy = new ArrayList<>( items );
+				copy = new ArrayList<>( items.getList());
 			}
 			
 			for ( DashboardItem item: copy ){
 					
-				item.remove();
+				item.remove( false );
 			}
 		}
 		
@@ -893,7 +1269,7 @@ public class SB_Dashboard
 		private boolean
 		getUseTabs()
 		{
-			return( COConfigurationManager.getBooleanParameter( config_prefix + ".config.usetabs", false ));
+			return( COConfigurationManager.getBooleanParameter( config_prefix + ".config.usetabs", use_tabs_default ));
 		}
 		
 		private void
@@ -903,6 +1279,116 @@ public class SB_Dashboard
 			COConfigurationManager.setParameter( config_prefix + ".config.usetabs", b );
 		}	
 
+		private void
+		tabSelected(
+			int	folder_id,
+			int	tab_index )
+		{
+			COConfigurationManager.setParameter( config_prefix + ".tab.selection." + folder_id, tab_index );
+		}
+		
+		private int
+		getTabSelection(
+			int	folder_id )
+		{
+			return( COConfigurationManager.getIntParameter( config_prefix + ".tab.selection." + folder_id, 0 ));
+		}
+		
+		private void
+		setupTabFolder(
+			CTabFolder	tf )
+		{
+			tf.setUnselectedCloseVisible( false );
+			
+			tf.addCTabFolder2Listener(new CTabFolder2Adapter() {
+				
+				@Override
+				public void 
+				close(
+					CTabFolderEvent event)
+				{
+					DashboardItem di = (DashboardItem)event.item.getData( "sb:dashboarditem" );
+					
+					if ( di != null ){
+						
+						di.remove( true );
+					}
+				}
+			});
+			
+			TabFolderRenderer renderer = 
+				new TabFolderRenderer(
+					tf, 
+					new Adapter()
+					{
+						@Override
+						public TabbedEntry 
+						getTabbedEntryFromTabItem(
+							CTabItem item )
+						{
+							DashboardItem entry = (DashboardItem)item.getData("sb:tabbedentry" );
+							
+							if ( entry != null ){
+								
+								return( entry );
+							}
+							
+							for ( DashboardItem di: items ){
+								
+								if ( di.item == item ){
+									
+									item.setData( "sb:tabbedentry", di );
+									
+									return( di );
+								}
+							}
+							
+							return( null );
+						}
+					});
+		}
+		
+		private void
+		setupTabItem(
+			CTabItem			tab_item,
+			List<DashboardItem>	visible_items )
+		{
+			tab_item.setShowClose( tab_item.getData("sb:dashboarditem") != null && bigly_ui );
+			
+			DashboardItem main_item = visible_items.get(0);
+			
+			tab_item.setText( main_item.getTitle() + (visible_items.size()>1?"...":""));
+
+			String title_id = main_item.getTitleID();
+			
+			if ( title_id != null ){
+				
+				tab_item.setData( "sb:itemtitleid", title_id );
+			}
+		}
+		
+		private void
+		refreshTabFolder(
+			DashboardItem	di )
+		{
+			Utils.execSWTThread(()->{
+				
+				TabFolderRenderer renderer = (TabFolderRenderer)di.getTabbedEntryItem().getParent().getRenderer();
+				
+				renderer.redraw( di );
+			});
+		}
+		
+		private void
+		refreshTabFolder(
+			CTabFolder	tf,
+			int			index )
+		{
+			TabFolderRenderer renderer = (TabFolderRenderer)tf.getRenderer();
+			
+			renderer.redraw( index );
+		}
+		
 		private void
 		fireChanged()
 		{		
@@ -1000,6 +1486,39 @@ public class SB_Dashboard
 			}
 			
 			return( new_layout );
+		}
+		
+		private boolean
+		removeUIDFromLayout(
+			int[][]		layout,
+			int			uid )
+		{
+			boolean changed = false;
+			
+			for ( int[] row: layout ) {
+				for ( int i=0;i<row.length;i++){
+					if ( row[i] == uid ) {					
+						row[i] = -1;
+						changed = true;
+					}
+				}
+			}
+			return( changed );
+		}
+		
+		private boolean
+		isUIDInLayout(
+			int[][]		layout,
+			int			uid )
+		{
+			for ( int[] row: layout ) {
+				for ( int i=0;i<row.length;i++){
+					if ( row[i] == uid ) {					
+						return( true );
+					}
+				}
+			}
+			return( false );
 		}
 		
 		private int[][]
@@ -1199,6 +1718,8 @@ public class SB_Dashboard
 		build(
 			Composite		dashboard_composite )
 		{
+			main_composite = dashboard_composite;
+			
 			try{
 				building++;
 				
@@ -1212,6 +1733,19 @@ public class SB_Dashboard
 				int[][] layout = getDashboardLayout();
 				
 				layout = compactLayout(layout, 0, 0 );
+				
+				boolean use_tabs = getUseTabs();
+
+				if ( use_tabs ){
+				
+						// hack to ensure that a tab folder is created even when there is only one
+						// item
+					
+					if ( layout.length == 1 && layout[0].length == 1 ){
+						
+						layout = new int[][]{{layout[0][0],-1},{layout[0][0],-1}};
+					}
+				}
 				
 				Map<Integer,DashboardItem>	item_map = new HashMap<>();
 		
@@ -1229,12 +1763,10 @@ public class SB_Dashboard
 					}
 				}
 				
-				boolean use_tabs = getUseTabs();
-				
 				final List<SashForm>	sashes 		= new ArrayList<>();
 				List<Control>			controls	= new ArrayList<>();
 				
-				build( item_map, dashboard_composite, use_tabs, sashes, controls, layout, 0, 0, layout.length, layout.length );
+				build( item_map, null, dashboard_composite, use_tabs, sashes, controls, layout, 0, 0, layout.length, layout.length, new int[1] );
 				
 				int[][]	sash_weights = getSashWeights();
 				
@@ -1261,7 +1793,7 @@ public class SB_Dashboard
 							}
 						}
 						
-						sf.setData( sf_weights.length );
+						sf.setData( "sb:weights", sf_weights.length );
 					}
 				}else{
 						// something's changed
@@ -1272,7 +1804,7 @@ public class SB_Dashboard
 						
 						int[]	weights = sf.getWeights();
 						
-						sf.setData( weights.length );
+						sf.setData( "sb:weights", weights.length );
 					}
 				}
 				
@@ -1302,7 +1834,7 @@ public class SB_Dashboard
 									
 									weights[i] = sf.getWeights();
 									
-									Object	d = sf.getData();
+									Object	d = sf.getData( "sb:weights" );
 									
 									if ( d == null || ((Integer)d) != weights[i].length ){
 										
@@ -1370,7 +1902,7 @@ public class SB_Dashboard
 			
 			int	before = item_map.size();
 			
-			build( item_map, null, false, null, null, layout, 0, 0, layout.length, layout.length );
+			build( item_map, null, null, false, null, null, layout, 0, 0, layout.length, layout.length, new int[1] );
 			
 				// at least one works...
 			
@@ -1380,6 +1912,7 @@ public class SB_Dashboard
 		private List<DashboardItem>
 		build(	
 			Map<Integer,DashboardItem>	item_map,
+			CTabItem					parent_tab_item,
 			Composite					comp,
 			boolean						use_tabs,
 			List<SashForm>				sashes,
@@ -1388,7 +1921,8 @@ public class SB_Dashboard
 			int							x,
 			int							y,
 			int							width,
-			int							height )
+			int							height,
+			int[]						next_tf_id )
 		{		
 			List<DashboardItem> result = new ArrayList<>();
 			
@@ -1416,7 +1950,7 @@ public class SB_Dashboard
 				
 				if ( item != null && comp != null ) {
 					
-					controls.add( build( comp, item, use_tabs ));
+					controls.add( build( parent_tab_item, comp, item, use_tabs ));
 					
 					result.add( item );
 				}
@@ -1460,13 +1994,21 @@ public class SB_Dashboard
 					
 					if ( use_tabs ){
 						
-						CTabFolder tf;
+						CTabFolder 	tf;
+						int			tf_id;
 						
 						if ( comp != null ){
 							tf = new CTabFolder( comp, SWT.TOP );
+							
+							setupTabFolder( tf );
+							
 							tf.setLayoutData( Utils.getFilledFormData());
+							
+							tf_id = next_tf_id[0]++;
+							
 						}else {
-							tf = null;
+							tf 		= null;
+							tf_id	= -1;
 						}
 						
 						int	current = y;
@@ -1483,13 +2025,15 @@ public class SB_Dashboard
 								tab_composite.setLayoutData( Utils.getFilledFormData());
 							}
 							
-							List<DashboardItem> items = build( item_map, tab_composite, use_tabs, sashes, controls, cells, x, current, width, split - current );
+							List<DashboardItem> items = build( item_map, tab_item, tab_composite, use_tabs, sashes, controls, cells, x, current, width, split - current, next_tf_id );
 							
 							if ( items.isEmpty()){
-								tab_item.dispose();
+								if ( tab_item != null ){
+									tab_item.dispose();
+								}
 							}else{
 								if ( tab_item != null ){
-									tab_item.setText( items.get(0).getTitle() + (items.size()>1?"...":""));
+									setupTabItem( tab_item, items );
 								}
 								result.addAll( items );
 							}
@@ -1507,13 +2051,15 @@ public class SB_Dashboard
 							tab_composite.setLayoutData( Utils.getFilledFormData());
 						}
 						
-						List<DashboardItem> items = build( item_map, tab_composite, use_tabs, sashes, controls, cells, x, current, width, height-(current-y));
+						List<DashboardItem> items = build( item_map, tab_item, tab_composite, use_tabs, sashes, controls, cells, x, current, width, height-(current-y), next_tf_id );
 											
 						if ( items.isEmpty()){
-							tab_item.dispose();
+							if ( tab_item != null ){
+								tab_item.dispose();
+							}
 						}else{
 							if ( tab_item != null ){
-								tab_item.setText( items.get(0).getTitle() + (items.size()>1?"...":""));
+								setupTabItem( tab_item, items );
 							}
 							result.addAll( items );
 						}
@@ -1539,7 +2085,11 @@ public class SB_Dashboard
 									}
 								});
 							
-							tf.setSelection( 0 );
+							int sel = Math.min( tf.getItemCount()-1, getTabSelection( tf_id ));
+							
+							tf.setSelection( sel );		
+							
+							refreshTabFolder( tf, sel );
 							
 							tf.addSelectionListener(
 								new SelectionAdapter(){
@@ -1548,13 +2098,20 @@ public class SB_Dashboard
 									public void widgetSelected(SelectionEvent ev){
 										Composite c = (Composite)tf.getSelection().getControl();
 										
-										Object o = c.getData();
+										Object o = c.getData( "sb:reload" );
 										
 										if ( o instanceof Runnable ){
 											
+												// not yet built yet, trigger a reload
+											
 											((Runnable)o).run();
-											c.setData(null);
+											
+											c.setData( "sb:reload", null);
 										}
+										
+										refreshTabFolder( tf, sel );
+										
+										tabSelected( tf_id, tf.getSelectionIndex());
 									}
 								});
 						}
@@ -1579,12 +2136,12 @@ public class SB_Dashboard
 						
 						for ( int split: splits ){
 							
-							result.addAll( build( item_map, sf, use_tabs, sashes, controls, cells, x, current, width, split - current ));
+							result.addAll( build( item_map, null, sf, use_tabs, sashes, controls, cells, x, current, width, split - current, next_tf_id ));
 							
 							current = split;
 						}
 						
-						result.addAll(( build( item_map, sf, use_tabs, sashes, controls, cells, x, current, width, height-(current-y) )));
+						result.addAll(( build( item_map, null, sf, use_tabs, sashes, controls, cells, x, current, width, height-(current-y), next_tf_id )));
 					}
 					
 					done = true;
@@ -1631,13 +2188,21 @@ public class SB_Dashboard
 					
 					if ( use_tabs ) {
 						
-						CTabFolder tf;
+						CTabFolder	tf;
+						int			tf_id;
 						
 						if ( comp != null ){
 							tf = new CTabFolder( comp, SWT.TOP | SWT.NO_BACKGROUND);
+							
+							setupTabFolder( tf );
+							
 							tf.setLayoutData( Utils.getFilledFormData());
+							
+							tf_id = next_tf_id[0]++;
+
 						}else {
-							tf = null;
+							tf 		= null;
+							tf_id	= -1;
 						}
 						
 						int	current = x;
@@ -1654,12 +2219,14 @@ public class SB_Dashboard
 								tab_composite.setLayoutData( Utils.getFilledFormData());
 							}
 							
-							List<DashboardItem> items = build( item_map, tab_composite, use_tabs, sashes, controls, cells, current, y, split - current, height );
+							List<DashboardItem> items = build( item_map, tab_item, tab_composite, use_tabs, sashes, controls, cells, current, y, split - current, height, next_tf_id );
 							if ( items.isEmpty()){
-								tab_item.dispose();
+								if ( tab_item != null ){
+									tab_item.dispose();
+								}
 							}else{
 								if ( tab_item != null ){
-									tab_item.setText( items.get(0).getTitle() + (items.size()>1?"...":""));
+									setupTabItem( tab_item, items );
 								}
 								result.addAll( items );
 							}
@@ -1677,13 +2244,15 @@ public class SB_Dashboard
 							tab_composite.setLayoutData( Utils.getFilledFormData());
 						}
 						
-						List<DashboardItem> items = build( item_map, tab_composite, use_tabs, sashes, controls, cells, current, y, width-(current-x), height );
+						List<DashboardItem> items = build( item_map, tab_item, tab_composite, use_tabs, sashes, controls, cells, current, y, width-(current-x), height, next_tf_id );
 						
 						if ( items.isEmpty()){
-							tab_item.dispose();
+							if ( tab_item != null ){
+								tab_item.dispose();
+							}
 						}else{
 							if ( tab_item != null ){
-								tab_item.setText( items.get(0).getTitle() + (items.size()>1?"...":""));
+								setupTabItem( tab_item, items );
 							}
 							result.addAll( items );
 						}
@@ -1709,7 +2278,11 @@ public class SB_Dashboard
 									}
 								});
 							
-							tf.setSelection( 0 );
+							int sel = Math.min( tf.getItemCount()-1, getTabSelection( tf_id ));
+							
+							tf.setSelection( sel );
+							
+							refreshTabFolder( tf, sel );
 							
 							tf.addSelectionListener(
 								new SelectionAdapter(){
@@ -1718,17 +2291,25 @@ public class SB_Dashboard
 									public void widgetSelected(SelectionEvent ev){
 										Composite c = (Composite)tf.getSelection().getControl();
 										
-										Object o = c.getData();
+										Object o = c.getData( "sb:reload" );
 										
 										if ( o instanceof Runnable ){
 											
+												// not built yet, trigger a reload
+											
 											((Runnable)o).run();
-											c.setData(null);
+											
+											c.setData( "sb:reload", null );
 										}
+										
+										refreshTabFolder( tf, sel );
+										
+										tabSelected( tf_id, tf.getSelectionIndex());
 									}
 								});
 						}
-					}else {
+					}else{
+						
 						SashForm sf;
 						
 						if ( comp != null ){
@@ -1748,12 +2329,12 @@ public class SB_Dashboard
 						
 						for ( int split: splits ){
 		
-							result.addAll((build( item_map, sf, use_tabs, sashes, controls, cells, current, y, split - current, height )));
+							result.addAll((build( item_map, null, sf, use_tabs, sashes, controls, cells, current, y, split - current, height, next_tf_id )));
 							
 							current = split;
 						}
 						
-						result.addAll((build( item_map, sf, use_tabs, sashes, controls, cells, current, y, width-(current-x), height )));
+						result.addAll((build( item_map, null, sf, use_tabs, sashes, controls, cells, current, y, width-(current-x), height, next_tf_id )));
 					}
 				}
 			}
@@ -1771,11 +2352,12 @@ public class SB_Dashboard
 		
 		private Composite
 		build(
-			Composite				sf,
-			final DashboardItem		item,
-			boolean					use_tabs )
-		{
-			Composite g = use_tabs?new Composite( sf, SWT.NULL ):new Group( sf, SWT.NULL );
+			CTabItem			parent_tab_item,
+			Composite			sf,
+			DashboardItem		item,
+			boolean				use_tabs )
+		{			
+			Composite g = use_tabs?new Composite( sf, SWT.NULL ):Utils.createSkinnedGroup( sf, SWT.NULL );
 			
 			g.setLayoutData( Utils.getFilledFormData());
 			
@@ -1783,10 +2365,22 @@ public class SB_Dashboard
 
 			g.setData( Utils.RELAYOUT_UP_STOP_HERE, true );
 			
+			if ( parent_tab_item != null ){
+				
+				parent_tab_item.setData( "sb:dashboarditem", item );
+			}
+			
 			try {
 				if ( g instanceof Group ){
 					
 					((Group)g).setText( item.getTitle());
+					
+					String title_id = item.getTitleID();
+					
+					if ( title_id != null ){
+						
+						g.setData( "sb:itemtitleid", title_id );
+					}
 				}
 				
 				Composite menu_comp = use_tabs?sf:g;
@@ -1813,16 +2407,24 @@ public class SB_Dashboard
 									
 									SWTSkin skin = skinned_comp.getSkin();
 									
-									BaseMdiEntry.importStandAlone(
-										(SWTSkinObjectContainer)skin.getSkinObject( "content-area" ), 
-										item.getState(),
-										this );
+									SWTSkinObjectContainer obj = 
+										BaseMdiEntry.importStandAlone(
+												(SWTSkinObjectContainer)skin.getSkinObject( "content-area" ), 
+												item.getState(),
+												this );
 										
+									if ( obj != null ){
+										
+										sf.setData( "sb:reload", null );
+									}
+									
 									Control c = ((SWTSkinObjectContainer)skin.getSkinObject( "content-area" )).getControl();
 									
 									c.setLayoutData( Utils.getFilledFormData());
 									
 									g.layout( true, true );
+									
+									item.setCurrentTab( parent_tab_item );
 								}
 							}else{
 								
@@ -1831,7 +2433,7 @@ public class SB_Dashboard
 						}
 					};
 					
-				sf.setData( reload_action );
+				sf.setData( "sb:reload", reload_action );
 				
 				itemReload.addSelectionListener(
 					new SelectionAdapter(){
@@ -1853,39 +2455,85 @@ public class SB_Dashboard
 						@Override
 						public void widgetSelected(SelectionEvent arg0){
 							
-							BaseMdiEntry.popoutStandAlone( item.getTitle(), item.getState(), null );
+							PopOutManager.popOutStandAlone( item.getTitle(), item.getState(), null );
 						}
 					});
 				
 				new org.eclipse.swt.widgets.MenuItem( menu, SWT.SEPARATOR );
 				
-				org.eclipse.swt.widgets.MenuItem itemRemove = new org.eclipse.swt.widgets.MenuItem( menu, SWT.PUSH );
+				if ( bigly_ui ){
+					
+					org.eclipse.swt.widgets.MenuItem itemRemove = new org.eclipse.swt.widgets.MenuItem( menu, SWT.PUSH );
+					
+					Messages.setLanguageText(itemRemove, "MySharesView.menu.remove");
+	
+					Utils.setMenuItemImage(itemRemove, "delete");
+					
+					itemRemove.addSelectionListener(
+						new SelectionAdapter(){
+						
+							@Override
+							public void widgetSelected(SelectionEvent arg0){
+								item.remove( false );
+							}
+						});
+					
+					new org.eclipse.swt.widgets.MenuItem( menu, SWT.SEPARATOR );
+				}
 				
-				Messages.setLanguageText(itemRemove, "MySharesView.menu.remove");
+				org.eclipse.swt.widgets.MenuItem itemConfig = new org.eclipse.swt.widgets.MenuItem( menu, SWT.PUSH );
+				
+				Messages.setLanguageText(itemConfig, "device.configure");
 
-				Utils.setMenuItemImage(itemRemove, "delete");
+				Utils.setMenuItemImage(itemConfig, "image.sidebar.cog" );
 				
-				itemRemove.addSelectionListener(
+				itemConfig.addSelectionListener(
 					new SelectionAdapter(){
 					
 						@Override
 						public void widgetSelected(SelectionEvent arg0){
-							item.remove();
+							
+							showConfig();
 						}
 					});
 				
 				menu_comp.setMenu( menu );
 				
+				if ( parent_tab_item == null ){
+					menu_comp.addListener( SWT.MouseDoubleClick, (ev)->{
+						PopOutManager.popOutStandAlone( item.getTitle(), item.getState(), null );
+					});
+				}else{
+					
+					CTabFolder folder = parent_tab_item.getParent();
+					
+					folder.addListener( SWT.MouseDoubleClick, (ev)->{
+						if ( folder.getItem( new Point( ev.x, ev.y )) == parent_tab_item ){
+							
+							PopOutManager.popOutStandAlone( item.getTitle(), item.getState(), null );
+						}
+					});
+				}
+				
 				SkinnedComposite skinned_comp =	new SkinnedComposite( g );
 				
 				SWTSkin skin = skinned_comp.getSkin();
 				
-				BaseMdiEntry.importStandAlone((SWTSkinObjectContainer)skin.getSkinObject( "content-area" ), item.getState(), reload_action );
+				SWTSkinObjectContainer imported = BaseMdiEntry.importStandAlone((SWTSkinObjectContainer)skin.getSkinObject( "content-area" ), item.getState(), reload_action );
 					
+				if ( imported != null ){
+					
+						// built OK, remove 
+					
+					sf.setData( "sb:reload", null );
+				}
+				
 				Control c = ((SWTSkinObjectContainer)skin.getSkinObject( "content-area" )).getControl();
 				
 				c.setLayoutData( Utils.getFilledFormData());
 					
+				item.setCurrentTab( parent_tab_item );
+
 				c.addListener(
 					SWT.Show,
 					new Listener(){
@@ -1893,6 +2541,8 @@ public class SB_Dashboard
 						@Override
 						public void handleEvent(Event arg0){
 							g.layout( true, true );
+							
+							item.setCurrentTab( parent_tab_item );
 						}
 					});
 			}catch( Throwable e ) {
@@ -1906,7 +2556,19 @@ public class SB_Dashboard
 		private void
 		showConfig()
 		{
-			new DBConfigWindow( new ArrayList<DashboardItem>( items ));
+			if ( config_active ){
+				
+				return;
+			}
+			
+			config_active = true;
+			
+			DBConfigWindow config = new DBConfigWindow( new ArrayList<DashboardItem>( items.getList()));
+			
+			config.addCloseListener(()->{
+			
+				config_active = false;
+			});
 		}
 		
 		private class
@@ -1929,6 +2591,8 @@ public class SB_Dashboard
 			int[][] 			mapping;
 			Composite[][] 		cells;
 	
+			List<Runnable> listeners = new ArrayList<>();
+			
 			private
 			DBConfigWindow(
 				List<DashboardItem>		_items )
@@ -2023,7 +2687,7 @@ public class SB_Dashboard
 			    gridData.horizontalSpan = 2;
 			    cButtons.setLayoutData(gridData);
 			    GridLayout layoutButtons = new GridLayout();
-			    layoutButtons.numColumns = 5;
+			    layoutButtons.numColumns = 6;
 			    cButtons.setLayout(layoutButtons);
 	
 			    List<Button> buttons = new ArrayList<>();
@@ -2046,6 +2710,26 @@ public class SB_Dashboard
 			    	  }
 			    	  
 			    	  buildGrid();
+			    	  
+			    	  shell.layout( true, true );
+			      }
+			    });
+			    
+			    Button btnClear = new Button(cButtons,SWT.PUSH);
+			    buttons.add( btnClear );
+			    gridData = new GridData();
+			    gridData.horizontalAlignment = GridData.END;
+			    btnClear.setLayoutData(gridData);
+			    Messages.setLanguageText(btnClear,"Button.clear");
+			    btnClear.addListener(SWT.Selection, new Listener() {
+			      @Override
+			      public void handleEvent(Event e) {
+			      
+			    	  existing_mapping = new int[0][0];
+			    	 			    	  
+			    	  buildGrid();
+			    	  
+			    	  btnSave.setEnabled( false );
 			    	  
 			    	  shell.layout( true, true );
 			      }
@@ -2113,10 +2797,27 @@ public class SB_Dashboard
 			    
 			    Utils.centreWindow( shell );
 	
+			    shell.addListener( SWT.Dispose, (ev)->{
+			    	
+			    	for ( Runnable r: listeners ){
+			    		try{
+			    			r.run();
+			    		}catch( Throwable e ){
+			    			Debug.out( e );
+			    		}
+			    	}
+			    });
+			    
 			    shell.open();
 			}
 			
-		
+			private void
+			addCloseListener(
+				Runnable	r )
+			{
+				listeners.add( r );
+			}
+			
 			private int
 			buildGrid()
 			{
@@ -2255,8 +2956,12 @@ public class SB_Dashboard
 		
 		public class
 		DashboardItem
+			implements TabFolderRenderer.TabbedEntry
 		{
 			private Map<String,Object>		map;
+			
+			private CTabItem		item;
+			private ViewTitleInfo	title_info;
 			
 			private
 			DashboardItem(
@@ -2285,9 +2990,59 @@ public class SB_Dashboard
 			}
 			
 			public String
+			getTitleID()
+			{
+				String title_id = (String)map.get( "title_id" );
+				
+				if ( title_id == null ){
+					
+					String title = (String)map.get( "title" );
+					
+					if ( title.startsWith( "!" ) && title.endsWith( "!" )){
+						
+						title_id = title.substring( 1, title.length()-1 );
+					}
+				}
+				
+				if ( title_id != null ){
+					
+					if ( MessageText.getString( title_id ) != null ){
+						
+						return( title_id );
+					}
+				}
+				
+				return( null );
+			}
+			
+			public String
 			getTitle()
 			{
-				return((String)map.get( "title" ));
+				String title_id = (String)map.get( "title_id" );
+				
+				if ( title_id != null ){
+					
+					String t = MessageText.getString( title_id );
+					
+					if ( t != null ){
+						
+						return( t );
+					}
+				}
+				
+				String title = (String)map.get( "title" );
+				
+				if ( title.startsWith( "!" ) && title.endsWith( "!" )){
+					
+					String t = MessageText.getString( title.substring( 1, title.length()-1 ));
+					
+					if ( t != null ){
+						
+						title = t;
+					}
+				}
+				
+				return( title );
 			}
 			
 			public Map<String,Object>
@@ -2297,14 +3052,114 @@ public class SB_Dashboard
 			}
 			
 			public void
-			remove()
+			setCurrentTab(
+				CTabItem		_item )
+			{
+				item	= _item;
+				
+				title_info = null;
+				
+				if ( item == null ){
+					
+					return;
+				}
+				
+				Control[] parent = new Control[]{ item.getControl()};
+				
+				LinkedList<Control[]> controls = new LinkedList<>();
+				
+				controls.add( parent );
+				
+				while( !controls.isEmpty()){
+				
+					Control[] cs = controls.removeFirst();
+					
+					for ( Control c: cs ){
+						
+						UISWTView view = (UISWTView)c.getData( "UISWTView" );
+						
+						if ( view instanceof UISWTViewCore ){
+								
+							title_info = ((UISWTViewCore)view).getViewTitleInfo();
+							
+							if ( title_info != null ){
+								
+								break;
+							}
+						}
+						
+						if ( c instanceof ViewTitleInfo ){
+							
+							title_info = (ViewTitleInfo)c;
+							
+							break;
+						}
+						
+						if ( c instanceof Composite ){
+							
+							controls.add(((Composite)c).getChildren());
+						}
+					}
+				}
+			}
+			
+			
+			private void
+			refresh(
+				ViewTitleInfo		info )
+			{
+				if ( info == title_info ){
+					
+					refreshTabFolder( this );
+				}
+			}
+			
+			@Override
+			public CTabItem 
+			getTabbedEntryItem()
+			{
+				return( item );
+			}
+			
+			public ViewTitleInfo 
+			getTabbedEntryViewTitleInfo()
+			{
+				return( title_info );
+			}
+			
+			public List<TabFolderRenderer.TabbedEntryVitalityImage> 
+			getTabbedEntryVitalityImages()
+			{
+				return( new ArrayList<>());
+			};
+			
+			@Override
+			public boolean 
+			isTabbedEntryActive()
+			{
+				return( true );
+			}
+			
+			public void
+			remove(
+				boolean already_disposed )
 			{
 				synchronized( items ) {
 					
 					items.remove( this );
+				
+					int[][] layout = getDashboardLayout();
+					
+					if ( removeUIDFromLayout( layout, getUID())){
+											
+						setDashboardLayout( layout, items.size(), true );
+					}			
 				}
 				
-				fireChanged();
+				if ( items.size() == 0 || !already_disposed ){
+				
+					fireChanged();
+				}
 			}
 		}		
 	}
@@ -2313,7 +3168,7 @@ public class SB_Dashboard
 	SideBarDashboard
 		implements 
 			UISWTViewCoreEventListener, 
-			IViewAlwaysInitialize,		// need this otherwise if Bigly starts 
+			IViewAlwaysInitialize,
 			DashboardListener
 	{
 		final SB_Dashboard db = MainMDISetup.getSb_dashboard();
@@ -2365,6 +3220,160 @@ public class SB_Dashboard
 					sb.build( comp );
 					
 					sb.addListener( this );
+
+					break;
+				}
+				case UISWTViewEvent.TYPE_LANGUAGEUPDATE:{
+					
+				
+					Messages.updateLanguageForControl( comp );
+	
+					break;
+				}
+				case UISWTViewEvent.TYPE_REFRESH:{
+	
+					break;
+				}
+			}
+
+			return( true );
+		}
+	}
+	
+	public static class
+	RightBarDashboard
+		implements 
+			UISWTViewCoreEventListener, 
+			IViewAlwaysInitialize,
+			DashboardListener
+	{
+		final SB_Dashboard db = MainMDISetup.getSb_dashboard();
+		
+		final DashboardInstance rb = db.getRightbarDashboard();
+	
+		UISWTView 		swtView;
+		Composite		comp;
+		
+		@Override
+		public void 
+		itemsChanged()
+		{
+			if ( rb.getItemCount() == 0 ){
+				
+				swtView.closeView();
+				
+			}else{
+								
+				Utils.disposeComposite( comp, false );
+				
+				rb.build( comp );
+				
+				comp.layout( true, true );
+			}
+		}
+		
+		public boolean 
+		eventOccurred(
+			UISWTViewEvent event)
+		{
+			switch (event.getType()) {
+				case UISWTViewEvent.TYPE_CREATE:{
+					swtView = event.getView();
+	
+					break;
+				}
+				case UISWTViewEvent.TYPE_DESTROY:{
+	
+					rb.removeListener( this );
+					
+					break;
+				}
+				case UISWTViewEvent.TYPE_INITIALIZE:{
+					
+					comp = (Composite)event.getData();
+	
+					comp.setLayout( new FormLayout());
+						
+					rb.build( comp );
+					
+					rb.addListener( this );
+
+					break;
+				}
+				case UISWTViewEvent.TYPE_LANGUAGEUPDATE:{
+					
+				
+					Messages.updateLanguageForControl( comp );
+	
+					break;
+				}
+				case UISWTViewEvent.TYPE_REFRESH:{
+	
+					break;
+				}
+			}
+
+			return( true );
+		}
+	}
+	
+	public static class
+	TopBarDashboard
+		implements 
+			UISWTViewCoreEventListener, 
+			IViewAlwaysInitialize,
+			DashboardListener
+	{
+		final SB_Dashboard db = MainMDISetup.getSb_dashboard();
+		
+		final DashboardInstance rb = db.getTopbarDashboard();
+	
+		UISWTView 		swtView;
+		Composite		comp;
+		
+		@Override
+		public void 
+		itemsChanged()
+		{
+			if ( rb.getItemCount() == 0 ){
+				
+				swtView.closeView();
+				
+			}else{
+								
+				Utils.disposeComposite( comp, false );
+				
+				rb.build( comp );
+				
+				comp.layout( true, true );
+			}
+		}
+		
+		public boolean 
+		eventOccurred(
+			UISWTViewEvent event)
+		{
+			switch (event.getType()) {
+				case UISWTViewEvent.TYPE_CREATE:{
+					swtView = event.getView();
+	
+					break;
+				}
+				case UISWTViewEvent.TYPE_DESTROY:{
+	
+					rb.removeListener( this );
+					
+					break;
+				}
+				case UISWTViewEvent.TYPE_INITIALIZE:{
+					
+					comp = (Composite)event.getData();
+	
+					comp.setLayout( new FormLayout());
+						
+					rb.build( comp );
+					
+					rb.addListener( this );
 
 					break;
 				}

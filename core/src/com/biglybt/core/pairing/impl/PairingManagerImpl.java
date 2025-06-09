@@ -29,6 +29,7 @@ import com.biglybt.core.Core;
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.CoreRunningListener;
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.logging.Logger;
@@ -1259,27 +1260,33 @@ PairingManagerImpl
 									public void
 									run()
 									{
-										Socket socket = new Socket();
-
 										String	result = a_str;
 
-										try{
-											socket.bind( new InetSocketAddress( ia, 0 ));
-
-											socket.connect(  new InetSocketAddress( "www.google.com", 80 ), 10*1000 );
-
-											result += "*";
-
-										}catch( Throwable e ){
-
-										}finally{
+										List<String> domains = NetUtils.getTestDomains();
+										
+										for ( String domain: domains ){
+											
+											Socket socket = new Socket();
+		
 											try{
-												socket.close();
+												socket.bind( new InetSocketAddress( ia, 0 ));
+	
+												socket.connect(  new InetSocketAddress( domain, 80 ), 10*1000 );
+	
+												result += "*";
+	
+												break;
+												
 											}catch( Throwable e ){
+	
+											}finally{
+												try{
+													socket.close();
+												}catch( Throwable e ){
+												}
 											}
-
 										}
-
+										
 										synchronized( local_address_checks ){
 
 											local_address_checks.put( a_str, new Object[]{ new Long(now), result });
@@ -1726,7 +1733,7 @@ PairingManagerImpl
 					setStatus(
 						MessageText.getString(
 							"pairing.status.registered",
-							new String[]{ new SimpleDateFormat().format(new Date( SystemTime.getCurrentTime() ))}));
+							new String[]{ DisplayFormatters.formatDateYMDHM( SystemTime.getCurrentTime())}));
 				}
 			}
 		}catch( Throwable e ){
@@ -1804,7 +1811,7 @@ PairingManagerImpl
 		setStatus(
 				MessageText.getString(
 					"pairing.status.pending",
-					new String[]{ new SimpleDateFormat().format(new Date( target ))}));
+					new String[]{ DisplayFormatters.formatDateYMDHM( target )}));
 
 		COConfigurationManager.setParameter( "pairing.updateoutstanding", true );
 	}

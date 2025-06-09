@@ -23,7 +23,6 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.DisposeEvent;
 import org.eclipse.swt.events.DisposeListener;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 
@@ -42,7 +41,8 @@ import com.biglybt.ui.swt.UIFunctionsSWT;
  */
 public final class ShellFactory
 {
-
+	public static final String NOT_A_GOOD_PARENT = "ShellFactory.NOT_A_GOOD_PARENT";
+	
 	public static Shell createMainShell(int styles) {
 		Shell parent = null;
 
@@ -240,57 +240,7 @@ public final class ShellFactory
 				super.setImages(images);
 		}
 
-		@Override
-		public Point computeSize(int wHint, int hHint) {
-			if (!inSetSize && wHint > 0 && hHint == SWT.DEFAULT) {
-				inSetSize = true;
-				return super.computeSize(wHint, hHint);
-			}
-			return super.computeSize(wHint, hHint);
-		}
-
-		private boolean inSetSize = false;
-
 		public void setAdjustPXforDPI(boolean adjust) {
-			inSetSize = !adjust;
-		}
-
-		@Override
-		public void setSize(int width, int height) {
-			if (inSetSize) {
-				super.setSize(width, height);
-				return;
-			}
-			inSetSize = true;
-			try {
-				super.setSize(width, height);
-			} finally {
-				inSetSize = false;
-			}
-		}
-
-		@Override
-		public void pack() {
-			inSetSize = true;
-			try {
-				super.pack();
-  		} finally {
-  			inSetSize = false;
-  		}
-		}
-
-		@Override
-		public void setSize(Point size) {
-			if (inSetSize) {
-				super.setSize(size);
-				return;
-			}
-			inSetSize = true;
-			try {
-				super.setSize(size);
-			} finally {
-				inSetSize = false;
-			}
 		}
 
 		@Override

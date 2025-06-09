@@ -48,6 +48,22 @@ public class StringListSwtParameter
 	public interface ValueProcessor
 			extends SwtParameterValueProcessor<StringListSwtParameter, String>
 	{
+		public default String
+		getValue(
+			java.util.List<String>	values )
+		{
+			if ( values.isEmpty()){
+				return( null );
+			}else{
+				String result = values.get(0);
+				for ( String v: values.subList( 1, values.size())){
+					if (!v.equals(result)){
+						return( null );
+					}
+				}
+				return( result );
+			}
+		}
 	}
 
 	private Label lblSuffix;
@@ -118,6 +134,8 @@ public class StringListSwtParameter
 
 		if (bUseCombo) {
 			list = new Combo(parent, SWT.SINGLE | SWT.READ_ONLY);
+			// Prevent changing value via scrolling over a Combo
+			list.addListener(SWT.MouseVerticalWheel, event -> event.doit = false);
 		} else {
 			list = new List(parent,
 					SWT.SINGLE | SWT.BORDER | SWT.HORIZONTAL | SWT.VERTICAL) {

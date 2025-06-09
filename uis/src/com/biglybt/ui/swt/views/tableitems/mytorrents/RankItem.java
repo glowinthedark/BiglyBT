@@ -23,6 +23,9 @@
 package com.biglybt.ui.swt.views.tableitems.mytorrents;
 
 import com.biglybt.core.Core;
+
+import java.util.*;
+
 import org.eclipse.swt.graphics.Image;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
@@ -30,12 +33,18 @@ import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerListener;
 import com.biglybt.core.global.GlobalManager;
 import com.biglybt.core.global.GlobalManagerListener;
+import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.torrent.TOTorrent;
+import com.biglybt.core.util.ByteFormatter;
 import com.biglybt.core.util.Debug;
-
+import com.biglybt.core.util.HashWrapper;
 import com.biglybt.core.CoreRunningListener;
 import com.biglybt.core.CoreFactory;
+import com.biglybt.ui.common.table.TableRowCore;
+import com.biglybt.ui.common.table.TableView;
+import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.imageloader.ImageLoader;
-
+import com.biglybt.ui.swt.mainwindow.ClipboardCopy;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.ui.menus.MenuItem;
 import com.biglybt.pif.ui.menus.MenuItemFillListener;
@@ -59,7 +68,7 @@ public class RankItem
        extends CoreTableColumnSWT
        implements TableCellRefreshListener
 {
-	public static final Class DATASOURCE_TYPE = Download.class;
+	public static final Class<Download> DATASOURCE_TYPE = Download.class;
 
 	public static final String COLUMN_ID = "#";
 	private final ParameterListener paramShowIconKeyListener;
@@ -84,8 +93,11 @@ public class RankItem
     CoreFactory.addCoreRunningListener(new CoreRunningListener() {
 			@Override
 			public void coreRunning(Core core) {
-				gmListener = new GMListener();
-				core.getGlobalManager().addListener(gmListener);
+				Utils.getOffOfSWTThread(()->{
+					gmListener = new GMListener();
+						// can block somewhat if global manager saving downloads for example
+					core.getGlobalManager().addListener(gmListener);
+				});
 			}
 		});
  
@@ -112,8 +124,8 @@ public class RankItem
 	  paramShowIconKeyListener = new ParameterListener() {
 		  @Override
 		  public void parameterChanged(String parameterName) {
-			  RankItem.this.invalidateCells();
 			  showIcon = (COConfigurationManager.getBooleanParameter(showIconKey));
+			  RankItem.this.invalidateCells();
 		  }
 	  };
 	  COConfigurationManager.addWeakParameterListener(paramShowIconKeyListener,
@@ -122,16 +134,279 @@ public class RankItem
     ImageLoader imageLoader = ImageLoader.getInstance();
     imgUp = imageLoader.getImage("image.torrentspeed.up");
     imgDown = imageLoader.getImage("image.torrentspeed.down");
+    
+    TableContextMenuItem sep = addContextMenuItem( "menu.set.order.sep", MENU_STYLE_HEADER);
+    sep.setStyle(TableContextMenuItem.STYLE_SEPARATOR);
+    
+	TableContextMenuItem menuSetFromSort = addContextMenuItem(
+			"menu.set.order.from.sort", MENU_STYLE_HEADER);
+	menuSetFromSort.setStyle(TableContextMenuItem.STYLE_PUSH);
+	
+	menuSetFromSort.addFillListener(new MenuItemFillListener() {
+		@Override
+		public void menuWillBeShown(MenuItem menu, Object data) {
+			TableView<?> tv = menuSetFromSort.getTable();
+			
+			if ( tv != null ){
+				
+				TableRowCore[] selRows = tv.getSelectedRows();
+				
+				if ( selRows.length > 1 ){
+			
+					menuSetFromSort.setText( MessageText.getString( "menu.set.order.for.selection"));
+					
+					return;
+				}
+			}
+			
+			menuSetFromSort.setText( MessageText.getString( "menu.set.order.from.sort"));
+		}
+	});
+	
+	menuSetFromSort.addListener((menu, target)->{
+		
+		TableView<?> tv = menuSetFromSort.getTable();
+		
+		if ( tv != null ){
+			
+			TableRowCore[] rows;
+			
+			TableRowCore[] selRows = tv.getSelectedRows();
+			
+			if ( selRows.length > 1 ){
+				
+				rows = selRows;
+				
+			}else{
+				
+				rows = tv.getRows();
+			}
+			
+			int incomp_pos	= 1;
+			int comp_pos	= 1;
+			
+			GlobalManager gm = CoreFactory.getSingleton().getGlobalManager();
+						
+			List<DownloadManager>	managers	= new ArrayList<>( rows.length );
+			List<Integer>			positions	= new ArrayList<>( rows.length );
+			
+			for ( TableRowCore row: rows ){
+				
+				DownloadManager dm = (DownloadManager)row.getDataSource(true);
+				
+				managers.add( dm );
+				
+				positions.add( dm.isDownloadComplete(false)?comp_pos++:incomp_pos++ );
+				
+				// gm.moveTo(o, pos++);
+			}
+			
+			gm.moveTo( managers, positions );
+
+			RankItem.this.invalidateCells();
+		}
+	});
+	
+	
+	TableContextMenuItem menuSortToClipboard = addContextMenuItem(
+			"menu.copy.order.to.clip", MENU_STYLE_HEADER);
+	
+	menuSortToClipboard.setStyle(TableContextMenuItem.STYLE_PUSH);
+
+	menuSortToClipboard.addListener((menu, target)->{
+		
+		TableView<?> tv = menuSortToClipboard.getTable();
+		
+		if ( tv != null ){
+			
+			TableRowCore[] rows = tv.getRows();
+													
+			StringBuffer str = new StringBuffer( 2048 );
+			
+			for ( TableRowCore row: rows ){
+				
+				DownloadManager dm = (DownloadManager)row.getDataSource(true);
+				
+				TOTorrent torrent = dm.getTorrent();
+				
+				if ( torrent != null ){
+
+					try{
+						byte[] hash = torrent.getHash();
+					
+						str.append( dm.getPosition());
+						str.append( "," );
+						str.append( ByteFormatter.encodeString( hash ));
+						str.append( "," );
+						str.append( dm.isDownloadComplete(false)?1:0);
+						str.append( ",\"" );
+						str.append( dm.getDisplayName());
+						str.append( "\"\n");
+						
+					}catch( Throwable e ){
+						
+					}
+				}
+			}
+			
+			ClipboardCopy.copyToClipBoard( str.toString());
+		}
+	});
+	
+	TableContextMenuItem menuClipboardToSort = addContextMenuItem(
+			"menu.set.sort.from.clip", MENU_STYLE_HEADER);
+	menuClipboardToSort.setStyle(TableContextMenuItem.STYLE_PUSH);
+	
+	menuClipboardToSort.addFillListener(new MenuItemFillListener() {
+		@Override
+		public void menuWillBeShown(MenuItem menu, Object data) {
+			TableView<?> tv = menuClipboardToSort.getTable();
+			
+			boolean ok = false;
+			
+			if ( tv != null ){
+			
+				ok = clipboardToSort( tv, true );
+			}
+			
+			menuClipboardToSort.setEnabled( ok );
+		}
+	});
+	
+	menuClipboardToSort.addListener((menu, target)->{
+		
+		TableView<?> tv = menuClipboardToSort.getTable();
+		
+		if ( tv != null ){
+			clipboardToSort( tv, false );
+		}
+	});
   }
 
-	@Override
-	public void reset() {
-		super.reset();
+  
+  private boolean
+  clipboardToSort(
+	TableView<?> 	tv,
+	boolean			test )
+  {
+	  String lines[] = ClipboardCopy.copyFromClipboard().split( "\n" );
+	  
+	  if ( lines.length == 0 ){
+		  
+		  return( false );
+	  }
+	  
+	  GlobalManager gm = CoreFactory.getSingleton().getGlobalManager();
+	  
+	  int max_incomp	= 0;
+	  int max_comp		= 0;
+	  
+	  for ( DownloadManager dm: gm.getDownloadManagers()){
+		  
+		  if ( dm.isDownloadComplete( false )){
+			  
+			  max_comp = Math.max( dm.getPosition(), max_comp );
+			  
+		  }else{
+			 
+			  max_incomp = Math.max( dm.getPosition(), max_incomp );
+		  }
+	  }
+	  
+	  List<DownloadManager>	managers	= new ArrayList<>( lines.length );
+	  List<Integer>			positions	= new ArrayList<>( lines.length );
+		
+	  Set<Integer>			dup_pos_check = new HashSet<>();
+			  
+	  for ( String line: lines ){
+		  
+		  line = line.trim();
+		  
+		  if ( line.isEmpty()){
+			  
+			  continue;
+		  }
+		  
+		  String[] bits = line.split(",");
+		  
+		  if ( bits.length < 3 ){
+			  
+			  return( false );
+		  }
+		  
+		  try{
+			  
+			int pos = Integer.parseInt(bits[0].trim());
+			
+			if ( pos <= 0 ){
+				
+				return( false );
+			}
+			
+			byte[] hash = ByteFormatter.decodeString( bits[1].trim());
+			
+			DownloadManager dm = gm.getDownloadManager( new HashWrapper( hash ));
+			
+			if ( dm == null ){
+				
+				return( false );
+			}
+			
+			boolean comp_expected	= bits[2].trim().equals("1");
+			boolean comp			= dm.isDownloadComplete( false );
+			
+			if ( comp_expected != comp ){
+				
+				return( false );
+			}
+			
+			if ( comp ){
+				
+				if ( pos > max_comp || dup_pos_check.contains( pos )){
+					
+					return( false );
+				}
+				
+				dup_pos_check.add( pos );
+				
+			}else{
+				
+				if ( pos > max_incomp || dup_pos_check.contains( -pos )){
+					
+					return( false );
+				}
+				
+				dup_pos_check.add( -pos );
+			}
+			
+			managers.add( dm );
+			
+			positions.add( pos );
+			
+		  }catch( Throwable e ){
+			  
+			  return( false );
+		  }
+	  }
+		
+	  if ( !test ){
+		 		
+		gm.moveTo( managers, positions );
 
-		COConfigurationManager.removeParameter( showIconKey );
-	}
+		RankItem.this.invalidateCells();
+	  }
+	  
+	  return( true );
+  }
+  
+  @Override
+  public void reset() {
+	  super.reset();
 
-	@Override
+	  COConfigurationManager.removeParameter( showIconKey );
+  }
+
+  @Override
   public void
   remove()
   {
@@ -158,12 +433,20 @@ public class RankItem
 
   	boolean complete = dm == null ? false : dm.getAssumedComplete();
   	if (complete) {
-  		value += 0x10000;
+  		value += 0x1000000;
   	}
 
     cell.setSortValue(value);
     cell.setText(text);
 
+	TableView<?> table = cell.getTableRow().getView();
+	if ( table != null ){
+		Object dst = table.getDataSourceType();
+		if ( dst == Download.class ){
+			cell.setToolTip( text + ", " + (MessageText.getString( complete?"label.complete":"label.incomplete")));
+		}
+	}
+	
     if (cell instanceof TableCellSWT) {
     	if ( showIcon && dm != null ){
     		Image img = dm.getAssumedComplete() ? imgUp : imgDown;

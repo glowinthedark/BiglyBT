@@ -118,6 +118,9 @@ public class MessageBoxShell
 
 	protected boolean isRemembered;
 
+	private boolean supportsApplyToAll;
+	private boolean	applyToAll;
+	
 	private String iconImageID;
 
 	private UserPrompterResultListener resultListener;
@@ -142,6 +145,8 @@ public class MessageBoxShell
 
 	private boolean	modal;
 
+	private int explicit_style;
+	
 	private static Map<String, MessageBoxShell> mapInstances = new HashMap<>(1);
 
 	public static void open(Shell parent, String title, String text,
@@ -374,6 +379,11 @@ public class MessageBoxShell
 
 		int	shell_style = SWT.DIALOG_TRIM | SWT.RESIZE;
 
+		if ( explicit_style != 0 ){
+			
+			shell_style |= explicit_style;
+		}
+		
 		if ( modal ){
 
 			shell_style |= SWT.APPLICATION_MODAL;
@@ -671,10 +681,8 @@ public class MessageBoxShell
 		}
 
 
-		// Remember Me
-		Button checkRemember = null;
 		if (rememberID != null) {
-			checkRemember = new Button(shell, SWT.CHECK);
+			Button checkRemember = new Button(shell, SWT.CHECK);
 			checkRemember.setText(rememberText);
 			checkRemember.setSelection(rememberByDefault);
 			isRemembered = rememberByDefault;
@@ -698,6 +706,19 @@ public class MessageBoxShell
 					}
 				}
 			});
+			
+		}else if ( supportsApplyToAll ) {
+			Button appkyToAll = new Button(shell, SWT.CHECK);
+			appkyToAll.setText(MessageText.getString( "label.apply.to.all" ));
+			
+			appkyToAll.addListener(SWT.Selection, new Listener() {
+				@Override
+				public void handleEvent(Event event) {
+					Button button = (Button) event.widget;
+					applyToAll = button.getSelection();
+				}
+			});
+
 		} else if (needSpacer)  {
 			Button spacer = new Button(shell, SWT.CHECK);
 			spacer.setVisible(false);
@@ -892,7 +913,7 @@ public class MessageBoxShell
 					Rectangle area = canvas.getClientArea();
 					sp = new GCStringPrinter(e.gc, text, area, true, false, SWT.WRAP
 							| SWT.TOP);
-					sp.setUrlColor(ColorCache.getColor(e.gc.getDevice(), "#0000ff"));
+					sp.setUrlColor(e.gc.getDevice().getSystemColor(SWT.COLOR_LINK_FOREGROUND));
 					if (urlColor != null) {
 						sp.setUrlColor(urlColor);
 					}
@@ -938,6 +959,14 @@ public class MessageBoxShell
 		return canvas;
 	}
 
+	@Override
+	public void
+	setStyle(
+		int style)
+	{
+		explicit_style = style;
+	}
+	
 	@Override
 	public String getHtml() {
 		return html;
@@ -1204,12 +1233,7 @@ public class MessageBoxShell
 					if (!opened) {
 						shell.open();
 					}
-					while (shell != null && !shell.isDisposed()) {
-						if (shell.getDisplay() != null
-								&& !shell.getDisplay().readAndDispatch()) {
-							shell.getDisplay().sleep();
-						}
-					}
+					Utils.readAndDispatchLoop(shell);
 					return;
 				} finally {
 					sem.releaseForever();
@@ -1301,6 +1325,18 @@ public class MessageBoxShell
 		return cbEnabled;
 	}
 
+	public void
+	setApplyToAllEnabled()
+	{
+		supportsApplyToAll = true;
+	}
+	
+	public boolean
+	getApplyToAll()
+	{
+		return( applyToAll );
+	}
+	
 	public Shell getParent() {
 		return parent;
 	}

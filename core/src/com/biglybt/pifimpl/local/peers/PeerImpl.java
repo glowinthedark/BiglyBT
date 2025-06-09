@@ -109,6 +109,11 @@ PeerImpl
   public Message[] getSupportedMessages() {
     com.biglybt.core.peermanager.messaging.Message[] core_msgs = delegate.getSupportedMessages();
 
+    if ( core_msgs == null ){
+    	
+    	return( null );	// peer doesn't support messaging or isn't yet fully connected
+    }
+    
     Message[] plug_msgs = new Message[ core_msgs.length ];
 
     for( int i=0; i < core_msgs.length; i++ ) {
@@ -561,10 +566,11 @@ PeerImpl
 	public void
 	close(
 		String 		reason,
+		int			reason_code,
 		boolean 	closedOnError,
 		boolean 	attemptReconnect )
 	{
-		manager.removePeer( this, reason );
+		manager.removePeer( this, reason, reason_code );
 	}
 
 	@Override
@@ -627,17 +633,17 @@ PeerImpl
 	}
 
 	@Override
-	public int
-	getPercentDoneOfCurrentIncomingRequest()
+	public int[]
+	getCurrentIncomingRequestProgress()
 	{
-		return( delegate.getPercentDoneOfCurrentIncomingRequest());
+		return( delegate.getCurrentIncomingRequestProgress());
 	}
 
 	@Override
-	public int
-	getPercentDoneOfCurrentOutgoingRequest()
+	public int[]
+	getCurrentOutgoingRequestProgress()
 	{
-		return( delegate.getPercentDoneOfCurrentOutgoingRequest());
+		return( delegate.getCurrentOutgoingRequestProgress());
 	}
 
 
@@ -818,4 +824,10 @@ PeerImpl
 	public byte[] getHandshakeReservedBytes() {
 		return delegate.getHandshakeReservedBytes();
 	}
+	
+	 public PeerDescriptor
+	 getDescriptor()
+	 {
+		 return( delegate.getDescriptor());
+	 }
 }

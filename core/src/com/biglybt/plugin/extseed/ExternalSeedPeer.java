@@ -22,6 +22,7 @@ package com.biglybt.plugin.extseed;
 import java.net.URL;
 import java.util.*;
 
+import com.biglybt.core.peermanager.peerdb.PeerItemFactory;
 import com.biglybt.core.util.CopyOnWriteList;
 import com.biglybt.core.util.Debug;
 import com.biglybt.pif.download.Download;
@@ -271,7 +272,7 @@ ExternalSeedPeer
 			listeners_mon.exit();
 		}
 
-		manager.removePeer( this );
+		manager.removePeer( this, "Deactivating", com.biglybt.core.networkmanager.Transport.CR_STOPPED_OR_REMOVED );
 
 		setState( Peer.DISCONNECTED );
 	}
@@ -334,7 +335,7 @@ ExternalSeedPeer
 
 				if ( peer_added ){
 
-					plugin.log( reader.getName() + " failed - " + reader.getStatus() + ", permanent = " + reader.isPermanentlyUnavailable());
+					plugin.log( download.getName() + ": " + reader.getName() + " failed - " + reader.getStatus() + ", permanent = " + reader.isPermanentlyUnavailable());
 
 					peer_added	= false;
 
@@ -575,7 +576,7 @@ ExternalSeedPeer
 	}
 
 	@Override
-	public List
+	public List<PeerReadRequest>
 	getExpiredRequests()
 	{
 		return( reader.getExpiredRequests());
@@ -694,6 +695,7 @@ ExternalSeedPeer
 	public void
 	close(
 		String 		reason,
+		int			reason_code,
 		boolean 	closedOnError,
 		boolean 	attemptReconnect )
 	{
@@ -730,7 +732,7 @@ ExternalSeedPeer
 
 		if ( peer_was_added ){
 
-			manager.removePeer( this );
+			manager.removePeer( this, reason, reason_code );
 		}
 
 		setState( Peer.DISCONNECTED );
@@ -916,10 +918,10 @@ ExternalSeedPeer
 	}
 
 	@Override
-	public int
-	getPercentDoneOfCurrentIncomingRequest()
+	public int[]
+	getCurrentIncomingRequestProgress()
 	{
-		return( reader.getPercentDoneOfCurrentIncomingRequest());
+		return( reader.getCurrentIncomingRequestProgress());
 	}
 
 	@Override
@@ -938,10 +940,10 @@ ExternalSeedPeer
 
 
 	@Override
-	public int
-	getPercentDoneOfCurrentOutgoingRequest()
+	public int[]
+	getCurrentOutgoingRequestProgress()
 	{
-		return( 0 );
+		return( null );
 	}
 
 	public Map
@@ -956,6 +958,13 @@ ExternalSeedPeer
 		return( reader.getName());
 	}
 
+	@Override
+	public PeerDescriptor 
+	getDescriptor()
+	{
+		return( PeerItemFactory.getDescriptor( this ));
+	}
+	
 	@Override
 	public void
 	setUserData(
@@ -1029,7 +1038,7 @@ ExternalSeedPeer
 				public void notifyOfExternalSend(Message message ){}
 
 				@Override
-				public int getPercentDoneOfCurrentMessage(){ return( -1 );}
+				public int[] getCurrentMessageProgress(){ return( null );}
 
 				@Override
 				public int getDataQueuedBytes(){ return( 0 ); }
@@ -1057,7 +1066,7 @@ ExternalSeedPeer
 				public void notifyOfExternalReceive(Message message ){}
 
 				@Override
-				public int getPercentDoneOfCurrentMessage(){ return( ExternalSeedPeer.this.getPercentDoneOfCurrentIncomingRequest()); }
+				public int[] getCurrentMessageProgress(){ return( ExternalSeedPeer.this.getCurrentIncomingRequestProgress()); }
 			};
 
 		@Override

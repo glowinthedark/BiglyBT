@@ -162,7 +162,7 @@ CertificateTrustWindow
 			issued_by_label.setLayoutData(gridData);
 
 			Label issued_by_value = new Label(shell,SWT.NULL);
-			issued_by_value.setText(extractCN(cert.getIssuerDN().getName()).replaceAll("&", "&&"));
+			issued_by_value.setText(extractCN(cert.getIssuerX500Principal().getName()).replaceAll("&", "&&"));
 			gridData = new GridData(GridData.FILL_BOTH);
 			gridData.horizontalSpan = 2;
 			issued_by_value.setLayoutData(gridData);
@@ -176,7 +176,7 @@ CertificateTrustWindow
 			issued_to_label.setLayoutData(gridData);
 
 			Label issued_to_value = new Label(shell,SWT.NULL);
-			issued_to_value.setText(extractCN(cert.getSubjectDN().getName()).replaceAll("&", "&&"));
+			issued_to_value.setText(extractCN(cert.getSubjectX500Principal().getName()).replaceAll("&", "&&"));
 			gridData = new GridData(GridData.FILL_BOTH);
 			gridData.horizontalSpan = 2;
 			issued_to_value.setLayoutData(gridData);
@@ -191,7 +191,7 @@ CertificateTrustWindow
 
 				// line
 
-			Label labelSeparator = new Label(shell,SWT.SEPARATOR | SWT.HORIZONTAL);
+			Control labelSeparator = Utils.createSkinnedLabelSeparator(shell, SWT.HORIZONTAL);
 			gridData = new GridData(GridData.FILL_HORIZONTAL);
 			gridData.horizontalSpan = 3;
 			labelSeparator.setLayoutData(gridData);
@@ -255,11 +255,7 @@ CertificateTrustWindow
 
 			shell.open ();
 
-	    while (!shell.isDisposed()) {
-	      if (!shell.getDisplay().readAndDispatch()) {
-	      	shell.getDisplay().sleep();
-	      }
-	    }
+			Utils.readAndDispatchLoop( shell );
 		}
 
 		protected void

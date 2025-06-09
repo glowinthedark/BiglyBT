@@ -74,6 +74,14 @@ PluginResult
 	}
 
 	@Override
+	public String[] 
+	getTags()
+	{
+		
+		return(getStringListProperty( SearchResult.PR_TAGS ));
+	}
+	
+	@Override
 	public void
 	setCategory(
 		String category )
@@ -135,6 +143,13 @@ PluginResult
 	{
 		return(getIntProperty( SearchResult.PR_SUPER_SEED_COUNT ));
 	}
+	
+	@Override
+	public int
+	getNbCompleted()
+	{
+		return(getIntProperty( SearchResult.PR_COMPLETED_COUNT ));
+	}
 
 	@Override
 	public int
@@ -143,6 +158,12 @@ PluginResult
 		return(getIntProperty( SearchResult.PR_COMMENTS ));
 	}
 
+	public String 
+	getDescription()
+	{
+		return( getStringProperty( SearchResult.PR_DESCRIPTION ));
+	}
+	
 	@Override
 	public int
 	getVotes()
@@ -302,7 +323,9 @@ PluginResult
 	getIntProperty(
 		int		name )
 	{
-		return((int)getLongProperty( name ));
+		long res = getLongProperty( name );
+		
+		return( res == Long.MIN_VALUE?Integer.MIN_VALUE:(int)res );
 	}
 
 	protected long
@@ -395,6 +418,36 @@ PluginResult
 		}
 	}
 
+	protected String[]
+	getStringListProperty(
+		int		name )
+	{
+		return( getStringListProperty( name, new String[0] ));
+	}
+
+	protected String[]
+	getStringListProperty(
+		int		name,
+		String[]	def )
+	{
+		try{
+			String[]	l = (String[])getResultProperty( name );
+
+			if ( l == null ){
+
+				return( def );
+			}
+
+			return( l );
+
+		}catch( Throwable e ){
+
+			Debug.out( "Invalid value returned for String[] property " + name );
+
+			return( def );
+		}
+	}
+	
 	protected byte[]
 	getByteArrayProperty(
 		int		name )

@@ -109,6 +109,12 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
     description = ( is_inbound_connection ? "R" : "L" ) + ": " + AddressUtils.getHostNameNoResolve( address ) + ": " + address.getPort();
 
   }
+  
+  public boolean
+  isIncoming()
+  {
+	  return( is_inbound_connection );
+  }
 
   /**
    * Get the socket channel used by the transport.
@@ -139,7 +145,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
   public TransportStartpoint
   getTransportStartpoint()
   {
-	  return( new TransportStartpointTCP( getTransportEndpoint()));
+	  return( new TransportStartpointTCP( this, getTransportEndpoint()));
   }
 
   @Override
@@ -163,6 +169,14 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
 	  return( is_socks );
   }
 
+	@Override
+	public PluginProxy 
+	getPluginProxy()
+	{
+		return( plugin_proxy );
+	}
+
+  
   @Override
   public String
   getProtocol()
@@ -197,14 +211,14 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
 
 	if ( !TCPNetworkManager.TCP_OUTGOING_ENABLED ){
 
-		listener.connectFailure( new Throwable( "Outbound TCP connections disabled" ));
+		listener.connectFailure( this, new Throwable( "Outbound TCP connections disabled" ));
 
 		return;
 	}
 
     if( has_been_closed ){
 
-		listener.connectFailure( new Throwable( "Connection already closed" ));
+		listener.connectFailure( this, new Throwable( "Connection already closed" ));
 
     	return;
     }
@@ -284,7 +298,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
       @Override
       public int connectAttemptStarted(
     		  int default_connect_timeout ) {
-        return( listener.connectAttemptStarted( default_connect_timeout ));
+        return( listener.connectAttemptStarted( transport_instance, default_connect_timeout ));
       }
 
       @Override
@@ -293,7 +307,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
       		String msg = "connectSuccess:: given channel == null";
       		Debug.out( msg );
       		setConnectResult( false );
-      		listener.connectFailure( new Exception( msg ) );
+      		listener.connectFailure( transport_instance, new Exception( msg ) );
       		return;
       	}
 
@@ -302,7 +316,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
 
         	setConnectResult( false );
 
-  			listener.connectFailure( new Throwable( "Connection has been closed" ));
+  			listener.connectFailure( transport_instance, new Throwable( "Connection has been closed" ));
 
           return;
         }
@@ -331,7 +345,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
         		@Override
 		        public void connectFailure(Throwable failure_msg ) {
         			close( "Proxy login failed" );
-        			listener.connectFailure( failure_msg );
+        			listener.connectFailure( transport_instance, failure_msg );
         		}
         	}, to_connect );
         }else if ( pp != null ){
@@ -383,7 +397,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
 
         				close( "Proxy login failed" );
 
-        				listener.connectFailure( failure_msg );
+        				listener.connectFailure( transport_instance, failure_msg );
         			}
         		});
 
@@ -402,7 +416,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
         }
         
         setConnectResult( false );
-        listener.connectFailure( failure_msg );
+        listener.connectFailure( transport_instance, failure_msg );
       }
       
 		@Override
@@ -463,7 +477,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
         	}
         	else {
         		close( helper, "Handshake failure" );
-        		listener.connectFailure( failure_msg );
+        		listener.connectFailure( TCPTransportImpl.this, failure_msg );
         	}
         }
 
@@ -577,7 +591,7 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
 	      setFilter( null );
 	    }
 
-    	listener.connectFailure( new Throwable( "Connection closed" ));
+    	listener.connectFailure( TCPTransportImpl.this, new Throwable( "Connection closed" ));
 
 	  }else{
 
@@ -645,5 +659,12 @@ public class TCPTransportImpl extends TransportImpl implements Transport {
     	// and discovers that this connection has been closed
 
     setReadyForRead();
+  }
+  
+  @Override
+  public boolean 
+  isClosed()
+  {
+	  return( has_been_closed );
   }
 }

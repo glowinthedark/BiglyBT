@@ -23,8 +23,11 @@
 package com.biglybt.core.history.impl;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.ref.WeakReference;
+import java.net.URL;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.biglybt.core.Core;
 import com.biglybt.core.CoreComponent;
@@ -40,6 +43,7 @@ import com.biglybt.core.history.DownloadHistory;
 import com.biglybt.core.history.DownloadHistoryEvent;
 import com.biglybt.core.history.DownloadHistoryListener;
 import com.biglybt.core.history.DownloadHistoryManager;
+import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagManager;
 import com.biglybt.core.tag.TagManagerFactory;
@@ -47,6 +51,15 @@ import com.biglybt.core.tag.TagType;
 import com.biglybt.core.tag.TagUtils;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.util.*;
+import com.biglybt.net.magneturi.MagnetURIHandler;
+import com.biglybt.pif.PluginInterface;
+import com.biglybt.pif.utils.search.SearchException;
+import com.biglybt.pif.utils.search.SearchInstance;
+import com.biglybt.pif.utils.search.SearchObserver;
+import com.biglybt.pif.utils.search.SearchProvider;
+import com.biglybt.pif.utils.search.SearchResult;
+import com.biglybt.pifimpl.local.PluginInitializer;
+import com.biglybt.pifimpl.local.utils.SearchMatcher;
 
 public class
 DownloadHistoryManagerImpl
@@ -87,6 +100,8 @@ DownloadHistoryManagerImpl
 
 	final Object	lock = new Object();
 
+	private AtomicInteger	mutation_count = new AtomicInteger();
+	
 	private WeakReference<Map<Long,DownloadHistoryImpl>>		history_active	= new WeakReference<>(null);
 	private WeakReference<Map<Long,DownloadHistoryImpl>>		history_dead	= new WeakReference<>(null);
 
@@ -105,6 +120,10 @@ DownloadHistoryManagerImpl
 
 	private final Map<Long,Long>	redownload_cache	= new HashMap<>();
 
+	private volatile ByteArrayHashMap<long[]>	dates_cache;
+	private volatile int						dates_cache_mutation_count;
+	private volatile long						dates_cache_last_access;
+	
 	boolean	enabled;
 
 	public
@@ -294,6 +313,38 @@ DownloadHistoryManagerImpl
 								}
 							}, DownloadManagerState.AT_CANONICAL_SD_DMAP, DownloadManagerStateAttributeListener.WRITTEN );
 
+						DownloadManagerStateFactory.addGlobalListener(
+								new DownloadManagerStateAttributeListener() {
+
+									@Override
+									public void
+									attributeEventOccurred(
+										DownloadManager 	dm,
+										String 				attribute,
+										int 				event_type )
+									{
+										synchronized( lock ){
+
+											if ( !( enabled && isMonitored(dm))){
+
+												return;
+											}
+
+											long uid = getUID( dm );
+
+											DownloadHistoryImpl dh = getActiveHistory().get( uid );
+
+											if ( dh != null ){
+
+												if ( dh.updateName( dm )){
+
+													historyUpdated( dh, DownloadHistoryEvent.DHE_HISTORY_MODIFIED, UPDATE_TYPE_ACTIVE );
+												}
+											}
+										}
+									}
+								}, DownloadManagerState.AT_DISPLAY_NAME, DownloadManagerStateAttributeListener.WRITTEN );
+
 						if ( enabled ){
 
 							if ( !FileUtil.resilientConfigFileExists( CONFIG_ACTIVE_FILE )){
@@ -319,6 +370,107 @@ DownloadHistoryManagerImpl
 				}
 			});
 
+		if ( enabled ){
+			try{
+				PluginInterface default_pi = PluginInitializer.getDefaultInterface();
+	
+				default_pi.getUtilities().registerSearchProvider(
+					new SearchProvider()
+					{
+						private Map<Integer,Object>	properties = new HashMap<>();
+	
+						{
+							properties.put( PR_NAME, MessageText.getString( "downloadhistoryview.view.heading" ));
+	
+							try{
+								URL url =
+									MagnetURIHandler.getSingleton().registerResource(
+										new MagnetURIHandler.ResourceProvider()
+										{
+											@Override
+											public String
+											getUID()
+											{
+												return( DownloadHistoryManager.class.getName() + ".1" );
+											}
+	
+											@Override
+											public String
+											getFileType()
+											{
+												return( "png" );
+											}
+	
+											@Override
+											public byte[]
+											getData()
+											{
+												try{
+	
+													InputStream is = getClass().getClassLoader().getResourceAsStream("com/biglybt/ui/images/sb/ic_logview.png");
+	
+													if ( is != null ){
+	
+														return( FileUtil.readInputStreamAsByteArray(is));
+													}
+												}catch( Throwable e ){
+													
+													Debug.out( e );
+												}
+												
+												return( null );
+											}
+										});
+	
+								properties.put( PR_ICON_URL, url.toExternalForm());
+	
+							}catch( Throwable e ){
+	
+								Debug.out( e );
+							}
+						}
+	
+						@Override
+						public SearchInstance
+						search(
+							Map<String,Object>	search_parameters,
+							SearchObserver		observer )
+	
+							throws SearchException
+						{
+							try{
+								return( searchHistory( search_parameters, observer ));
+	
+							}catch( Throwable e ){
+	
+								throw( new SearchException( "Search failed", e ));
+							}
+						}
+	
+						@Override
+						public Object
+						getProperty(
+							int			property )
+						{
+							return( properties.get( property ));
+						}
+	
+						@Override
+						public void
+						setProperty(
+							int			property,
+							Object		value )
+						{
+							properties.put( property, value );
+						}
+					});
+	
+			}catch( Throwable e ){
+	
+				Debug.out( "Failed to register search provider" );
+			}
+		}
+		
 		SimpleTimer.addPeriodicEvent(
 			"DHM:timer",
 			60*1000,
@@ -437,7 +589,7 @@ DownloadHistoryManagerImpl
 		}
 	}
 
-	private List<DownloadHistory>
+	public List<DownloadHistory>
 	getHistory()
 	{
 		synchronized( lock ){
@@ -555,25 +707,80 @@ DownloadHistoryManagerImpl
 	@Override
 	public long[]
 	getDates(
-		byte[]		hash )
+		byte[]		hash,
+		boolean		with_redownload )
 	{
-		List<DownloadHistory> history = getHistory();
+		dates_cache_last_access		= SystemTime.getMonotonousTime();
+		
+		ByteArrayHashMap<long[]> cache = getDatesCache();
+		
+		long[] entry = cache.get(hash);
 
-		for ( DownloadHistory dh: history ){
-
-			if ( Arrays.equals( hash, dh.getTorrentHash())){
-
-				Long rdl = redownload_cache.remove( dh.getUID());
-
-				long[] result = { dh.getAddTime(), dh.getCompleteTime(), dh.getRemoveTime(), rdl==null?0:rdl };
-
-				return( result );
+		if ( entry != null ){
+			
+			long uid = entry[0];
+			
+			Long rdl;
+			
+			if ( with_redownload ){
+				
+				rdl = redownload_cache.remove( uid) ;
+				
+			}else{
+				
+				rdl = redownload_cache.get( uid );
 			}
+
+			long[] result = { entry[1], entry[2], entry[3], rdl==null?0:rdl };
+
+			return( result );
 		}
 
 		return( null );
 	}
 
+	private ByteArrayHashMap<long[]>
+	getDatesCache()
+	{
+		ByteArrayHashMap<long[]> cache = dates_cache;
+	
+		int mut = mutation_count.get();
+		
+		if ( cache != null && mut == dates_cache_mutation_count ){
+			
+			return( cache );
+		}
+		
+		cache = new ByteArrayHashMap<>();
+		
+		List<DownloadHistory> history = getHistory();
+
+		for ( DownloadHistory dh: history ){
+			
+			long[] entry = { dh.getUID(), dh.getAddTime(), dh.getCompleteTime(), dh.getRemoveTime() };
+
+			byte[] hash = dh.getTorrentHash();
+			
+			if ( hash != null ){
+				
+				cache.put( hash, entry );
+			}
+			
+			hash = dh.getTorrentV2Hash();
+			
+			if ( hash != null ){
+				
+				cache.put( hash, entry );
+			}
+		}
+		
+		dates_cache 				= cache;
+		dates_cache_mutation_count	= mut;
+		dates_cache_last_access		= SystemTime.getMonotonousTime();
+		
+		return( cache );
+	}
+	
 	void
 	setRedownloading(
 		DownloadHistory		dh )
@@ -708,6 +915,8 @@ DownloadHistoryManagerImpl
 		int								action,
 		int								type )
 	{
+		mutation_count.incrementAndGet();
+		
 		if (( type & UPDATE_TYPE_ACTIVE ) != 0 ){
 
 			Map<Long,DownloadHistoryImpl>	active = getActiveHistory();
@@ -753,12 +962,17 @@ DownloadHistoryManagerImpl
 	void
 	checkDiscard()
 	{
+		long	now = SystemTime.getMonotonousTime();
+
+		if ( now - dates_cache_last_access > 60*1000 ){
+			
+			dates_cache	= null;
+		}
+		
 		if ( history_escaped ){
 
 			return;
 		}
-
-		long	now = SystemTime.getMonotonousTime();
 
 		if ( now - active_load_time > 30*1000 && active_dirty == null && history_active.get() != null ){
 
@@ -860,6 +1074,106 @@ DownloadHistoryManagerImpl
 		}
 	}
 
+	
+	public SearchInstance
+	searchHistory(
+		Map<String,Object>		search_parameters,
+		final SearchObserver	observer )
+
+		throws SearchException
+	{
+		final String	term = (String)search_parameters.get( SearchProvider.SP_SEARCH_TERM );
+
+		final SearchInstance si =
+			new SearchInstance()
+			{
+				@Override
+				public void
+				cancel()
+				{
+					Debug.out( "Cancelled" );
+				}
+			};
+
+		if ( term == null ){
+
+			try{
+				observer.complete();
+
+			}catch( Throwable e ){
+
+				Debug.out( e );
+			}
+		}else{
+
+			new AEThread2( "DownloadHistory:search", true )
+			{
+				@Override
+				public void
+				run()
+				{
+					try{
+						List<DownloadHistory>	history = getHistory();
+						
+						SearchMatcher	matcher = new SearchMatcher( term );
+	
+						ByteArrayHashMap<String>	hashes = new ByteArrayHashMap<>();
+
+						for ( DownloadHistory entry: history ){
+							
+							if ( matcher.matches( entry.getName())){
+								
+								byte[] hash = entry.getTorrentHash();
+								
+								if ( hash != null ){
+									
+									if ( hashes.containsKey(hash)){
+										
+										continue;
+									}
+									
+									hashes.put( hash, "" );
+								}
+								
+								Map result_properties = entry.toPropertyMap();
+	
+								SearchResult search_result =
+									new SearchResult()
+									{
+										@Override
+										public Object
+										getProperty(
+											int		property_name )
+										{
+											return( result_properties.get( property_name ));
+										}
+									};
+	
+								try{
+									observer.resultReceived( si, search_result );
+	
+								}catch( Throwable e ){
+	
+									Debug.out( e );
+								}
+							}
+						}
+
+					}catch( Throwable e ){
+
+						Debug.out( e );
+
+					}finally{
+
+						observer.complete();
+					}
+				}
+			}.start();
+		}
+
+		return( si );
+	}
+	
 	private static class
 	DownloadHistoryEventImpl
 		implements DownloadHistoryEvent
@@ -900,13 +1214,13 @@ DownloadHistoryManagerImpl
 		private final byte[]	hash;
 		private final byte[]	hash_v2;
 		private final long		size;
-		private final String	name;
 		private final long		add_time;
 		
+		private String			name;
 		private String			save_location;
 		private String[]		tags			= NO_TAGS;
-		private long			complete_time	= -1;
-		private long			remove_time		= -1;
+		private long			complete_time	= 0;
+		private long			remove_time		= 0;
 
 		private Map<Long,DownloadHistoryImpl>	history_ref;	// need this for GC purposes
 
@@ -978,8 +1292,20 @@ DownloadHistoryManagerImpl
 				size = l_size==null?0:l_size;
 
 				add_time 		= (Long)map.get( "a" );
+				
 				complete_time 	= (Long)map.get( "c" );
+				
+				if ( complete_time < 0 ){
+					
+					complete_time = 0;	// switch to using 0 as "none" to keep Droo happy
+				}
+				
 				remove_time 	= (Long)map.get( "r" );
+
+				if ( remove_time < 0 ){
+					
+					remove_time = 0;	// switch to using 0 as "none" to keep Droo happy
+				}
 
 				List<byte[]> l_tags = (List<byte[]>)map.get( "t" );
 				
@@ -1041,6 +1367,37 @@ DownloadHistoryManagerImpl
 			return( map );
 		}
 
+		public Map<Integer,Object>
+		toPropertyMap()
+		{
+			Map<Integer,Object>	result = new HashMap<>();
+			
+			result.put( SearchResult.PR_NAME, name );
+			result.put( SearchResult.PR_SIZE, size );
+			result.put( SearchResult.PR_HASH, hash );
+			result.put( SearchResult.PR_PUB_DATE, new Date( add_time ));
+						
+			if ( hash != null ){
+				
+				String magnet = UrlUtils.getMagnetURI( hash, getTorrentV2Hash(), getName(), null );
+				
+				if ( tags != null && tags.length > 0 ){
+				
+					result.put( SearchResult.PR_TAGS, tags );
+					
+					for ( String tag: tags ){
+						
+						magnet += "&tag=" + UrlUtils.encode( tag );
+					}
+				}
+	
+				result.put( SearchResult.PR_TORRENT_LINK, magnet );
+				//result.put( SearchResult.PR_DOWNLOAD_LINK, magnet );
+			}
+
+			return( result );
+		}
+		
 		boolean
 		updateCompleteTime(
 			DownloadManagerState		dms )
@@ -1051,14 +1408,25 @@ DownloadHistoryManagerImpl
 
 			if ( comp == 0 ){
 
-				complete_time = dms.getLongParameter( DownloadManagerState.PARAM_DOWNLOAD_COMPLETED_TIME );	// nothing recorded either way
+				comp = dms.getLongParameter( DownloadManagerState.PARAM_DOWNLOAD_COMPLETED_TIME );	// nothing recorded either way
 
-			}else{
-
-				complete_time = comp;
+			}
+			
+			if ( comp < 0 ){
+				
+				comp = 0;
 			}
 
-			return( complete_time != old_time );
+			if ( comp != old_time ){
+				
+				complete_time = comp;
+
+				return( true );
+				
+			}else{
+				
+				return( false );
+			}
 		}
 
 		boolean
@@ -1072,6 +1440,24 @@ DownloadHistoryManagerImpl
 			if ( !loc.equals( old_location )){
 
 				save_location = loc;
+
+				return( true );
+
+			}else{
+
+				return( false );
+			}
+		}
+		
+		boolean
+		updateName(
+			DownloadManager		dm )
+		{
+			String name2 = dm.getDisplayName();
+			
+			if ( !name.equals( name2 )){
+
+				name = name2;
 
 				return( true );
 

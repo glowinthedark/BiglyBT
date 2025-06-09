@@ -1,12 +1,13 @@
 # BiglyBT
 
-Source for BiglyBT, a feature filled, open source, ad-free, bittorrent client.  BiglyBT is forked from Vuze/Azureus and is being maintained by two of the original developers as well as members of the community.  With over 15 years of development, there's a good chance we have the features you are looking for, as well as the decade old bugs you aren't looking for :)
+Source for BiglyBT, a feature filled, open source, ad-free, bittorrent client.  BiglyBT is forked from the original project and is being maintained by two of the original developers as well as members of the community.  With over 20 years of development, there's a good chance we have the features you are looking for.
 
 * [Official BiglyBT site](https://www.biglybt.com)
 * [Ways to Contribute](CONTRIBUTING.md)
 * [Translation Information](TRANSLATE.md)
 * [Feature Voting Page](https://vote.biglybt.com)
 * [Coding Guidelines](CODING_GUIDELINES.md)
+* [Beta Program Changelog](https://biglybt.tumblr.com/)
 
 ## Donations
 
@@ -54,7 +55,7 @@ External Annotations definitions are a WIP and not complete list of definitions.
 Running is only few more steps:
 
 * Main class is `com.biglybt.ui.Main` in module `uis`
-* Working Directory should be a new folder, since the app will write things to it. Put the `aereg.dll` or `libOSXAccess.jnilib` in there.
+* Working Directory should be a new folder, since the app will write things to it. Put the [`aereg.dll`](core/lib/libWIN32Access/README.md) or `libOSXAccess.jnilib` in there.
   
   When a normal user is running the app, the working directory is where the jar, executable, and libraries (dll, so, jnilib) are.
 * If you want a separate config dir from the default one, use VM Option `-Dazureus.config.path=<some config path>`
@@ -65,3 +66,5 @@ Running is only few more steps:
 We build our installers using [Install4j, multi-platform installer builder](https://www.ej-technologies.com/products/install4j/overview.html)
 
 ![Install4j Logo](https://www.ej-technologies.com/images/product_banners/install4j_large.png)
+
+Our binaries and installers up to and including v3.4 are signed with a digital signature of "Bigly Software". Releases after v3.4 will use an individual signing certificate and will bear the name "Arron Mogge (Open Source Developer)" denoting the identity of our team member responsible for signing.

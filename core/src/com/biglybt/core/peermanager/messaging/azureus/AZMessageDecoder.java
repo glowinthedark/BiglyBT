@@ -59,7 +59,9 @@ public class AZMessageDecoder implements MessageStreamDecoder {
   private final ArrayList messages_last_read = new ArrayList();
   private int protocol_bytes_last_read = 0;
   private int data_bytes_last_read = 0;
-  private int percent_complete = -1;
+  
+  private int	progress_id;
+  private int[] progress;
 
 
   private byte[] msg_id_bytes = null;
@@ -133,8 +135,8 @@ public class AZMessageDecoder implements MessageStreamDecoder {
 
 
   @Override
-  public int getPercentDoneOfCurrentMessage() {
-    return percent_complete;
+  public int[] getCurrentMessageProgress() {
+    return( progress );
   }
 
 
@@ -335,7 +337,7 @@ public class AZMessageDecoder implements MessageStreamDecoder {
         catch( Throwable e ) {
           ref_buff.returnToPoolIfNotFree();
 
-          	// maintain unexpected erorrs as such so they get logged later
+          	// maintain unexpected errors as such so they get logged later
 
           if ( e instanceof RuntimeException ){
 
@@ -346,12 +348,13 @@ public class AZMessageDecoder implements MessageStreamDecoder {
         }
 
         reading_length_mode = true;  //see if we've already read the next message's length
-        percent_complete = -1;  //reset receive percentage
+        progress = null;  //reset receive percentage
+        progress_id++;
         msg_id_bytes = null;
         msg_id_read_complete = false;
       }
       else {  //only partial received so far
-        percent_complete = (payload_buffer.position( SS ) * 100) / message_length;  //compute receive percentage
+        progress = new int[]{ message_length, payload_buffer.position( SS ), progress_id };
       }
     }
 

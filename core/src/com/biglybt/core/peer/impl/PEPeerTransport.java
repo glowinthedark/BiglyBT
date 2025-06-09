@@ -24,11 +24,11 @@
  */
 package com.biglybt.core.peer.impl;
 
+import java.net.InetAddress;
 import java.util.List;
 import java.util.Map;
 
 import com.biglybt.core.disk.DiskManagerReadRequest;
-import com.biglybt.core.networkmanager.NetworkConnectionBase;
 import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peermanager.peerdb.PeerItem;
 import com.biglybt.core.torrent.TOTorrentFileHashTree;
@@ -43,6 +43,15 @@ PEPeerTransport
   public static final int CONNECTION_CONNECTING             = 1;
   public static final int CONNECTION_WAITING_FOR_HANDSHAKE  = 2;
   public static final int CONNECTION_FULLY_ESTABLISHED      = 4;
+
+  public static final int CP_UNKNOWN				= 0;
+  public static final int CP_CONNECTING				= 1;
+  public static final int CP_CONNECT_OK				= 2;
+  public static final int CP_CONNECT_FAILED			= 3;
+  public static final int CP_RECEIVED_DATA			= 4;
+
+	public int
+	getOutboundConnectionProgress();
 
   		/**
   		 * Start message processing for the peer
@@ -123,14 +132,14 @@ PEPeerTransport
    * Close the peer connection
    * @param reason for closure
    */
-	public void closeConnection( String reason );
+	public void closeConnection( String reason, int reason_code );
 	
 	@Override
 	public boolean
 	transferAvailable();
 
 	public long
-	getLastMessageSentTime();
+	getLastMessageSentTimeMono();
 
 	public List
 	getExpiredRequests();
@@ -192,7 +201,7 @@ PEPeerTransport
 
   /**
    * Get the time since the most-recent data that was actually written to disk was received.
-   * @return time count in ms, or -1 if we've never received usefull data from them
+   * @return time count in ms, or -1 if we've never received useful data from them
    */
   public long getTimeSinceGoodDataReceived();
 
@@ -244,14 +253,20 @@ PEPeerTransport
 
 		/**
 		 * Attempts to reconnect to the same peer
-		 * @param tryUDP try to initate a UDP connection if true, just reestablish the previous state otherwise
+		 * @param tryUDP try to initiate a UDP connection if true, just reestablish the previous state otherwise
 		 * @param tryIPv6 TODO
 		 * @return null if reconnect not possible, reconnected peer otherwise
 		 */
 
 	public PEPeerTransport
-	reconnect(boolean tryUDP, boolean tryIPv6);
+	reconnect(
+		boolean tryUDP, 
+		boolean tryIPv6,
+		Map		user_data );
 
+	public boolean
+	isReconnect();
+	
 	public int
 	getIncomingRequestedPieceNumberCount();
 	
@@ -269,6 +284,14 @@ PEPeerTransport
 	sendHashRequest(
 		TOTorrentFileHashTree.HashRequest		req );
 	
+	public boolean
+	canSendHolePunch();
+	
+	public void
+	sendHolePunch(
+		InetAddress		address,
+		int				port );
+
 	public void
 	generateEvidence(
 		IndentWriter	writer );

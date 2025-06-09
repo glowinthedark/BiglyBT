@@ -261,8 +261,8 @@ public class SBC_DiskOpsView
 		// tvDiskOps.setRowDefaultHeightEM(1.5f);
 		tvDiskOps.setHeaderVisible( true );
 
-		tableParent = new Composite(control, SWT.BORDER);
-		tableParent.setLayoutData(Utils.getFilledFormData());
+		tableParent = Utils.createSkinnedComposite(control, SWT.BORDER, Utils.getFilledFormData());
+		
 		GridLayout layout = new GridLayout();
 		layout.marginHeight = layout.marginWidth = layout.verticalSpacing = layout.horizontalSpacing = 0;
 		tableParent.setLayout(layout);
@@ -410,9 +410,10 @@ public class SBC_DiskOpsView
 			return;
 		}
 
-		List<ProgressCallback>	can_start 	= new ArrayList<>();
-		List<ProgressCallback>	can_stop 	= new ArrayList<>();
-		List<ProgressCallback>	can_remove 	= new ArrayList<>();
+		List<ProgressCallback>	can_start 		= new ArrayList<>();
+		List<ProgressCallback>	can_schedule 	= new ArrayList<>();
+		List<ProgressCallback>	can_stop 		= new ArrayList<>();
+		List<ProgressCallback>	can_remove 		= new ArrayList<>();
 		
 		for ( Object ds: selectedDS ){
 		
@@ -438,8 +439,13 @@ public class SBC_DiskOpsView
 				if ((states & ProgressCallback.ST_RESUME ) != 0 ){
 					
 					if ( state == ProgressCallback.ST_PAUSE ){
-					
+						
 						can_start.add( prog );
+
+						if ( !prog.isAutoPause()){
+						
+							can_schedule.add( prog );
+						}
 					}
 				}
 				if ((states & ProgressCallback.ST_CANCEL ) != 0 ){
@@ -453,18 +459,6 @@ public class SBC_DiskOpsView
 		}
 		
 		MenuItem mi = new MenuItem( menu, SWT.PUSH );
-		Messages.setLanguageText( mi, "v3.MainWindow.button.resume" );
-		
-		mi.addListener(SWT.Selection,(ev)->{
-			for ( ProgressCallback cb: can_start ){
-				cb.setTaskState( ProgressCallback.ST_RESUME );
-			}
-			refreshToolbar();
-		});
-		
-		mi.setEnabled( !can_start.isEmpty());
-		
-		mi = new MenuItem( menu, SWT.PUSH );
 		Messages.setLanguageText( mi, "v3.MainWindow.button.pause" );
 		
 		mi.addListener(SWT.Selection,(ev)->{
@@ -480,6 +474,30 @@ public class SBC_DiskOpsView
 		});
 		
 		mi.setEnabled( !can_stop.isEmpty());
+		
+		mi = new MenuItem( menu, SWT.PUSH );
+		Messages.setLanguageText( mi, "v3.MainWindow.button.start" );
+		
+		mi.addListener(SWT.Selection,(ev)->{
+			for ( ProgressCallback cb: can_start ){
+				cb.setTaskState( ProgressCallback.ST_RESUME );
+			}
+			refreshToolbar();
+		});
+		
+		mi.setEnabled( !can_start.isEmpty());
+		
+		mi = new MenuItem( menu, SWT.PUSH );
+		Messages.setLanguageText( mi, "label.schedule" );
+		
+		mi.addListener(SWT.Selection,(ev)->{
+			for ( ProgressCallback cb: can_schedule ){
+				cb.setAutoPause( true );
+			}
+			refreshToolbar();
+		});
+		
+		mi.setEnabled( !can_schedule.isEmpty());
 
 		mi = new MenuItem( menu, SWT.PUSH );
 		Messages.setLanguageText( mi, "UpdateWindow.cancel" );
@@ -516,6 +534,7 @@ public class SBC_DiskOpsView
 		return(	type == CoreOperation.OP_DOWNLOAD_ALLOCATION || 
 				type == CoreOperation.OP_DOWNLOAD_CHECKING || 
 				type == CoreOperation.OP_DOWNLOAD_EXPORT || 
+				type == CoreOperation.OP_DOWNLOAD_COPY || 
 				type == CoreOperation.OP_FILE_MOVE ); 
 	}
 

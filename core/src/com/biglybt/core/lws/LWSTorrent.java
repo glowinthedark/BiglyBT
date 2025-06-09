@@ -67,33 +67,6 @@ LWSTorrent
            	{
            		sets	= _sets;
            	}
-
-           	@Override
-            public TOTorrentAnnounceURLSet
-           	createAnnounceURLSet(
-           		final URL[]	_urls )
-           	{
-           		return(
-           			new TOTorrentAnnounceURLSet()
-           			{
-           				private URL[] urls = _urls;
-
-           				@Override
-			            public URL[]
-           				getAnnounceURLs()
-           				{
-           					return( urls );
-           				}
-
-           				@Override
-			            public void
-           				setAnnounceURLs(
-           					URL[]		_urls )
-           				{
-           					urls = _urls;
-           				}
-           			});
-           	}
 		};
 
 	private static void
@@ -205,19 +178,12 @@ LWSTorrent
 	}
 
   	@Override
-	  public void
+	public void
 	setCreatedBy(
 		byte[]		cb )
    	{
   		getDelegate().setCreatedBy( cb );
    	}
-
-	@Override
-	public boolean
-	isCreated()
-	{
-		return( true );
-	}
 
 	@Override
 	public URL
@@ -335,6 +301,25 @@ LWSTorrent
 	selectHybridHashType(
 		int type ) 
 		
+		throws TOTorrentException
+	{
+		throw( new TOTorrentException( "Not supported", TOTorrentException.RT_CREATE_FAILED ));
+	}
+	
+   	@Override
+	public TOTorrent
+	setSimpleTorrentDisabled(
+		boolean	disabled )
+	
+		throws TOTorrentException
+	{
+   		throw( new TOTorrentException( "Not supported", TOTorrentException.RT_CREATE_FAILED ));
+	}
+	
+	@Override
+	public boolean
+	isSimpleTorrentDisabled()
+	
 		throws TOTorrentException
 	{
 		throw( new TOTorrentException( "Not supported", TOTorrentException.RT_CREATE_FAILED ));

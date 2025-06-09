@@ -31,6 +31,7 @@ import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
 import com.biglybt.core.networkmanager.VirtualServerChannelSelector;
+import com.biglybt.core.util.AEDiagnostics;
 import com.biglybt.core.util.AEMonitor;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.SystemTime;
@@ -56,6 +57,8 @@ VirtualNonBlockingServerChannelSelector
 
 	protected final AEMonitor	this_mon	= new AEMonitor( "VirtualNonBlockingServerChannelSelector" );
 
+	private boolean alert_on_fail = true;
+	
 	long last_accept_time;
 
 
@@ -89,6 +92,13 @@ VirtualNonBlockingServerChannelSelector
 		receive_buffer_size	= _so_rcvbuf_size;
 		listener			= _listener;
 	}
+	
+	public void
+	setAlertOnFail(
+		boolean b )
+	{
+		alert_on_fail = b;
+	}
 
   /**
    * Start the server and begin accepting incoming connections.
@@ -117,6 +127,8 @@ VirtualNonBlockingServerChannelSelector
 
 	    			server_channel.configureBlocking( false );
 
+	    			AEDiagnostics.logWithStack( "seltrace", "TCP non-blocking server channel bound: " + bind_address + ": " + i );
+	    			
 			        VirtualAcceptSelector.getSingleton().register(
 			        		server_channel,
 			        		new VirtualAcceptSelector.AcceptListener()
@@ -132,8 +144,13 @@ VirtualNonBlockingServerChannelSelector
 			        			}
 			        		});
 	    		}catch( Throwable t ) {
-	    			Debug.out( t );
-	    			Logger.log(new LogAlert(LogAlert.UNREPEATABLE,	"ERROR, unable to bind TCP incoming server socket to " +i, t));
+	    			
+	    			if ( alert_on_fail ){
+		    			Debug.out( t );
+		    			Logger.log(new LogAlert(LogAlert.UNREPEATABLE,	"ERROR, unable to bind TCP incoming server socket to " + bind_address + ":" + i, t));
+	    			}
+	    			
+		    		AEDiagnostics.logWithStack( "seltrace", "TCP non-blocking server channel failed: " + bind_address + ": " + i + " - " + Debug.getNestedExceptionMessage(t));
 	    		}
 	    	}
 
@@ -161,9 +178,12 @@ VirtualNonBlockingServerChannelSelector
 	    	  VirtualAcceptSelector.getSingleton().cancel( server_channel );
 
 	    	  server_channel.close();
+	    	  
+	    	  AEDiagnostics.logWithStack( "seltrace", "TCP non-blocking server channel unbound: " + bind_address + ": " + i );
 
+	      }catch( Throwable t ){
+	    	  Debug.out( t );  
 	      }
-	      catch( Throwable t ) {  Debug.out( t );  }
 	    }
 
 	    server_channels.clear();

@@ -23,6 +23,7 @@ package com.biglybt.core.download;
 import java.io.File;
 import java.util.List;
 
+import com.biglybt.core.CoreOperationTask.ProgressCallback;
 import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.disk.DiskManagerFileInfoSet;
@@ -96,6 +97,9 @@ DownloadManager
 	
 	public static final Object UD_KEY_STOP_REASON = Download.UD_KEY_STOP_REASON;
 	
+	public void
+	setConstructed();
+	
 	public boolean
 	isConstructed();
 	
@@ -122,18 +126,23 @@ DownloadManager
     public void
     startDownload();
 
-    public boolean canForceRecheck();
+    public boolean 
+    canForceRecheck();
 
-    public void forceRecheck();
+    public boolean
+    isForceRechecking();
+    
+    public void 
+    forceRecheck();
+    
+    	/**
+    	 * Called for certain config change events so that individual managers don't have to separately listener for changes
+    	 */
+    
+    public void
+    syncGlobalConfig();
 
-		/**
-		 * @param l
-		 *
-		 * @since 3.0.0.7
-		 */
-		void forceRecheck(ForceRecheckListener l);
-
-        /**
+    	/**
          * Reset the file download state to totally undownloaded. Download must be stopped
          * @param file
          */
@@ -236,6 +245,18 @@ DownloadManager
     
     public void
     resume();
+    
+    	/**
+    	 * resume the download and wait until it reaches the target state. It may fail to reach this
+    	 * state (e.g. goes into an error state). It will however block if it looks like progress towards
+    	 * the state is being made (allocating/checking)
+    	 * @param target_state
+    	 * @return whether or not the state was reached
+    	 */
+    
+    public boolean
+    resume(
+    	int		target_state );
 
     public int
     getTCPListeningPortNumber();
@@ -411,9 +432,17 @@ DownloadManager
      * @return Whether all the non-skipped (non-DND) files exist
      */
 
+    public default boolean
+    filesExist(
+    	boolean		expected_to_be_allocated )
+    {
+    	return( filesExist( expected_to_be_allocated, false ));
+    }
+    
     public boolean
     filesExist(
-    	boolean	expected_to_be_allocated );
+    	boolean		expected_to_be_allocated,
+    	boolean		test_only );
 
     /**
      * Download must be stopped - used at start-of-day to recover error state
@@ -540,6 +569,8 @@ DownloadManager
 
     public void updateAutoUploadPriority( Object key, boolean inc );
 
+    public int getEffectiveUploadPriority();
+    
 	/**
 	 * Returns the max uploads depending on whether the download is seeding and it has a separate
 	 * rate for this
@@ -602,7 +633,8 @@ DownloadManager
 
     public void
     copyDataFiles(
-    	File	parent_dir )
+    	File				parent_dir,
+    	ProgressCallback	progress )
 
     	throws DownloadManagerException;
 
@@ -823,10 +855,11 @@ DownloadManager
     public void
     removeTPSListener(
     	DownloadManagerTPSListener		listener );
-
+    
     public void
     generateEvidence(
-        IndentWriter        writer );
+        IndentWriter        writer,
+        boolean				full );
 
     public int[] getStorageType(DiskManagerFileInfo[] infos);
 
@@ -877,18 +910,17 @@ DownloadManager
     public void
     exportDownload( File parent_dir ) throws DownloadManagerException;
     
+    public default void
+    fireGlobalManagerEvent(
+    	int		event_type )
+    {
+    	fireGlobalManagerEvent( event_type, null );
+    }
+    
     public void
     fireGlobalManagerEvent(
-    	int		event_type );
-
-		/**
-		 * Sets the priority for an array for files
-		 *
-		 * @param fileInfos
-		 * @param type
-		 * @since 5.6.2.1
-		 */
-	public void setFilePriorities(DiskManagerFileInfo[] fileInfos, int type);
+    	int		event_type,
+    	Object	event_data );
 
 	public void
 	requestAttention();

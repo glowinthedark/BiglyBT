@@ -52,6 +52,21 @@ public class BooleanSwtParameter
 	public interface ValueProcessor
 		extends SwtParameterValueProcessor<BooleanSwtParameter, Boolean>
 	{
+		public default Boolean
+		getValue(
+			List<Boolean>	values )
+		{
+			int intB = -1;
+			for ( boolean v: values ){
+				if (intB == -1) {
+					intB = v ? 1 : 0;
+				} else if ((intB == 1) != v) {
+					intB = 2;
+					break;
+				}
+			}
+			return( intB==2?null:intB == 1 );
+		}
 	}
 
 	private final Label lblSuffix;
@@ -182,11 +197,22 @@ public class BooleanSwtParameter
 				// Checkbox with text in one widget
 				checkBox = new Button(ourParent, SWT.CHECK);
 				setRelatedControl(checkBox);
-				if (numExtraIndent > 0) {
-					checkBox.setText(text);
-				} else {
-					Messages.setLanguageText(checkBox, labelKey);
+				
+				if ( Constants.isLinux ){
+						// Text getting truncated, don't care, hack fix, someone else can worry one day
+					if (numExtraIndent > 0) {
+						checkBox.setText( text + "\u00a0\u00a0\u00a0\u00a0" );
+					} else {
+						checkBox.setText( MessageText.getString(labelKey) + "\u00a0\u00a0\u00a0\u00a0" );
+					}
+				}else{
+					if (numExtraIndent > 0) {
+						checkBox.setText(text);
+					} else {
+						Messages.setLanguageText(checkBox, labelKey);
+					}
 				}
+				
 				if (doGridData(ourParent)) {
 					GridData gridData = new GridData();
 					gridData.horizontalSpan = 2;

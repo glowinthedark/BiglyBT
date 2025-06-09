@@ -29,6 +29,7 @@ import java.math.BigDecimal;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.text.NumberFormat;
+import java.text.ParsePosition;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
@@ -281,6 +282,7 @@ DisplayFormatters
 	private static String	ManagerItem_error;
 	private static String	ManagerItem_forced;
 	private static String	ManagerItem_moving;
+	private static String	ManagerItem_unallocated;
 
 	private static String	yes;
 	private static String	no;
@@ -310,6 +312,7 @@ DisplayFormatters
 		ManagerItem_error				= getResourceString( "ManagerItem.error", "error" );
 		ManagerItem_forced				= getResourceString( "ManagerItem.forced", "forced" );
 		ManagerItem_moving				= getResourceString( "ManagerItem.moving", "moving" );
+		ManagerItem_unallocated			= getResourceString( "label.unallocated", "unallocated" );
 		yes								= getResourceString( "GeneralView.yes", "Yes" );
 		no								= getResourceString( "GeneralView.no", "No" );
 	}
@@ -677,7 +680,22 @@ DisplayFormatters
     }
 
     private static final SimpleDateFormat abs_df = new SimpleDateFormat( "yyyy/MM/dd HH:mm:ss" );
+    private static final SimpleDateFormat ydmhm_df = new SimpleDateFormat( "yyyy/MM/dd HH:mm" );
 
+    public static String
+    formatDateYMDHMS(
+    	long		time )
+    {
+    	return( abs_df.format(new Date(time)));
+    }
+    
+    public static String
+    formatDateYMDHM(
+    	long		time )
+    {
+    	return( ydmhm_df.format(new Date(time)));
+    }
+    
     public static String
     formatETA(long eta,boolean abs )
     {
@@ -897,6 +915,13 @@ DisplayFormatters
 							sr = MessageText.getString( sr.substring( 1, sr.length() - 1 ));
 						}
 						tmp += " (" + sr + ")";
+					}else{
+						if ( 	!manager.isDataAlreadyAllocated() && 
+								//manager.getStats().getSecondsDownloading() == 0 &&
+								!manager.isDownloadComplete( false )){
+							
+							tmp += " (" + ManagerItem_unallocated + ")";
+						}
 					}
 				}
 				
@@ -1352,6 +1377,33 @@ DisplayFormatters
 		format_map = map;
 	}
 
+	public static float
+	parseFloat(
+		DecimalFormat		df,
+		String				str )
+	
+		throws NumberFormatException
+	{
+		if ( str == null ){
+			throw( new NumberFormatException());
+		}
+		
+		str = str.trim();
+		
+		ParsePosition parsePosition = new ParsePosition(0);
+		 
+		float result = df.parse(str,parsePosition).floatValue();
+		
+		if ( parsePosition.getIndex() == str.length()){
+			
+			return( result );
+			
+		}else{
+			
+			throw( new NumberFormatException( "Invalid float: " + str ));
+		}
+	}
+	
 	public static String
 	formatCustomRate(
 		String		key,

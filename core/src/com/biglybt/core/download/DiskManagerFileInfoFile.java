@@ -85,6 +85,13 @@ DiskManagerFileInfoFile
 	}
 
 	@Override
+	public Boolean 
+	isSkipping()
+	{
+		return( null );
+	}
+	
+	@Override
 	public void
 	setDeleted(boolean b)
 	{
@@ -94,7 +101,8 @@ DiskManagerFileInfoFile
 	@Override
 	public void
 	setLink(
-		File	link_destination )
+		File	link_destination,
+		boolean	no_delete )
 	{
 		throw( new RuntimeException( "Not supported" ));
 	}

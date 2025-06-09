@@ -21,7 +21,9 @@ package com.biglybt.ui.swt.components.graphics;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
@@ -47,45 +49,56 @@ import com.biglybt.ui.swt.mainwindow.Colors;
  */
 public class SpeedGraphic extends ScaledGraphic implements ParameterListener {
 
-  private static final int	DEFAULT_ENTRIES	= 2000;
+	private static final int	DEFAULT_ENTRIES	= 2000;
 
-  public static final int COLOR_AVERAGE = 0;
-  public static final int COLOR_MAINSPEED = 1;
-  public static final int COLOR_OVERHEAD = 2;
-  public static final int COLOR_LIMIT = 3;
-  public static final int COLOR_OTHERS = 4;
-  public static final int COLOR_TRIMMED = 5;
+	public static final int COLOR_AVERAGE = 0;
+	public static final int COLOR_MAINSPEED = 1;
+	public static final int COLOR_OVERHEAD = 2;
+	public static final int COLOR_LIMIT = 3;
+	public static final int COLOR_OTHERS = 4;
+	public static final int COLOR_TRIMMED = 5;
 
-  public Color[] colors = new Color[] {
-  	Colors.red, Colors.blues[Colors.BLUES_MIDDARK], Colors.colorInverse, Colors.blue, Colors.grey,
-  	Colors.light_grey
-  };
+	public Color[] colors = new Color[] {
+			Colors.red, Colors.blues[Colors.BLUES_MIDDARK], Colors.colorInverse, Colors.blue, Colors.grey,
+			Colors.light_grey
+	};
 
-  private int internalLoop;
-  private int graphicsUpdate;
-  private Point oldSize;
+	private int internalLoop;
+	private int graphicsUpdate;
+	private Point oldSize;
 
-  protected Image bufferImage;
+	protected Image bufferImage;
 
 	private int					nbValues		= 0;
 	private int					maxEntries		= DEFAULT_ENTRIES;
 	private int[][]				all_values		= new int[1][maxEntries];
-	
+
 	private long				startTime		= -1;
 	private int[]				ages			= new int[maxEntries];
-	
+
 	private int					currentPosition;
 
-
 	private SimpleDateFormat	timeFormatter = new SimpleDateFormat("HH:mm", Locale.US );
-	
-  private SpeedGraphic(Scale scale,ValueFormater formater) {
-    super(scale,formater);
 
-    currentPosition = 0;
+	private Map<Integer,Integer>	timePositions = 
+		new LinkedHashMap<Integer,Integer>(256,0.75f,true)
+		{
+			@Override
+			protected boolean
+			removeEldestEntry(
+					Map.Entry<Integer,Integer> eldest)
+			{
+				return size() > 256;
+			}
+		};
+		
+	private SpeedGraphic(Scale scale,ValueFormater formater) {
+		super(scale,formater);
 
-    COConfigurationManager.addAndFireParameterListener("Graphics Update",this);
-  }
+		currentPosition = 0;
+
+		COConfigurationManager.addAndFireParameterListener("Graphics Update",this);
+	}
 
   @Override
   public void initialize(Canvas canvas) {
@@ -280,51 +293,49 @@ public class SpeedGraphic extends ScaledGraphic implements ParameterListener {
 		}
 		
 		GC gcImage = null;
-		try
-		{
+		
+		try{
+		
 			this_mon.enter();
 
-			drawScale(sizeChanged);
-
-			if (bufferScale == null || bufferScale.isDisposed())
-				return;
+			if ( bufferImage != null && !bufferImage.isDisposed()){
+				
+				bufferImage.dispose();
+			}
+			
+		    bufferImage = null;
 
 			Rectangle bounds = drawCanvas.getClientArea();
-			if (bounds.isEmpty())
+			
+			if (bounds.isEmpty()){
+				
 				return;
-
-
-			//If bufferedImage is not null, dispose it
-			if (bufferImage != null && !bufferImage.isDisposed())
-				bufferImage.dispose();
-
-			bufferImage = new Image(drawCanvas.getDisplay(), bounds);
-			gcImage = new GC(bufferImage);
-			gcImage.drawImage(bufferScale, 0, 0);
-
-			gcImage.setAntialias( SWT.ON );
+			}
 
 			int oldAverage = 0;
 			int[] oldTargetValues = new int[all_values.length];
 
 			int[] maxs = new int[all_values.length];
 
-			for (int x = 0; x < bounds.width - 71; x++)
-			{
+			for (int x = 0; x < bounds.width - 71; x++){
+			
 				int position = currentPosition - x - 1;
-				if (position < 0)
-				{
+				
+				if (position < 0){
+				
 					position += maxEntries;
-					if (position < 0)
-					{
+					
+					if (position < 0){
+					
 						position = 0;
 					}
 				}
-				for (int chartIdx = 0; chartIdx < all_values.length; chartIdx++)
-				{
+				for (int chartIdx = 0; chartIdx < all_values.length; chartIdx++){
+				
 					int value = all_values[chartIdx][position];
-					if (value > maxs[chartIdx])
-					{
+					
+					if (value > maxs[chartIdx]){
+						
 						maxs[chartIdx] = value;
 					}
 				}
@@ -333,26 +344,28 @@ public class SpeedGraphic extends ScaledGraphic implements ParameterListener {
 			int max = maxs[0];
 			int max_primary = max;
 
-			for (int i = 1; i < maxs.length; i++)
-			{
+			for (int i = 1; i < maxs.length; i++){
+			
 				int m = maxs[i];
-				if (i == 1)
-				{
+				if (i == 1){
+				
 					if (max < m)
 					{
 						max = m;
 						max_primary = max;
 					}
-				} else
-				{
-					// trim secondary indicators so we don't loose the more important info
-					if (max < m)
-					{
-						if (m <= 2 * max_primary)
-						{
+				}else{
+					
+						// trim secondary indicators so we don't loose the more important info
+					
+					if (max < m){
+					
+						if (m <= 2 * max_primary){
+						
 							max = m;
-						} else
-						{
+							
+						}else{
+			
 							max = 2 * max_primary;
 							break;
 						}
@@ -361,12 +374,32 @@ public class SpeedGraphic extends ScaledGraphic implements ParameterListener {
 			}
 
 			scale.setMax(max);
+			
+			drawScale(sizeChanged);
+
+			if ( bufferScale == null || bufferScale.isDisposed()){
+				
+				return;
+			}
+
+			bufferImage = new Image(drawCanvas.getDisplay(), bounds);
+			
+			gcImage = new GC(bufferImage);
+			
+			gcImage.drawImage(bufferScale, 0, 0);
+
+			gcImage.setAntialias( SWT.ON );
 
 			long now		= SystemTime.getCurrentTime();
 									
 			int mono_secs = (int)((SystemTime.getMonotonousTime()-startTime)/1000);
 			int next_secs = 60;
+			int	timestamp_num = 0;
 			
+			int last_xpos = -1;
+			
+		    int lastAverage = -1;
+
 			for (int x = 0; x < bounds.width - 71; x++){
 			
 				int position = currentPosition - x - 1;
@@ -401,12 +434,31 @@ public class SpeedGraphic extends ScaledGraphic implements ParameterListener {
 						Point p = gcImage.stringExtent( str );
 						
 						int xPos = xDraw-p.x/2;
-						
+												
 						if ( xPos >= 0 ){
 						
-							gcImage.setForeground(Colors.grey );
+							if ( last_xpos < 0 ||  xPos + p.x < last_xpos ){
+							
+									// there's an issue with time sync that can cause jittering in the
+									// location of the timestamps
+																		
+								Integer old_pos = timePositions.get( timestamp_num );
+								
+								if ( old_pos != null && Math.abs( old_pos - xPos ) <= 2){
+								
+									xPos = old_pos;
+								}
+								
+								gcImage.setForeground( colorGrey );
 
-							gcImage.drawText( str, xPos, 0, true );
+								gcImage.drawText( str, xPos, 0, true );
+								
+								last_xpos = xPos;
+								
+								timePositions.put( timestamp_num, xPos );
+								
+								timestamp_num++;
+							}
 						}
 					}
 				}
@@ -457,15 +509,17 @@ public class SpeedGraphic extends ScaledGraphic implements ParameterListener {
 					int h2 = bounds.height - scale.getScaledValue(oldAverage) - 2;
 					gcImage.setForeground(colors[COLOR_AVERAGE]);
 					gcImage.drawLine(xDraw, h1, xDraw + 1, h2);
+					if ( lastAverage == -1 ){
+						lastAverage = oldAverage;
+					}
 				}
 				oldAverage = average;
 			}
 
-			if (nbValues > 0)
-			{
-				int height = bounds.height - scale.getScaledValue(computeAverage(currentPosition - 6)) - 2;
+			if (lastAverage >= 0){
+				int height = bounds.height - scale.getScaledValue(lastAverage) - 2;
 				gcImage.setForeground(colors[COLOR_AVERAGE]);
-				gcImage.drawText(formater.format(computeAverage(currentPosition - 6)), bounds.width - 65, height - 12, true);
+				gcImage.drawText(formater.format(lastAverage), bounds.width - 65, height - 12, true);
 			}
 
 		} catch (Exception e)

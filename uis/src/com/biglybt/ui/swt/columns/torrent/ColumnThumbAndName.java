@@ -40,6 +40,7 @@ import com.biglybt.core.torrent.PlatformTorrentUtils;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
+import com.biglybt.core.util.FileUtil;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.ui.UIInputReceiver;
 import com.biglybt.pif.ui.UIInputReceiverListener;
@@ -81,6 +82,8 @@ public class ColumnThumbAndName
 	public static final String COLUMN_ID = "name";
 
 	private static final String ID_EXPANDOHITAREASHOW = "expandoHitAreaShow";
+
+	private static final Object	KEY_PATH_ICON		= new Object();
 
 	private static final boolean NEVER_SHOW_TWISTY =
 		!COConfigurationManager.getBooleanParameter("Table.useTree");
@@ -209,13 +212,6 @@ public class ColumnThumbAndName
 		Object ds = cell.getDataSource();
 		if (ds instanceof DiskManagerFileInfo) {
 			DiskManagerFileInfo fileInfo = (DiskManagerFileInfo) ds;
-			if (fileInfo.isSkipped()
-					&& (fileInfo.getStorageType() == DiskManagerFileInfo.ST_COMPACT || fileInfo.getStorageType() == DiskManagerFileInfo.ST_REORDER_COMPACT)) {
-				TableRowCore row = (TableRowCore) cell.getTableRow();
-				if (row != null) {
-					row.getParentRowCore().removeSubRow(ds);
-				}
-			}
 			cell.setSortValue( getDisplayName( fileInfo ));
 			return;
 		}
@@ -377,8 +373,9 @@ public class ColumnThumbAndName
 				}
 				int x = cellBounds.x;
 				textX = x + dstWidth + 3;
-				int minWidth = dstHeight * 7 / 4;
 				int imgPad = 0;
+				/* This puts big gaps when height is ludicrous
+				int minWidth = dstHeight * 7 / 4;
 				if (dstHeight > 25) {
 					if (dstWidth < minWidth) {
 						imgPad = ((minWidth - dstWidth + 1) / 2);
@@ -386,6 +383,7 @@ public class ColumnThumbAndName
 						textX = cellBounds.x + minWidth + 3;
 					}
 				}
+				*/
 				if (cellBounds.width - dstWidth - (imgPad * 2) < 100 && dstHeight > 18) {
 					dstWidth = Math.min(32, dstHeight);
 					x = cellBounds.x + ((32 - dstWidth + 1) / 2);
@@ -419,12 +417,12 @@ public class ColumnThumbAndName
 									w = w * 9 / 10;
 									h = h * 9 / 10;
 								}
-								gc.drawImage(image, srcBounds.x, srcBounds.y, srcBounds.width,
+								Utils.drawResizedImage(gc, image, srcBounds.x, srcBounds.y, srcBounds.width,
 										srcBounds.height, x, y, w, h);
 							} else {
 								int w = dstWidth * 3 / 8;
 								int h = dstHeight * 3 / 8;
-								gc.drawImage(image, srcBounds.x, srcBounds.y, srcBounds.width,
+								Utils.drawResizedImage(gc, image, srcBounds.x, srcBounds.y, srcBounds.width,
 										srcBounds.height, x + dstWidth - w, y + dstHeight - h, w, h);
 							}
 						}
@@ -445,7 +443,7 @@ public class ColumnThumbAndName
 			}
 		}
 
-		cellPaintName(cell, gc, cellBounds, textX, originalBoundxsX);
+		cellPaintName(cell, gc, cell.getBounds(), textX, originalBoundxsX);
 	}
 
 	private void cellPaintFileInfo(GC gc, final TableCellSWT cell,
@@ -455,16 +453,39 @@ public class ColumnThumbAndName
 		int	originalBoundxsX = cellBounds.x;
 		
 		//System.out.println(cellArea);
-		int padding = 5 + (true ? cellBounds.height : 0);
+		int padding = 5 + Math.min(32, cellBounds.height);
 		cellBounds.x += padding;
 		cellBounds.width -= padding;
 
 		int textX = cellBounds.x;
 
-		Image[] imgThumbnail = { ImageRepository.getPathIcon(fileInfo.getFile(true).getPath(),
-				cellBounds.height >= 20, false) };
+		Image[] imgThumbnail = null;
 
-		if ( showIcon && imgThumbnail != null && ImageLoader.isRealImage(imgThumbnail[0])) {
+		if ( showIcon && fileInfo != null ){
+			
+			File file = fileInfo.getFile(true);
+					
+			Object piCache = cell.getData( KEY_PATH_ICON );
+		
+			if ( piCache != null ){
+				
+				Object[] temp = (Object[])piCache;
+				
+				if ( FileUtil.areFilePathsIdentical((File)temp[0],file )){
+					
+					imgThumbnail = (Image[])temp[1];
+				}
+			}
+			
+			if ( imgThumbnail == null ){
+			
+				imgThumbnail = new Image[]{ ImageRepository.getPathIcon(file.getPath(), cellBounds.height >= 20, false) };
+		
+				cell.setData( KEY_PATH_ICON, new Object[]{ file, imgThumbnail });
+			}
+		}
+
+		if ( imgThumbnail != null && ImageLoader.isRealImage(imgThumbnail[0])) {
 			try {
 
 				if (cellBounds.height > 30) {
@@ -504,6 +525,8 @@ public class ColumnThumbAndName
 				textX = x + dstWidth + 3;
 				int minWidth = dstHeight;
 				int imgPad = 0;
+				/* This puts big gaps when height is ludicrous
+				int minWidth = dstHeight * 7 / 4;
 				if (dstHeight > 25) {
 					if (dstWidth < minWidth) {
 						imgPad = ((minWidth - dstWidth + 1) / 2);
@@ -511,6 +534,7 @@ public class ColumnThumbAndName
 						textX = cellBounds.x + minWidth + 3;
 					}
 				}
+				*/
 				if (cellBounds.width - dstWidth - (imgPad * 2) < 100 && dstHeight > 18) {
 					dstWidth = Math.min(32, dstHeight);
 					x = cellBounds.x + ((32 - dstWidth + 1) / 2);
@@ -544,12 +568,12 @@ public class ColumnThumbAndName
 									w = w * 9 / 10;
 									h = h * 9 / 10;
 								}
-								gc.drawImage(image, srcBounds.x, srcBounds.y, srcBounds.width,
+								Utils.drawResizedImage(gc, image, srcBounds.x, srcBounds.y, srcBounds.width,
 										srcBounds.height, x, y, w, h);
 							} else {
 								int w = dstWidth * 3 / 8;
 								int h = dstHeight * 3 / 8;
-								gc.drawImage(image, srcBounds.x, srcBounds.y, srcBounds.width,
+								Utils.drawResizedImage(gc,image, srcBounds.x, srcBounds.y, srcBounds.width,
 										srcBounds.height, x + dstWidth - w, y + dstHeight - h, w, h);
 							}
 						}
@@ -600,6 +624,8 @@ public class ColumnThumbAndName
 		if (s.startsWith(prefix)) {
 			s = s.substring(prefix.length());
 		}
+		
+		/*
 		if ( fileInfo.isSkipped()){
 
 	    	String dnd_sf = fileInfo.getDownloadManager().getDownloadState().getAttribute( DownloadManagerState.AT_DND_SUBFOLDER );
@@ -621,6 +647,7 @@ public class ColumnThumbAndName
 	    		}
 	    	}
 		}
+		*/
 		
 		return( s );
 	}
@@ -638,9 +665,12 @@ public class ColumnThumbAndName
 		if (name == null)
 			name = "";
 
-		GCStringPrinter sp = new GCStringPrinter(gc, name, new Rectangle(textX,
-				cellBounds.y, cellBounds.x + cellBounds.width - textX,
-				cellBounds.height), true, true, getTableID().endsWith( ".big" )?SWT.WRAP:SWT.NULL );
+		// Bug in GCStringPrinter with WRAP when there's only room for one line
+		// (sometimes line will be overly truncated)
+		GCStringPrinter sp = new GCStringPrinter(gc, name,
+				new Rectangle(textX, cellBounds.y,
+						cellBounds.x + cellBounds.width - textX, cellBounds.height),
+				true, true, cell.getMaxLines() == 1 ? SWT.LEFT : SWT.LEFT | SWT.WRAP);
 		
 		boolean fit = sp.printString();
 

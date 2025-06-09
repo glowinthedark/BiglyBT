@@ -20,7 +20,7 @@ package com.biglybt.core.util;
 import java.io.InputStreamReader;
 import java.io.LineNumberReader;
 import java.nio.charset.Charset;
-import java.security.AccessControlException;
+import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.StringTokenizer;
 import java.util.TimeZone;
@@ -68,12 +68,13 @@ Constants
 	public static final String PAIRING_SERVER			= "pair.biglybt.com";
 	public static final String WEB_REMOTE_SERVER		= "remote.biglybt.com";
 
+	public static final String XMLNS_VUZE			= "xmlns:vuze=\"http://www.vuze.com\"";
 	public static final String SPEED_TEST_SERVER	= "speedtest.vuze.com";
 
 	public static final String[] APP_DOMAINS = { "azureusplatform.com", "azureus.com", "aelitis.com", "vuze.com", "biglybt.com" };
 
-	public static final Charset UTF_8 = Charset.forName("UTF-8");
-	public static final Charset ISO_8859_1 = Charset.forName("ISO-8859-1");
+	public static final Charset UTF_8		= StandardCharsets.UTF_8; 		// Charset.forName("UTF-8");
+	public static final Charset ISO_8859_1	= StandardCharsets.ISO_8859_1;	// Charset.forName("ISO-8859-1");
 
 	@Deprecated
 	public static final String DEFAULT_ENCODING 	= "UTF8";
@@ -112,14 +113,7 @@ Constants
 			}
 		}catch( Throwable e ){
 
-			// can happen in applet
-
-			if ( e instanceof AccessControlException ){
-
-			}else{
-
-				e.printStackTrace();
-			}
+			e.printStackTrace();
 		}
 	}
 
@@ -128,11 +122,12 @@ Constants
 	public static final long   CRAPPY_INFINITE_AS_LONG = 10000*365*24*3600; // seconds (10k years)
 
 	/**
-	 *  Can't be final as accesed from client speed measurer plugin
+	 *  Can't be final as accessed from client speed measurer plugin
+	 *  27/04/2022 dead plugin, remove this sometime
 	 */
 
-	@SuppressWarnings("CanBeFinal")
-	public static boolean DOWNLOAD_SOURCES_PRETEND_COMPLETE	= false;
+	// @SuppressWarnings("CanBeFinal")
+	public static final boolean DOWNLOAD_SOURCES_PRETEND_COMPLETE	= false;
 
 	// keep the CVS style constant coz version checkers depend on it!
 	// e.g. 2.0.8.3
@@ -150,26 +145,28 @@ Constants
 	public static final String BIGLY_PEER_ID						= "BI";
 
 	
-	public static final String BIGLYBT_VERSION  = "2.6.0.1_B01";
+	public static final String BIGLYBT_VERSION  = "3.8.0.3_B01";
 	
 	//public static final String BUILD_VERSION  = "@build.version@";   //Ant replace - believed dead
 	public static final String SUBVERSION		= "";
-	public static final byte[] VERSION_ID       = ("-" + BIGLY_PEER_ID + "2601" + "-").getBytes();  //MUST be 8 chars long!
+	public static final byte[] VERSION_ID       = ("-" + BIGLY_PEER_ID + "3803" + "-").getBytes();  //MUST be 8 chars long!
 
 	private static final boolean FORCE_NON_CVS = System.getProperty( "az.force.noncvs", "0" ).equals( "1" );
 
 	public static final boolean IS_CVS_VERSION = isCVSVersion( BIGLYBT_VERSION ) && !FORCE_NON_CVS;
 
-	public static final String  OSName = System.getProperty("os.name");
+	public static final String  OSName 		= System.getProperty("os.name","");
+	public static final String  OSArch 		= System.getProperty("os.arch","");
+	public static final String  OSVersion	= System.getProperty("os.version","");
 
-	public static final boolean isOSX				= OSName.toLowerCase().startsWith("mac os");
+	public static final boolean isOSX			= OSName.toLowerCase().startsWith("mac os");
 	public static final boolean isLinux			= OSName.equalsIgnoreCase("Linux");
-	public static final boolean isSolaris			= OSName.equalsIgnoreCase("SunOS");
-	public static final boolean isFreeBSD			= OSName.equalsIgnoreCase("FreeBSD");
+	public static final boolean isSolaris		= OSName.equalsIgnoreCase("SunOS");
+	public static final boolean isFreeBSD		= OSName.equalsIgnoreCase("FreeBSD");
 	public static final boolean isWindowsXP		= OSName.equalsIgnoreCase("Windows XP");
 	public static final boolean isWindows95		= OSName.equalsIgnoreCase("Windows 95");
 	public static final boolean isWindows98		= OSName.equalsIgnoreCase("Windows 98");
-	public static final boolean isWindows2000		= OSName.equalsIgnoreCase("Windows 2000");
+	public static final boolean isWindows2000	= OSName.equalsIgnoreCase("Windows 2000");
 	public static final boolean isWindowsME		= OSName.equalsIgnoreCase("Windows ME");
 	public static final boolean isWindows9598ME	= isWindows95 || isWindows98 || isWindowsME;
 
@@ -185,8 +182,12 @@ Constants
 	public static final boolean isWindows7OrHigher;
 	public static final boolean isWindows8OrHigher;
 	public static final boolean isWindows10OrHigher;
+	// public static final boolean isWindows11OrHigher;   BORKED
 
 
+
+	public static final boolean isArm = OSArch.startsWith("arm") || OSArch.startsWith("aarch");
+    
 	public static final boolean is64Bit;
 	public static final boolean isOS64Bit;
 
@@ -194,7 +195,7 @@ Constants
 		boolean _is64Bit;
 
 		try{
-			_is64Bit = System.getProperty( "os.arch" ).contains( "64" );
+			_is64Bit = OSArch.contains( "64" );
 
 			if ( !_is64Bit ){
 
@@ -228,7 +229,7 @@ Constants
 			Float ver = null;
 
 			try{
-				ver = new Float( System.getProperty( "os.version" ));
+				ver = new Float(OSVersion);
 
 			}catch (Throwable e){
 			}
@@ -242,6 +243,7 @@ Constants
 				isWindows7OrHigher		= false;
 				isWindows8OrHigher		= false;
 				isWindows10OrHigher		= false;
+				// isWindows11OrHigher		= false;
 
 			}else{
 				float f_ver = ver.floatValue();
@@ -252,6 +254,23 @@ Constants
 				isWindows8OrHigher	 	= f_ver >= 6.2f;
 				isWindows10OrHigher		= f_ver >= 10.0f;
 
+
+				// would like to write
+				// isWindows11OrHigher		= f_ver >= 11.0f;
+				// but apparently it is broken
+				// https://stackoverflow.com/questions/72668838/system-getpropertyos-name-and-system-getpropertyos-version-returning-win
+				// this also doesn't seem to have been backported
+				/*
+				if ( isWindows10OrHigher ){
+										
+					isWindows11OrHigher = !OSName.equalsIgnoreCase( "Windows 10" );
+					
+				}else{
+					
+					isWindows11OrHigher = false;
+				}
+				*/
+				
 				if ( isWindowsVista ){
 
 					LineNumberReader lnr = null;
@@ -309,7 +328,7 @@ Constants
 			isWindows7OrHigher 		= false;
 			isWindows8OrHigher 		= false;
 			isWindows10OrHigher		= false;
-
+			// isWindows11OrHigher		= false;
 		}
 	}
 
@@ -322,7 +341,7 @@ Constants
 			int	second_digit	= 0;
 
 			try{
-				String os_version = System.getProperty( "os.version" );
+				String os_version = OSVersion;
 
 				String[] bits = os_version.split( "\\." );
 
@@ -378,7 +397,9 @@ Constants
 	public static final boolean isJava8OrHigher;
 	public static final boolean isJava9OrHigher;
 	public static final boolean isJava10OrHigher;
+	public static final boolean isJava11OrHigher;
 	public static final boolean isJava12OrHigher;
+	public static final boolean isJava18OrHigher;
 
 	static{
 		// http://www.oracle.com/technetwork/java/javase/versioning-naming-139433.html
@@ -391,7 +412,9 @@ Constants
 		boolean	_8plus;
 		boolean	_9plus;
 		boolean	_10plus;
+		boolean	_11plus;
 		boolean	_12plus;
+		boolean	_18plus;
 
 		try{
 			// from Java 9 we need to drop stuff after a + or - as we can have 9-ea (well, the + case shouldn't occur in java.version but whatever)
@@ -414,7 +437,9 @@ Constants
 			_9plus = first > 1 || second >= 9;
 
 			_10plus = first >= 10;
+			_11plus = first >= 11;
 			_12plus = first >= 12;
+			_18plus = first >= 18;
 
 		}catch( Throwable e ){
 
@@ -425,13 +450,17 @@ Constants
 			_8plus = false;		
 			_9plus = false;	
 			_10plus = false;
+			_11plus = false;
 			_12plus = false;
+			_18plus = false;
 		}
 
 		isJava8OrHigher		= _8plus;
 		isJava9OrHigher		= _9plus;
 		isJava10OrHigher	= _10plus;
+		isJava11OrHigher	= _11plus;
 		isJava12OrHigher	= _12plus;
+		isJava18OrHigher	= _18plus;
 	}
 
 	public static final String	FILE_WILDCARD = isWindows?"*.*":"*";

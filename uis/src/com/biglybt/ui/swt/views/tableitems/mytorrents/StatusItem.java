@@ -41,6 +41,7 @@ import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.views.table.CoreTableColumnSWT;
 import com.biglybt.ui.swt.views.table.TableCellSWT;
 import com.biglybt.ui.swt.views.table.TableRowSWT;
+import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.Download.SeedingRank;
 import com.biglybt.pif.ui.tables.*;
@@ -65,7 +66,7 @@ public class StatusItem
 	
 	private static boolean	overall_change_fg;
 	
-	private static TableRowSWT.ColorRequester	color_requester = ()-> 20;
+	private static TableViewSWT.ColorRequester	color_requester = ()-> 20;
 
 	static{
 		for ( String tid: TableManager.TABLE_MYTORRENTS_ALL ){
@@ -420,7 +421,11 @@ public class StatusItem
 
 				Color color = null;
 				if (state == DownloadManager.STATE_SEEDING) {
-					color = Colors.blues[Colors.BLUES_MIDDARK];
+					if ( Utils.isDarkAppearanceNativeWindows()){
+						color = Colors.bluesFixed[Colors.BLUES_MIDDARK];
+					}else{
+						color = Colors.blues[Colors.BLUES_MIDDARK];
+					}
 				} else if (state == DownloadManager.STATE_ERROR) {
 					color = Colors.colorError;
 				} else {

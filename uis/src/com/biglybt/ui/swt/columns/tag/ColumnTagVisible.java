@@ -26,6 +26,7 @@ import com.biglybt.ui.swt.columns.ColumnCheckBox;
 import com.biglybt.pif.ui.tables.TableColumn;
 
 import com.biglybt.core.tag.Tag;
+import com.biglybt.core.tag.TagType;
 
 
 public class
@@ -50,6 +51,13 @@ ColumnTagVisible
 
 		if ( tag != null ){
 
+			int tt = tag.getTagType().getTagType();
+			
+			if ( tt == TagType.TT_SWARM_TAG || tt == TagType.TT_DOWNLOAD_CATEGORY ){
+				
+				return( null );
+			}
+			
 			return( tag.isVisible());
 		}
 

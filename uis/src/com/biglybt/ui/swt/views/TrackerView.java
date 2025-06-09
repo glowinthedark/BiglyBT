@@ -47,8 +47,10 @@ import com.biglybt.ui.common.table.impl.TableColumnManager;
 import com.biglybt.ui.mdi.MultipleDocumentInterface;
 import com.biglybt.ui.selectedcontent.SelectedContent;
 import com.biglybt.ui.selectedcontent.SelectedContentManager;
+import com.biglybt.ui.swt.ListenerDMTask;
 import com.biglybt.ui.swt.MenuBuildUtils;
 import com.biglybt.ui.swt.Messages;
+import com.biglybt.ui.swt.TorrentUtil;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.maketorrent.MultiTrackerEditor;
 import com.biglybt.ui.swt.maketorrent.TrackerEditorListener;
@@ -124,7 +126,7 @@ public class TrackerView
 		tv = TableViewFactory.createTableViewSWT(
 				PLUGIN_DS_TYPE,
 				TableManager.TABLE_TORRENT_TRACKERS,
-				getPropertiesPrefix(),
+				getTextPrefixID(),
 				basicItems,
 				basicItems[0].getName(),
 				SWT.MULTI | SWT.FULL_SELECTION | SWT.VIRTUAL );
@@ -247,6 +249,7 @@ public class TrackerView
 		List<TrackerPeerSource>	found_trackers		= new ArrayList<>();
 		
 		boolean	found_dht_tracker	= false;
+		boolean	found_http_seed		= false;
 		boolean	update_ok 			= false;
 		boolean delete_ok			= false;
 
@@ -254,21 +257,26 @@ public class TrackerView
 
 			TrackerPeerSource ps = (TrackerPeerSource)o;
 
-			if ( ps.getType() == TrackerPeerSource.TP_TRACKER ){
+			int type = ps.getType();
+					
+			if ( type == TrackerPeerSource.TP_TRACKER ){
 
 				found_trackers.add( ps );
 
-			}
-
-			if ( ps.getType() == TrackerPeerSource.TP_DHT  ){
+			}else if ( type == TrackerPeerSource.TP_DHT  ){
 
 				found_dht_tracker = true;
-			}
+				
+			}else if ( type == TrackerPeerSource.TP_HTTP_SEED  ){
 
+				found_http_seed = true;
+			}
+			
 			int	state = ps.getStatus();
 
 			if ( 	( 	state == TrackerPeerSource.ST_ONLINE ||
 						state == TrackerPeerSource.ST_QUEUED ||
+						state == TrackerPeerSource.ST_STOPPED ||		// scrape for stopped downloads
 						state == TrackerPeerSource.ST_ERROR ) &&
 					!ps.isUpdating() &&
 					ps.canManuallyUpdate()){
@@ -282,41 +290,77 @@ public class TrackerView
 			}
 		}
 
+		DownloadManager dm = manager;
+
 		boolean	needs_sep = false;
 
 		boolean found_tracker = !found_trackers.isEmpty();
 		
-		if ( found_tracker || found_dht_tracker ){
+		if ( found_tracker || found_dht_tracker || found_http_seed ){
 
-			final MenuItem update_item = new MenuItem( menu, SWT.PUSH);
-
-			Messages.setLanguageText(update_item, "GeneralView.label.trackerurlupdate");
-
-			update_item.setEnabled( update_ok );
-
-			update_item.addListener(
-				SWT.Selection,
-				new TableSelectedRowsListener(tv)
-				{
-					@Override
-					public void
-					run(
-						TableRowCore row )
+			if ( found_tracker || found_dht_tracker ){
+				
+				final MenuItem update_item = new MenuItem( menu, SWT.PUSH);
+	
+				Messages.setLanguageText(update_item, "GeneralView.label.trackerurlupdate");
+	
+				update_item.setEnabled( update_ok );
+	
+				update_item.addListener(
+					SWT.Selection,
+					new TableSelectedRowsListener(tv)
 					{
-						for ( Object o: sources ){
+						@Override
+						public void
+						run(
+							TableRowCore row )
+						{
+							for ( Object o: sources ){
+	
+								TrackerPeerSource ps = (TrackerPeerSource)o;
+	
+								if ( ps.canManuallyUpdate()){
+	
+									ps.manualUpdate();
+								}
+							}
+						}
+					});
+			}
+			
+			if ( found_tracker ){
 
-							TrackerPeerSource ps = (TrackerPeerSource)o;
-
-							if ( ps.canManuallyUpdate()){
-
-								ps.manualUpdate();
+				if ( dm != null ){
+					
+					boolean clearPeerCache = false;
+				
+					if ( !dm.getDownloadState().getTrackerResponseCache().isEmpty()){
+						
+						clearPeerCache = true;
+						
+					}else{
+						
+						TRTrackerAnnouncer tc = dm.getTrackerClient();
+						
+						if ( tc != null ){
+							
+							if ( !tc.getTrackerResponseCache().isEmpty()){
+								
+								clearPeerCache = true;
 							}
 						}
 					}
-				});
-
-			if ( found_tracker ){
-
+					
+					final MenuItem itemClearPeerCache = new MenuItem(menu, SWT.PUSH);
+					Messages.setLanguageText(itemClearPeerCache, "GeneralView.label.clearpeercache");
+					
+					itemClearPeerCache.addListener(SWT.Selection, (ev)->
+							dm.getDownloadState().clearTrackerResponseCache()
+						);
+					
+					itemClearPeerCache.setEnabled(clearPeerCache);
+				}
+				
 				final MenuItem edit_item = new MenuItem( menu, SWT.PUSH);
 
 				Messages.setLanguageText(edit_item, "MyTorrentsView.menu.editTracker" );
@@ -330,7 +374,7 @@ public class TrackerView
 						run(
 							TableRowCore[] rows )
 						{
-							final TOTorrent torrent = manager.getTorrent();
+							final TOTorrent torrent = dm.getTorrent();
 
 							if (torrent != null) {
 
@@ -355,7 +399,7 @@ public class TrackerView
 														Debug.printStackTrace(e2);
 													}
 
-													TRTrackerAnnouncer tc = manager.getTrackerClient();
+													TRTrackerAnnouncer tc = dm.getTrackerClient();
 
 													if (tc != null) {
 
@@ -386,11 +430,16 @@ public class TrackerView
 				
 				MenuBuildUtils.addChatMenu( menu, "menu.discuss.tracker", tracker_key );
 						
-				TOTorrent torrent = manager.getTorrent();
+				TOTorrent torrent = dm.getTorrent();
 
 				edit_item.setEnabled( torrent != null && !TorrentUtils.isReallyPrivate( torrent ));
 			}
 
+			if ( found_http_seed && dm != null ){
+				
+				TorrentUtil.addEditWebseeds(menu, new DownloadManager[]{ dm });
+			}
+			
 			if ( found_trackers.size() == 1 ){
 
 				TrackerPeerSource tps = found_trackers.get(0);

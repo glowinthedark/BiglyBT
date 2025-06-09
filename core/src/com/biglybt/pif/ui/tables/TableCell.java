@@ -21,6 +21,7 @@
 
 package com.biglybt.pif.ui.tables;
 
+import com.biglybt.core.util.StringInterner.StringSupplier;
 import com.biglybt.pif.ui.Graphic;
 import com.biglybt.ui.common.table.TableView;
 
@@ -94,13 +95,40 @@ public interface TableCell {
    *         False - the text was the same and not modified.
    */
   boolean setText(String text);
+  
+  boolean setText(StringSupplier	supplier );
 
   /** Retrieve the Cell's text
    *
    * @return Cell's text
    */
   String getText();
+  
+  StringSupplier getTextSupplier();
 
+  /**
+   * For image based cells should return a textual equivalent. This is useful for filtering, for example.
+   * @return the text value to be used or null if it should be ignored
+   */
+  String getTextEquivalent();
+
+  void setTextEquivalent( String str );
+  
+  /**
+   * Set the numeric value of the cell. This is not used for formating, sort order, display, it is
+   * purely to allow the numeric value of a cell be set and retrieved
+   * @param d
+   */
+  
+  void setNumeric( double d );
+  
+  /**
+   * 
+   * @return numeric value of the cell or Double.NaN if undefined 
+   */
+  
+  double getNumeric();
+  
   /** Change the cell's foreground color.
    * <p>
    * pass -1 to return color back to default
@@ -416,11 +444,15 @@ public interface TableCell {
   */
   public void removeMouseListener(TableCellMouseListener listener);
 
+  public void addMenuListener(TableCellMenuListener listener);
+  
+  public void removeMenuListener(TableCellMenuListener listener);
+  
   /**
    * A listener is added for every type of cell listener the supplied object
    * implements
    *
-   * @param listenerObject Object implementing some cell listeneters
+   * @param listenerObject Object implementing some cell listeners
    */
   public void addListeners(Object listenerObject);
 
@@ -451,8 +483,26 @@ public interface TableCell {
 	public String getClipboardText();
 
 	/**
-	 * When true, the user is sorting by multiple columns, and you should set 
+	 * When true, cell is part of a multi-column sort, and you should set 
 	 * the cell's sort value based solely on your column's data.
+	 * <p/>
+	 * Common scenario:<br/>
+	 * User sorts just by your column, you may want to sort by the main value,
+	 * and subsort by several secondary values.
+	 * When user sorts by multiple columns (including yours), your secondary 
+	 * values can prevent other sort columns from being applied.
+	 * <p/>
+	 * Example:<br/> 
+	 * When sorted by itself, the "unopened" column would look better if sorted
+	 * by last opened date. However, if 
+	 * useSimpleSortValue is not taken into account, and the user sorts by 
+	 * unopened + name, the order would not necessarily change. The end
+	 * result would be a sort by unopened, last opened, and then
+	 * 'bytes downloaded'.
 	 */
 	boolean useSimpleSortValue();
+	
+	public void setData( Object key, Object data );
+	
+	public Object getData( Object key );
 }

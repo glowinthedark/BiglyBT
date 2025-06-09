@@ -37,6 +37,10 @@ public interface IMainWindow
 
 	public static final int WINDOW_ELEMENT_QUICK_LINKS = 8;
 
+	public static final int WINDOW_ELEMENT_RIGHTBAR = 9;
+
+	public static final int WINDOW_ELEMENT_ALL = 100;
+
 	public boolean isVisible(int windowElement);
 
 	public void setVisible(int windowElement, boolean value);

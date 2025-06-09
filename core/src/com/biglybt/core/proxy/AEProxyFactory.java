@@ -19,12 +19,14 @@
 
 package com.biglybt.core.proxy;
 
+import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.SocketAddress;
 import java.net.URL;
 import java.util.List;
 import java.util.Map;
 
+import com.biglybt.core.Core;
 import com.biglybt.core.proxy.impl.AEPluginProxyHandler;
 import com.biglybt.core.proxy.impl.AEProxyAddressMapperImpl;
 import com.biglybt.core.proxy.impl.AEProxyImpl;
@@ -39,6 +41,13 @@ import com.biglybt.plugin.dht.DHTPluginInterface;
 public class
 AEProxyFactory
 {
+	public static void
+	initialise(
+		Core	core )
+	{
+		AEPluginProxyHandler.initialise( core );
+	}
+	
 		/**
 		 * @param port				0 = free port
 		 * @param connect_timeout	0 = no timeout
@@ -65,10 +74,12 @@ AEProxyFactory
 		return( AEProxyAddressMapperImpl.getSingleton());
 	}
 
-	public static final String PO_PEER_NETWORKS = "peer_networks";		// String[]
-	public static final String PO_LOCAL_PORT	= "local_port";			// Integer
-	public static final String PO_EXPLICIT_BIND	= "explicit_bind";		// InetAddress
-
+	public static final String PO_PEER_NETWORKS 		= "peer_networks";			// String[]
+	public static final String PO_LOCAL_PORT			= "local_port";				// Integer
+	public static final String PO_EXPLICIT_BIND			= "explicit_bind";			// InetAddress
+	public static final String PO_PREFERRED_PROXY_TYPE	= "preferred_proxy_type";	// String SOCKS(default) or HTTP
+	public static final String PO_FORCE_PROXY			= "force_proxy";			// Boolean
+	
 	public static PluginProxy
 	getPluginProxy(
 		String		reason,
@@ -86,6 +97,15 @@ AEProxyFactory
 		return( getPluginProxy( reason, target, null, can_wait ));
 	}
 
+	public static PluginProxy
+	getPluginProxy(
+		String				reason,
+		URL					target,
+		Map<String,Object>	proxy_options )
+	{
+		return( getPluginProxy( reason, target, proxy_options, false ));
+	}
+	
 	public static PluginProxy
 	getPluginProxy(
 		String				reason,
@@ -161,8 +181,11 @@ AEProxyFactory
 		return( AEPluginProxyHandler.hasPluginProxy());
 	}
 
-	public static final String	SP_HOST		= "host";
-	public static final String	SP_PORT		= "port";
+	public static final String	SP_HOST				= "host";
+	public static final String	SP_PORT				= "port";
+	public static final String	SP_REMOTE_PORT		= "remote-port";
+	public static final String	SP_NEW_IDENTITY		= "new-identity";
+	public static final String	SP_BIND				= "bind";
 
 	public static Map<String,Object>
 	getPluginServerProxy(
@@ -218,6 +241,9 @@ AEProxyFactory
 		public int
 		getPort();
 
+		public InetSocketAddress
+		getLocalAddress();
+		
 		public void
 		setOK(
 			boolean	good );

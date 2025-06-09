@@ -21,6 +21,7 @@
 package com.biglybt.core.networkmanager.admin.impl;
 
 
+import java.net.Inet6Address;
 import java.net.InetAddress;
 
 import com.biglybt.core.Core;
@@ -106,7 +107,9 @@ NetworkAdminProtocolImpl
 
 		throws NetworkAdminException
 	{
-		return( test( address, false, upnp_map, listener ));
+		boolean ipv6 = address != null && address.getAddress() instanceof Inet6Address;
+		
+		return( test( address, ipv6, upnp_map, listener ));
 	}
 	
 	@Override

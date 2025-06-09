@@ -39,6 +39,9 @@ TagFeatureProperties
 	getProperty(
 		String		name );
 
+	public String
+	getPropertiesString();
+	
 	public interface
 	TagProperty
 	{
@@ -94,7 +97,7 @@ TagFeatureProperties
 		public void
 		syncListeners();
 		
-		public String
+		public String[]
 		explainTaggable(
 			Taggable	taggable );
 	}

@@ -20,6 +20,8 @@
 
 package com.biglybt.core.disk;
 
+import java.util.Map;
+
 import com.biglybt.core.Core;
 
 /**
@@ -92,6 +94,13 @@ DiskManagerFactory
 		RDResumeHandler.setTorrentResumeDataComplete( download_manager_state );
 	}
 
+	public static void
+	setResumeDataTotallyIncomplete(
+		DownloadManagerState	download_manager_state )
+	{
+		RDResumeHandler.setTorrentResumeTotallyIncomplete( download_manager_state );
+	}
+	
 		/**
 		 * Sets resume data complete apart from a few random pieces. On torrent start these will be checked
 		 * This is used in the "open for seeding" mode to ensure that there's at least a chance that the
@@ -114,15 +123,23 @@ DiskManagerFactory
 	{
 		return RDResumeHandler.isTorrentResumeDataComplete( dms );
 	}
+	
+	public static boolean
+	isTorrentResumeDataValid(
+		DownloadManagerState	dms )
+	{
+		return RDResumeHandler.isTorrentResumeDataValid( dms );
+	}
 
 	public static void
 	deleteDataFiles(
-		TOTorrent 	torrent,
-		String		torrent_save_dir,
-		String		torrent_save_file,
-		boolean		force_no_recycle )
+		DownloadManager	dm,
+		TOTorrent 		torrent,
+		String			torrent_save_dir,
+		String			torrent_save_file,
+		boolean			force_no_recycle )
 	{
-	  DiskManagerImpl.deleteDataFiles(torrent, torrent_save_dir, torrent_save_file, force_no_recycle );
+	  DiskManagerImpl.deleteDataFiles( dm, torrent, torrent_save_dir, torrent_save_file, force_no_recycle );
 	}
 
 	public static DiskManagerFileInfoSet
@@ -131,14 +148,6 @@ DiskManagerFactory
 		DiskManagerListener		listener )
 	{
 		return( DiskManagerUtil.getFileInfoSkeleton( download_manager, listener ));
-	}
-
-	public static void
-	setFileLinks(
-		DownloadManager			download_manager,
-		LinkFileMap				links )
-	{
-		DiskManagerImpl.setFileLinks( download_manager, links );
 	}
 
 	public static void

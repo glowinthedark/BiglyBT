@@ -40,4 +40,17 @@ public interface UISWTViewEventListener {
 	 * @since 2.3.0.6
 	 */
 	public boolean eventOccurred(UISWTViewEvent event);
+	
+	public default boolean
+	informOfDuplicates(
+		int		type )
+	{
+		return( false );
+	}
+	
+	public default boolean
+	builderNotRequired()
+	{
+		return( false );
+	}
 }

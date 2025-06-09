@@ -1,4 +1,4 @@
-/* 
+ /* 
  * Copyright (C) Bigly Software, Inc, All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -31,6 +31,7 @@ import org.eclipse.swt.widgets.*;
 
 import com.biglybt.core.CoreFactory;
 import com.biglybt.core.download.DownloadManager;
+import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.tag.*;
 import com.biglybt.core.tag.TagFeatureProperties.TagProperty;
 import com.biglybt.core.tracker.AllTrackersManager;
@@ -49,6 +50,7 @@ import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.SimpleTextEntryWindow;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.columns.alltrackers.*;
+import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.maketorrent.MultiTrackerEditor;
 import com.biglybt.ui.swt.maketorrent.TrackerEditorListener;
 import com.biglybt.ui.swt.mdi.MdiEntrySWT;
@@ -71,7 +73,9 @@ import com.biglybt.pif.ui.UIInputReceiverListener;
 import com.biglybt.pif.ui.UIPluginViewToolBarListener;
 import com.biglybt.pif.ui.tables.TableColumn;
 import com.biglybt.pif.ui.tables.TableColumnCreationListener;
+import com.biglybt.pif.ui.toolbar.UIToolBarItem;
 import com.biglybt.plugin.net.buddy.BuddyPluginUtils;
+import com.biglybt.ui.swt.views.utils.TagUIUtils.TagMenuOptions;
 
 
 public class SBC_AllTrackersView
@@ -253,7 +257,6 @@ public class SBC_AllTrackersView
 						new ColumnAllTrackersResponseTime(column);
 					}
 				});
-
 		
 		tableManager.registerColumn(AllTrackersViewEntry.class, ColumnAllTrackersHasPrivate.COLUMN_ID,
 				new TableColumnCreationListener() {
@@ -262,12 +265,45 @@ public class SBC_AllTrackersView
 						new ColumnAllTrackersHasPrivate(column);
 					}
 				});
+		
+		tableManager.registerColumn(AllTrackersViewEntry.class, ColumnAllTrackersRemovable.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnAllTrackersRemovable(column);
+					}
+				});
+		
+		tableManager.registerColumn(AllTrackersViewEntry.class, ColumnAllTrackersTorrentCount.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnAllTrackersTorrentCount(column);
+					}
+				});
+		
+		tableManager.registerColumn(AllTrackersViewEntry.class, ColumnAllTrackersPeersReceived.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnAllTrackersPeersReceived(column);
+					}
+				});
+		
+		tableManager.registerColumn(AllTrackersViewEntry.class, ColumnAllTrackersActiveRequestCount.COLUMN_ID,
+				new TableColumnCreationListener() {
+					@Override
+					public void tableColumnCreated(TableColumn column) {
+						new ColumnAllTrackersActiveRequestCount(column);
+					}
+				});
 
 		
 		tableManager.setDefaultColumnNames(TABLE_NAME,
 				new String[] {
 					ColumnAllTrackersTracker.COLUMN_ID,
 					ColumnAllTrackersStatus.COLUMN_ID,
+					ColumnAllTrackersTorrentCount.COLUMN_ID,
 					ColumnAllTrackersLastGoodDate.COLUMN_ID,
 					ColumnAllTrackersLastBadDate.COLUMN_ID,
 					ColumnAllTrackersBadSinceDate.COLUMN_ID,
@@ -377,14 +413,17 @@ public class SBC_AllTrackersView
 			SWTSkinObjectTextbox soFilter = (SWTSkinObjectTextbox) getSkinObject(
 				"filterbox");
 			if (soFilter != null) {
-				tv.enableFilterCheck(soFilter.getBubbleTextBox(), this);
+				
+				BubbleTextBox bubbleTextBox = soFilter.getBubbleTextBox();
+				
+				tv.enableFilterCheck(bubbleTextBox, this);
+				
+				bubbleTextBox.setMessage( MessageText.getString( "Button.search2" ) );
 			}
 
 			tv.setRowDefaultHeightEM(1);
 
-			table_parent = new Composite(control, SWT.BORDER);
-
-			table_parent.setLayoutData(Utils.getFilledFormData());
+			table_parent = Utils.createSkinnedComposite(control, SWT.BORDER, Utils.getFilledFormData());
 
 			GridLayout layout = new GridLayout();
 
@@ -512,30 +551,25 @@ public class SBC_AllTrackersView
 			return( false );
 		}
 
-		/*
+		boolean didSomething = false;
+		
 		List<Object> datasources = tv.getSelectedDataSources();
 
-		if ( datasources.size() > 0 ){
-
-			List<AllTrackersViewEntry>	dms = new ArrayList<>(datasources.size());
-
-			for ( Object o: datasources ){
-
-				dms.add((AllTrackersViewEntry)o);
-			}
-
+		for ( Object o: datasources ){
+			
+			AllTrackersViewEntry entry = (AllTrackersViewEntry)o;
+			
 			String id = item.getID();
 
 			if ( id.equals("remove")) {
 
+				entry.remove();
+				
+				didSomething = true;
 			}
-
-
-			return true;
-		}
-		*/
+		}		
 		
-		return false;
+		return( didSomething );
 	}
 
 	@Override
@@ -549,19 +583,21 @@ public class SBC_AllTrackersView
 			return;
 		}
 
-		boolean canEnable = false;
+		List<Object> datasources = tv.getSelectedDataSources();
+		
+		boolean canRemove = !datasources.isEmpty();
 
-		Object[] datasources = tv.getSelectedDataSources().toArray();
-
-		if ( datasources.length > 0 ){
-
-			canEnable = true;
+		for ( Object o: datasources ){
+			
+			AllTrackersViewEntry entry = (AllTrackersViewEntry)o;
+			
+			if ( !entry.isRemovable()){
+				
+				canRemove = false;
+			}
 		}
 
-		//list.put( "start", canEnable ? UIToolBarItem.STATE_ENABLED : 0);
-		//list.put( "startstop", canEnable ? UIToolBarItem.STATE_ENABLED : 0);
-
-		//list.put( "remove", canEnable ? UIToolBarItem.STATE_ENABLED : 0);
+		list.put( "remove", canRemove ? UIToolBarItem.STATE_ENABLED : 0);
 	}
 	
 	private MdiEntrySWT getActiveView() {
@@ -635,6 +671,8 @@ public class SBC_AllTrackersView
 		List<Tag> all_tags = TagManagerFactory.getTagManager().getTagType( TagType.TT_DOWNLOAD_MANUAL ).getTags();
 		
 		List<Tag> tracker_prop_tags = new ArrayList<Tag>();
+
+		Map<Tag, Integer> mapTaggableCount = new HashMap<>();
 				
 		for ( Tag t: all_tags ){
 			
@@ -645,28 +683,52 @@ public class SBC_AllTrackersView
 			for ( TagProperty prop: props ){
 
 				String tp_name = prop.getName( false );
-				
-				if ( tp_name.equals( TagFeatureProperties.PR_TRACKERS )){
-					
-					String[] hosts = prop.getStringList();
-					
-					if ( hosts != null && hosts.length > 0 ){
-						
-						tracker_prop_tags.add( t );
+				if (!tp_name.equals(TagFeatureProperties.PR_TRACKERS)) {
+					continue;
+				}
+
+				String[] hosts = prop.getStringList();
+				if (hosts == null || hosts.length == 0) {
+					continue;
+				}
+
+				tracker_prop_tags.add( t );
+
+				String[] existing_hosts = prop.getStringList();
+				if (existing_hosts == null || existing_hosts.length == 0) {
+					continue;
+				}
+
+				for (AllTrackersTracker tracker : trackers) {
+					String name = tracker.getTrackerName();
+
+					int pos = name.indexOf( "//" );
+
+					if ( pos != -1 ){
+
+						name = name.substring( pos+2 );
+					}
+
+					for (String existingHost : existing_hosts) {
+						if (name.equals(existingHost)) {
+							mapTaggableCount.compute(t, (tag, count) -> count == null ? 1 : count + 1);
+							break;
+						}
 					}
 				}
 			}
 		}
-		
-		MenuItem itemAddToTag = 
-			TagUIUtils.createTagSelectionMenu(
-				menu,
-				"alltorrents.add.torrents.to.tag",
-				tracker_prop_tags,
-				new TagUIUtils.TagSelectionListener(){
-					
-					@Override
-					public void selected(Tag tag){
+
+		Menu menuAddToTag = new Menu( menu.getShell(), SWT.DROP_DOWN);
+		MenuItem itemAddToTag = new MenuItem( menu, SWT.CASCADE);
+		Messages.setLanguageText( itemAddToTag, "alltorrents.add.torrents.to.tag" );
+		itemAddToTag.setMenu( menuAddToTag );
+
+		TagMenuOptions.Builder builder = TagMenuOptions.Builder()
+			.setTagMenuFilter(tagsToFilter -> tracker_prop_tags)
+			.setMapTaggableCount(mapTaggableCount, trackers.size())
+			.setTagSelectionListener(
+				(tag, checked) -> {
 					
 						TagFeatureProperties tfp = (TagFeatureProperties)tag;
 
@@ -696,14 +758,21 @@ public class SBC_AllTrackersView
 										name = name.substring( pos+2 );
 									}
 									
-									new_hosts.add( name );
+									if (checked) {
+										new_hosts.add( name );
+									} else {
+										new_hosts.remove( name );
+									}
 								}
-								
+
+								// Minor problem: if new_hosts is now [] due to uncheck,
+								// the tag will no longer be listed as an available option
+								// for this menu (since we rely on PR_TRACKERS to be non-empty)
 								prop.setStringList( new_hosts.toArray( new String[0]));
 							}
 						}
-					}
-				});
+					});
+		TagUIUtils.createTagSelectionMenu(builder, menuAddToTag);
 		
 		itemAddToTag.setEnabled( hasSelection );
 		
@@ -862,6 +931,8 @@ public class SBC_AllTrackersView
 
 		Set<String>	assoc_templates = new TreeSet<>();
 		
+		boolean canRemove = hasSelection;
+		
 		for ( AllTrackersTracker tracker: trackers ){
 			
 			String str = tracker.getTrackerName().toLowerCase( Locale.US );
@@ -871,6 +942,11 @@ public class SBC_AllTrackersView
 			if ( list != null ){
 				
 				assoc_templates.addAll( list );
+			}
+			
+			if ( !tracker.isRemovable()){
+				
+				canRemove = false;
 			}
 		}
 		
@@ -1014,59 +1090,50 @@ public class SBC_AllTrackersView
 
 		options_item.setMenu( options_menu );
 		
-			// light seeding
-		
-		Menu ls_menu = new Menu( menu.getShell(), SWT.DROP_DOWN);
-				
-		MenuItem ls_item = new MenuItem( options_menu, SWT.CASCADE);
-
-		Messages.setLanguageText( ls_item, "ManagerItem.lightseeding" );
-
-		ls_item.setMenu( ls_menu );
-			
-		MenuItem ls_default = new MenuItem( ls_menu, SWT.RADIO );
-		Messages.setLanguageText( ls_default, "label.default" );
-		
-		MenuItem ls_enabled = new MenuItem( ls_menu, SWT.RADIO );
-		Messages.setLanguageText( ls_enabled, "label.enabled" );
-		
-		MenuItem ls_disabled = new MenuItem( ls_menu, SWT.RADIO );
-		Messages.setLanguageText( ls_disabled, "label.disabled" );
-		
-		MenuItem[] ls_items = { ls_default, ls_enabled, ls_disabled };
-		
-			// cryptoport
-		
-		Menu cp_menu = new Menu( menu.getShell(), SWT.DROP_DOWN);
-		
-		MenuItem cp_item = new MenuItem( options_menu, SWT.CASCADE);
-
-		cp_item.setText( "cryptoport" );
-
-		cp_item.setMenu( cp_menu );
-			
-		MenuItem cp_default = new MenuItem( cp_menu, SWT.RADIO );
-		Messages.setLanguageText( cp_default, "label.default" );
-		
-		MenuItem cp_enabled = new MenuItem( cp_menu, SWT.RADIO );
-		Messages.setLanguageText( cp_enabled, "label.enabled" );
-		
-		MenuItem cp_disabled = new MenuItem( cp_menu, SWT.RADIO );
-		Messages.setLanguageText( cp_disabled, "label.disabled" );
-
-		MenuItem[] cp_items = { cp_default, cp_enabled, cp_disabled };
-	
 		boolean opt_enabled = trackers.size() == 1;
 
-		ls_item.setEnabled( opt_enabled );
-		cp_item.setEnabled( opt_enabled );
+		MenuItem[][] opt_items = { null, null, null };
+		
+		String[] opt_names = AllTrackersTracker.OPT_ALL; 
+		String[] opt_msgs = { "ManagerItem.lightseeding", "cryptoport", "ConfigView.group.scrape" };
+		
+		for ( int i=0; i<opt_items.length;i++){
+		
+			Menu opt_menu = new Menu( menu.getShell(), SWT.DROP_DOWN);
+					
+			MenuItem opt_item = new MenuItem( options_menu, SWT.CASCADE);
+	
+			if ( i == 1 ){
+				
+				opt_item.setText( opt_msgs[i] );
+
+			}else{
+				
+				Messages.setLanguageText( opt_item, opt_msgs[i] );
+			}
+	
+			opt_item.setMenu( opt_menu );
+				
+			MenuItem ls_default = new MenuItem( opt_menu, SWT.RADIO );
+			Messages.setLanguageText( ls_default, "label.default" );
+			
+			MenuItem ls_enabled = new MenuItem( opt_menu, SWT.RADIO );
+			Messages.setLanguageText( ls_enabled, "label.enabled" );
+			
+			MenuItem ls_disabled = new MenuItem( opt_menu, SWT.RADIO );
+			Messages.setLanguageText( ls_disabled, "label.disabled" );
+			
+			opt_items[i] = new MenuItem[]{ ls_default, ls_enabled, ls_disabled };
+			
+			opt_item.setEnabled( opt_enabled );
+		}
 		
 		if ( opt_enabled ){
 			
 			AllTrackersTracker tracker = trackers.get(0);
 			
 			/* allow configuration in the absence of torrents, doesn't harm anything as
-			 * if the tracker ends up being public it light seeding is ignored anyway
+			 * if the tracker ends up being public if light seeding is ignored anyway
 			if ( tracker.getPrivatePercentage() == 0 ){
 				
 				ls_item.setEnabled( false );
@@ -1075,29 +1142,27 @@ public class SBC_AllTrackersView
 			
 			Map<String,Object> init_options = tracker.getOptions();
 			
-			int	ls_state 	= 0;
-			int cp_state	= 0;
+			int[] opt_states = { 0, 0, 0 };
 			
+	
 			if ( init_options != null ){
 				
-				Number opt = (Number)init_options.get( AllTrackersTracker.OPT_LIGHT_SEEDING );
+				for ( int i=0;i<opt_states.length;i++){
 				
-				if ( opt != null ){
-					
-					ls_state = opt.intValue();
-				}
+					Number opt = (Number)init_options.get( opt_names[i] );
 				
-				opt = (Number)init_options.get( AllTrackersTracker.OPT_CRYPTO_PORT );
-				
-				if ( opt != null ){
-					
-					cp_state = opt.intValue();
+					if ( opt != null ){
+						
+						opt_states[i] = opt.intValue();
+					}
 				}
 			}
 			
-			ls_items[ls_state].setSelection( true );
-			cp_items[cp_state].setSelection( true );
-		
+			for ( int i=0;i<opt_states.length;i++){
+			
+				opt_items[i][opt_states[i]].setSelection( true );
+			}
+			
 			Listener l = (e)->{
 										
 				Map<String,Object> options = tracker.getOptions();
@@ -1107,38 +1172,49 @@ public class SBC_AllTrackersView
 					options = new HashMap<>();
 				}
 				
-				int new_ls_state = 0;
-				int new_cp_state = 0;
+				int[] new_opt_states = { 0, 0, 0 };
 				
-				for ( int i=0; i<ls_items.length;i++){
-					if ( ls_items[i].getSelection()){
-						new_ls_state = i;
-						break;
+				for ( int i=0;i<new_opt_states.length;i++){
+					MenuItem[] items = opt_items[i];
+					for ( int j=0;j<items.length;j++){
+						if ( items[j].getSelection()){
+							new_opt_states[i] = j;
+							break;
+						}
 					}
 				}
 				
-				for ( int i=0; i<cp_items.length;i++){
-					if ( cp_items[i].getSelection()){
-						new_cp_state = i;
-						break;
-					}
-				}
+				for ( int i=0;i<new_opt_states.length;i++){
 													
-				options.put( AllTrackersTracker.OPT_LIGHT_SEEDING, new_ls_state );
-					
-				options.put( AllTrackersTracker.OPT_CRYPTO_PORT, new_cp_state );
-				
+					options.put( opt_names[i], new_opt_states[i] );
+				}
+									
 				tracker.setOptions( options );
 			};
 			
-			for ( MenuItem mi: ls_items ){
-				mi.addListener( SWT.Selection, l );
-			}
-			
-			for ( MenuItem mi: cp_items ){
-				mi.addListener( SWT.Selection, l );
+			for ( MenuItem[] mis: opt_items ){
+				for ( MenuItem mi: mis ){
+					mi.addListener( SWT.Selection, l );
+				}
 			}
 		}
+		
+			// remove
+
+		MenuItem itemRemove = new MenuItem(menu, SWT.PUSH );
+
+		Messages.setLanguageText(itemRemove, "MySharesView.menu.remove");
+		Utils.setMenuItemImage(itemRemove, "delete");
+
+		itemRemove.addListener(SWT.Selection, (ev)->{
+			
+			for ( AllTrackersTracker t: trackers ){
+				
+				t.remove();
+			}			
+		});
+		
+		itemRemove.setEnabled( canRemove );
 		
 			// edit templates
 		
@@ -1470,7 +1546,7 @@ public class SBC_AllTrackersView
 		}
 			// if we're not active then ignore this update as we don't want invisible components
 			// updating the toolbar with their invisible selection. Note that unfortunately the
-			// call we get here when activating a view does't yet have focus
+			// call we get here when activating a view doesn't yet have focus
 
 		if ( !isVisible()){
 			if ( !force ){
@@ -1603,14 +1679,20 @@ public class SBC_AllTrackersView
 	public boolean
 	filterCheck(
 		AllTrackersViewEntry 	ds,
-		String 				filter,
-		boolean 			regex)
+		String 					filter,
+		boolean 				regex,
+		boolean					confusable )
 	{
+		if ( confusable ){
+			
+			return( false );
+		}
+		
 		AllTrackersTracker tracker = ds.getTracker();
 		
 		String name = tracker.getTrackerName();
 
-		String s = regex ? filter : "\\Q" + filter.replaceAll("\\s*[|;]\\s*", "\\\\E|\\\\Q") + "\\E";
+		String s = regex ? filter : RegExUtil.splitAndQuote( filter, "\\s*[|;]\\s*" );
 
 		boolean	match_result = true;
 
@@ -1625,7 +1707,7 @@ public class SBC_AllTrackersView
 
 		boolean result = pattern.matcher(name).find() == match_result;
 		
-		if ( !result ){
+		if ( result != match_result ){
 			
 			String status = tracker.getStatusString();
 			
@@ -1791,15 +1873,48 @@ public class SBC_AllTrackersView
 		
 		@Override
 		public int 
+		getActiveRequestCount()
+		{
+			return( tracker.getActiveRequestCount());
+		}
+		
+		@Override
+		public int 
 		getPrivatePercentage()
 		{
 			return(tracker.getPrivatePercentage());
+		}
+		
+		@Override
+		public int getTorrentCount(){
+			return( tracker.getTorrentCount());
 		}
 		
 		public Tag
 		getTag()
 		{
 			return( getSelectionTag());
+		}
+		
+		@Override
+		public long 
+		getPeersReceived()
+		{
+			return( tracker.getPeersReceived());
+		}
+		
+		@Override
+		public boolean 
+		isRemovable()
+		{
+			return( tracker.isRemovable());
+		}
+		
+		@Override
+		public void 
+		remove()
+		{
+			tracker.remove();
 		}
 	}
 }

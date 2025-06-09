@@ -22,10 +22,16 @@ import java.text.FieldPosition;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.CTabFolder;
+import org.eclipse.swt.custom.CTabFolder2Adapter;
+import org.eclipse.swt.custom.CTabFolderEvent;
+import org.eclipse.swt.custom.CTabItem;
+import org.eclipse.swt.custom.StyleRange;
 import org.eclipse.swt.custom.StyledText;
 import org.eclipse.swt.events.ModifyEvent;
 import org.eclipse.swt.events.ModifyListener;
@@ -37,11 +43,17 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.*;
+
+import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.logging.*;
 import com.biglybt.core.logging.impl.FileLogging;
 import com.biglybt.core.util.AERunnable;
+import com.biglybt.ui.UIFunctions;
+import com.biglybt.ui.UIFunctionsManager;
+import com.biglybt.ui.config.ConfigSectionLogging;
+import com.biglybt.ui.mdi.MultipleDocumentInterface;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.mainwindow.Colors;
@@ -84,7 +96,7 @@ public class LoggerView
 
 	private Display display;
 
-	private Composite panel;
+	private Composite main_panel;
 
 	private StyledText consoleText = null;
 
@@ -159,20 +171,14 @@ public class LoggerView
 		Colors.getInstance().addColorsChangedListener(this);
 		parameterChanged("Color");
 
-		panel = new Composite(composite, SWT.NULL);
-		GridLayout layout = new GridLayout();
-		layout.marginHeight = 0;
-		layout.marginWidth = 0;
-		layout.verticalSpacing = 2;
-		layout.numColumns = 2;
-		panel.setLayout(layout);
+		main_panel = new Composite(composite, SWT.NULL);
+		main_panel.setLayout( Utils.getSimpleGridLayout(1));
 
 		GridData gd;
 
-		consoleText = new StyledText(panel, SWT.READ_ONLY | SWT.V_SCROLL
-				| SWT.H_SCROLL);
+		consoleText = new StyledText(main_panel, SWT.READ_ONLY | SWT.V_SCROLL | SWT.H_SCROLL);
 		gd = new GridData(GridData.FILL_BOTH);
-		gd.horizontalSpan = 2;
+
 		consoleText.setLayoutData(gd);
 
 		// XXX This doesn't work well, but it's better than nothing
@@ -210,8 +216,62 @@ public class LoggerView
 					buttonAutoScroll.setSelection(false);
 			}
 		});
+	
+		CTabFolder tab_folder = new CTabFolder(main_panel, SWT.LEFT);
+		
+		tab_folder.setMinimizeVisible( true );
 
-		Composite cLeft = new Composite(panel, SWT.NULL);
+		Consumer<Boolean> set_minimized = ( min )->{
+			COConfigurationManager.setParameter( "loggerview.filter.minimized", min );
+			tab_folder.setMinimized( min );	
+			tab_folder.getParent().layout(true);
+		};
+		
+		set_minimized.accept( COConfigurationManager.getBooleanParameter( "loggerview.filter.minimized"));
+		
+		tab_folder.addCTabFolder2Listener(new CTabFolder2Adapter() {
+			@Override
+			public void minimize(CTabFolderEvent event) {
+				set_minimized.accept( true );
+			}
+			@Override
+			public void restore(CTabFolderEvent event){
+				maximize( event );
+			}
+			@Override
+			public void maximize(CTabFolderEvent event) {
+				set_minimized.accept( false );
+			}});
+			
+		tab_folder.addListener(SWT.MouseDoubleClick, e -> {
+			set_minimized.accept( !tab_folder.getMinimized());
+		});
+		
+		GridData grid_data = new GridData(GridData.FILL_HORIZONTAL);
+		tab_folder.setLayoutData(grid_data);
+
+		CTabItem settings_tab = new CTabItem(tab_folder, SWT.NULL);
+
+		tab_folder.setSelection( settings_tab );
+		
+		settings_tab.setText( MessageText.getString( "LoggerView.filter" ));
+
+		Composite settings_panel = new Composite( tab_folder, SWT.NULL );
+
+		settings_tab.setControl( settings_panel );
+
+		GridLayout layout = new GridLayout();
+		layout.marginHeight = 0;
+		layout.marginWidth = 0;
+		layout.verticalSpacing = 2;
+		layout.numColumns = 2;
+		settings_panel.setLayout(layout);
+		
+		grid_data = new GridData(GridData.FILL_HORIZONTAL );
+		settings_panel.setLayoutData(grid_data);
+
+		
+		Composite cLeft = new Composite(settings_panel, SWT.NULL);
 		layout = new GridLayout();
 		layout.marginHeight = 0;
 		layout.marginWidth = 0;
@@ -276,12 +336,12 @@ public class LoggerView
 				consoleText.setText("");
 			}
 		});
-
+		
 		/** FileLogging filter, consisting of a List of types (info, warning, error)
 		 * and a checkbox Table of component IDs.
 		 */
 		final String sFilterPrefix = "ConfigView.section.logging.filter";
-		Group gLogIDs = new Group(panel, SWT.NULL);
+		Group gLogIDs = Utils.createSkinnedGroup(settings_panel, SWT.NULL);
 		Messages.setLanguageText(gLogIDs, "LoggerView.filter");
 		layout = new GridLayout();
 		layout.marginHeight = 0;
@@ -384,12 +444,11 @@ public class LoggerView
 
 		listLogTypes.notifyListeners(SWT.Selection, null);
 
-		Button btn;
-		btn = new Button(cChecksAndButtons, SWT.PUSH);
+		Button btnCheckAll = new Button(cChecksAndButtons, SWT.PUSH);
 		gd = new GridData();
-		btn.setLayoutData(gd);
-		Messages.setLanguageText(btn, "LoggerView.filter.checkAll");
-		btn.addSelectionListener(new SelectionAdapter() {
+		btnCheckAll.setLayoutData(gd);
+		Messages.setLanguageText(btnCheckAll, "LoggerView.filter.checkAll");
+		btnCheckAll.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
 				int index = listLogTypes.getSelectionIndex();
@@ -407,11 +466,11 @@ public class LoggerView
 			}
 		});
 
-		btn = new Button(cChecksAndButtons, SWT.PUSH);
+		Button btnUncheckAll = new Button(cChecksAndButtons, SWT.PUSH);
 		gd = new GridData();
-		btn.setLayoutData(gd);
-		Messages.setLanguageText(btn, "LoggerView.filter.uncheckAll");
-		btn.addSelectionListener(new SelectionAdapter() {
+		btnUncheckAll.setLayoutData(gd);
+		Messages.setLanguageText(btnUncheckAll, "LoggerView.filter.uncheckAll");
+		btnUncheckAll.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
 				int index = listLogTypes.getSelectionIndex();
@@ -429,11 +488,13 @@ public class LoggerView
 			}
 		});
 
-		Composite cBottom = new Composite(panel, SWT.NONE);
+		Utils.makeButtonsEqualWidth( btnCheckAll, btnUncheckAll );
+		
+		Composite cBottom = new Composite(settings_panel, SWT.NONE);
 		gd = new GridData(SWT.FILL, SWT.FILL, true, false);
 		gd.horizontalSpan = 2;
 		cBottom.setLayoutData(gd);
-		cBottom.setLayout(new GridLayout(2, false));
+		cBottom.setLayout(new GridLayout(4, false));
 
 
 		label = new Label(cBottom, SWT.NONE);
@@ -449,22 +510,23 @@ public class LoggerView
 			@Override
 			public void modifyText(ModifyEvent e) {
 				String newExpression = inclText.getText();
-				if (newExpression.length() == 0)
+				Color bg = null;
+				if (newExpression.length() == 0){
 					inclusionFilter = null;
-				else
-				{
-					try
-					{
+				}else{
+					try{
 						inclusionFilter = Pattern.compile(newExpression, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
-						inclText.setBackground(null);
-					} catch (PatternSyntaxException e1)
-					{
-						inclText.setBackground(Colors.colorErrorBG);
+					}catch (PatternSyntaxException e1){
+						bg = Colors.colorErrorBG;
 					}
 				}
+				Utils.setSkinnedBackground(inclText,bg);
 			}
 		});
 
+		label = new Label(cBottom, SWT.NONE);
+		label = new Label(cBottom, SWT.NONE);
+		
 		label = new Label(cBottom, SWT.NONE);
 		label.setLayoutData(new GridData());
 		Messages.setLanguageText(label, "LoggerView.excludeAll");
@@ -478,21 +540,43 @@ public class LoggerView
 			@Override
 			public void modifyText(ModifyEvent e) {
 				String newExpression = exclText.getText();
-				if (newExpression.length() == 0)
+				Color bg = null;
+				if (newExpression.length() == 0){
 					exclusionFilter = null;
-				else
-				{
-					try
-					{
+				}else{
+					try{
 						exclusionFilter = Pattern.compile(newExpression, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
-						exclText.setBackground(null);
-					} catch (PatternSyntaxException e1)
-					{
-						exclText.setBackground(Colors.colorErrorBG);
+					}catch (PatternSyntaxException e1){
+						bg = Colors.colorErrorBG;
 					}
+				}
+				Utils.setSkinnedBackground(exclText,bg);
+			}
+		});
+
+		label = new Label(cBottom, SWT.NONE);
+		gd = new GridData( GridData.FILL_HORIZONTAL );
+		label.setLayoutData(gd);
+		
+		Button buttonOptions = new Button(cBottom, SWT.PUSH);
+		buttonOptions.setText( MessageText.getString("plugins.basicview.config")+"...");
+		gd = new GridData();
+		buttonOptions.setLayoutData(gd);
+		buttonOptions.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				UIFunctions uif = UIFunctionsManager.getUIFunctions();
+
+				if ( uif != null ){
+
+					uif.getMDI().showEntryByID(
+							MultipleDocumentInterface.SIDEBAR_SECTION_CONFIG,
+							ConfigSectionLogging.SECTION_ID);
 				}
 			}
 		});
+		
+		Utils.makeButtonsEqualWidth( buttonClear, buttonOptions );
 
 
 		if (!Logger.isEnabled()) {
@@ -502,7 +586,7 @@ public class LoggerView
 	}
 
 	private Composite getComposite() {
-		return panel;
+		return main_panel;
 	}
 
 	private void refresh() {
@@ -553,6 +637,8 @@ public class LoggerView
 					if((inclusionFilter != null && !inclusionFilter.matcher(toAppend).find()) || (exclusionFilter != null && exclusionFilter.matcher(toAppend).find()))
 						continue;
 
+					int start = consoleText.getText().length();
+					
 					consoleText.append(toAppend);
 
 					int nbLinesNow = consoleText.getLineCount();
@@ -564,9 +650,23 @@ public class LoggerView
 					else if (event.entryType == LogEvent.LT_ERROR)
 						colorIdx = COLOR_ERR;
 
-					if (colors != null && colorIdx >= 0)
+					if (colors != null && colorIdx >= 0){
 						consoleText.setLineBackground(nbLinesBefore, nbLinesNow
 								- nbLinesBefore, colors[colorIdx]);
+						
+						if ( Utils.isDarkAppearanceNative()){
+							
+							boolean useBlack = Colors.isBlackTextReadable( colors[colorIdx] );
+							
+							if ( useBlack ){
+								StyleRange styleRange = new StyleRange();
+								styleRange.start = start;
+								styleRange.length = toAppend.length();
+								styleRange.foreground = Colors.black;
+								consoleText.setStyleRange(styleRange);
+							}
+						}
+					}
 				} catch (Exception e) {
 					// don't send it to log, we might be feeding ourselves
 					PrintStream ps = Logger.getOldStdErr();
@@ -585,8 +685,8 @@ public class LoggerView
 
 	private void delete() {
 		Logger.removeListener(this);
-		if (panel != null && !panel.isDisposed())
-			panel.dispose();
+		if (main_panel != null && !main_panel.isDisposed())
+			main_panel.dispose();
 		Colors instance = Colors.getInstance();
 		if (instance != null) {
 			instance.removeColorsChangedListener(this);
@@ -692,7 +792,10 @@ public class LoggerView
 	}
 
 	// TODO: Support multiple selection
-	private void dataSourceChanged(Object newDataSource) {
+	private void 
+	dataSourceChanged(
+		Object newDataSource) 
+	{
 		if (newDataSource == null) {
 			if (stopOnNull) {
 				setEnabled(false);
@@ -703,6 +806,9 @@ public class LoggerView
 			setFilter((Object[]) newDataSource);
 		} else if (newDataSource instanceof Boolean) {
 			stopOnNull = ((Boolean) newDataSource);
+			if ( stopOnNull && filter == null ){
+				setEnabled( false );
+			}
 			return;
 		} else {
 			setFilter(new Object[] { newDataSource });

@@ -31,7 +31,7 @@ import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.Constants;
 import com.biglybt.platform.win32.access.AEWin32Manager;
 import com.biglybt.platform.win32.access.impl.AEWin32AccessInterface;
-
+import com.biglybt.ui.swt.Utils;
 import com.biglybt.core.drivedetector.DriveDetectedInfo;
 import com.biglybt.core.drivedetector.DriveDetector;
 import com.biglybt.core.drivedetector.DriveDetectorFactory;
@@ -98,7 +98,8 @@ public class Win32UIEnhancer
 	private static Method mSHGetFileInfo;
 
 	private static Method mImage_win32_new;
-
+	private static boolean mImage_win32_new_hasNativeZoom;
+	
 	private static Constructor<?> constTCHAR3;
 
 	private static int SHFILEINFO_sizeof;
@@ -269,11 +270,27 @@ public class Win32UIEnhancer
 					long.class
 				});
 
-				mImage_win32_new = Image.class.getMethod("win32_new", new Class[] {
-					Device.class,
-					int.class,
-					long.class
-				});
+				try{
+					mImage_win32_new = Image.class.getMethod("win32_new", new Class[] {
+						Device.class,
+						int.class,
+						long.class
+					});
+					
+				}catch( Throwable f ){
+					
+						// since 49968r13 (maybe earlier) there is an additional parameter, nativeZoom
+						// get the default value from DPIUtil
+					
+					mImage_win32_new = Image.class.getMethod("win32_new", new Class[] {
+							Device.class,
+							int.class,
+							long.class,
+							int.class
+						});
+					
+					mImage_win32_new_hasNativeZoom = true;
+				}
 			}
 
 			//OS.GWLP_WNDPROC
@@ -327,11 +344,20 @@ public class Win32UIEnhancer
   		}
   		Image image = null;
   		if (useLong) {
-  			image = (Image) mImage_win32_new.invoke(null, new Object[] {
-  				null,
-  				SWT.ICON,
-  				fldHIcon.getLong(shfi)
-  			});
+  			if ( mImage_win32_new_hasNativeZoom ){
+	  			image = (Image) mImage_win32_new.invoke(null, new Object[] {
+		  				null,
+		  				SWT.ICON,
+		  				fldHIcon.getLong(shfi),
+		  				Utils.getNativeDeviceZoom()
+		  			});
+  			}else{
+	  			image = (Image) mImage_win32_new.invoke(null, new Object[] {
+	  				null,
+	  				SWT.ICON,
+	  				fldHIcon.getLong(shfi)
+	  			});
+  			}
   		} else {
   			image = (Image) mImage_win32_new.invoke(null, new Object[] {
   				null,

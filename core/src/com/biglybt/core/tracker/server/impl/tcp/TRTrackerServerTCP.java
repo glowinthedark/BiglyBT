@@ -47,8 +47,7 @@ TRTrackerServerTCP
 	public static final int  PROCESSING_POST_MULTIPLIER	=  Math.max(0, COConfigurationManager.getIntParameter( "Tracker Max POST Time Multiplier" ));
 
 	private final boolean	ssl;
-	private int		port;
-	private final boolean	apply_ip_filter;
+	private int				port;
 
 	private boolean restrict_non_blocking_requests = TRTrackerServerImpl.restrict_non_blocking_requests;
 
@@ -56,20 +55,20 @@ TRTrackerServerTCP
 
 	public
 	TRTrackerServerTCP(
-		String		_name,
-		int			_port,
-		boolean		_ssl,
-		boolean		_apply_ip_filter,
-		boolean		_start_up_ready )
+		String				_name,
+		int					_port,
+		boolean				_ssl,
+		boolean				_apply_ip_filter,
+		boolean				_start_up_ready,
+		Map<String,Object>	_properties )
 
 		throws TRTrackerServerException
 	{
-		super( _name, _start_up_ready );
+		super( _name, _apply_ip_filter, _start_up_ready, _properties );
 
 		port					= _port;
 		ssl						= _ssl;
-		apply_ip_filter			= _apply_ip_filter;
-
+		
 		thread_pool = new ThreadPool( "TrackerServer:TCP:"+port, THREAD_POOL_SIZE );
 
 		if ( PROCESSING_GET_LIMIT > 0 ){
@@ -83,12 +82,6 @@ TRTrackerServerTCP
 		TRTrackerServerProcessorTCP	processor )
 	{
 		thread_pool.run( processor );
-	}
-
-	protected boolean
-	isIPFilterEnabled()
-	{
-		return( apply_ip_filter );
 	}
 
 	public boolean

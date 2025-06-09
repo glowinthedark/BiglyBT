@@ -23,6 +23,7 @@ package com.biglybt.core.disk.impl;
 import com.biglybt.core.CoreOperation;
 import com.biglybt.core.CoreOperationTask;
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.*;
 import com.biglybt.core.disk.impl.piecemapper.*;
@@ -31,6 +32,7 @@ import com.biglybt.core.diskmanager.access.DiskAccessController;
 import com.biglybt.core.diskmanager.cache.CacheFile;
 import com.biglybt.core.diskmanager.cache.CacheFileManagerFactory;
 import com.biglybt.core.diskmanager.cache.CacheFileOwner;
+import com.biglybt.core.diskmanager.file.FMFileManagerException;
 import com.biglybt.core.download.*;
 import com.biglybt.core.download.impl.DownloadManagerStatsImpl;
 import com.biglybt.core.internat.LocaleTorrentUtil;
@@ -42,6 +44,7 @@ import com.biglybt.core.torrent.TOTorrentException;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.*;
 import com.biglybt.core.util.FileUtil.ProgressListener;
+import com.biglybt.core.util.StringInterner.FileKey;
 
 import java.io.File;
 import java.io.IOException;
@@ -56,6 +59,8 @@ DiskManagerUtil
 
 	protected static int        max_read_block_size;
 
+	protected static final Object	skip_lock = new Object();
+	
 	static{
 
 		ParameterListener param_listener = new ParameterListener() {
@@ -239,7 +244,19 @@ DiskManagerUtil
 							
 							File currentFile = file.getFile(true);
 							
-							currentFile.delete();
+								// these are compact files and can't be recovered as they just contain
+								// start/end piece data
+							
+							if ( FileUtil.exists( currentFile )){
+								
+								FileUtil.log( "Deleting \"" + currentFile.getAbsolutePath() + "\" as no longer required", true );
+
+								boolean no_recycle = true;
+								
+								FileUtil.deleteWithRecycle( 
+										currentFile, 
+										dm.getDownloadState().getFlag( DownloadManagerState.FLAG_LOW_NOISE ) || no_recycle );
+							}
 						}
 					}
 				}
@@ -261,6 +278,7 @@ DiskManagerUtil
 	    DiskManagerFileInfo    		file_info,
 	    File                   		from_file,
 	    File                   		to_link,
+	    boolean						dont_delete_existing,
 	    FileUtil.ProgressListener	pl )
 	{
 	    if ( to_link != null ){
@@ -271,7 +289,7 @@ DiskManagerUtil
 		    	
 		    	if ( !FileUtil.areFilePathsIdentical( to_link, existing_file )){
 	        		
-		    		if ( existing_file.exists()){
+		    		if ( FileUtil.exists( existing_file )){
 		    			
 			            if ( !FileUtil.renameFile( existing_file, to_link )){
 	
@@ -297,9 +315,9 @@ DiskManagerUtil
 			        }
 			    }
 	
-			    if ( to_link.exists()){
+			    if ( FileUtil.exists( to_link )){
 	
-			        if ( !existing_file.exists()){
+			        if ( !FileUtil.exists( existing_file )){
 	
 			                // using a new file, make sure we recheck
 	
@@ -322,21 +340,27 @@ DiskManagerUtil
 					                return( error );
 					            }
 				        	}else{
-				        	
-					        	Object	skip_delete = download_manager.getUserData( "set_link_dont_delete_existing" );
-			
+				        				
 					        		// user is manually re-targetting a file - this hack is to stop us from deleting the old file which
 					        		// we really have no right to go and delete
 			
-					        	if ( ( skip_delete instanceof Boolean ) && (Boolean)skip_delete ){
+					        	if ( dont_delete_existing ){
 			
 					        		 download_manager.recheckFile( file_info );
 			
 					        	}else{
 			
+					        		int st = file_info.getStorageType();
+
+										// don't bother recycling if compact as just contain start/end piece data
+									
+									boolean no_recycle = st == DiskManagerFileInfo.ST_COMPACT || st == DiskManagerFileInfo.ST_REORDER_COMPACT;
+									
+									FileUtil.log( "Deleting \"" + existing_file.getAbsolutePath() + "\" as no longer required", true );
+									
 					                if ( FileUtil.deleteWithRecycle(
 					                		existing_file,
-					                		download_manager.getDownloadState().getFlag( DownloadManagerState.FLAG_LOW_NOISE ))){
+					                		download_manager.getDownloadState().getFlag( DownloadManagerState.FLAG_LOW_NOISE ) || no_recycle )){
 			
 						                    // new file, recheck
 			
@@ -355,7 +379,7 @@ DiskManagerUtil
 			        }
 			    }else{
 	
-			        if ( existing_file.exists()){
+			        if ( FileUtil.exists( existing_file )){
 	
 			            if ( !FileUtil.renameFile( existing_file, to_link, pl )){
 	
@@ -373,8 +397,6 @@ DiskManagerUtil
 	    DownloadManagerState    state = download_manager.getDownloadState();
 
 	    state.setFileLink( file_info.getIndex(), from_file, to_link );
-
-	    state.save(false);
 
 	    return( null );
 	}
@@ -441,8 +463,12 @@ DiskManagerUtil
 		        final DiskManagerFileInfoSet fileSetSkeleton = new DiskManagerFileInfoSet() {
 
 		        	@Override
-		        	public void load(int[] priorities, boolean[] skipped){
+		        	public void 
+		        	load(
+		        		int[] priorities, boolean[] skipped)
+		        	{
 		        		for ( int i=0;i<priorities.length;i++){
+		        			
 		        			res[i].load(priorities[i],skipped[i]);
 		        		}
 		        	}
@@ -452,117 +478,161 @@ DiskManagerUtil
 						return res;
 					}
 
+					private DiskManager
+					getDiskManager()
+					{
+						return( null );
+					}
+					
 					@Override
 					public int nbFiles() {
 						return res.length;
 					}
 
 					@Override
-					public void setPriority(int[] newPriorities) {
-						if(newPriorities.length != res.length)
+					public void 
+					setPriority(
+						int[] newPriorities ) 
+					{
+						if ( newPriorities.length != res.length){
+							
 							throw new IllegalArgumentException("array length mismatches the number of files");
-
-						for(int i=0;i<res.length;i++)
-							res[i].priority = newPriorities[i];
-
+						}
+						
+						List<DiskManagerFileInfo> priorityChanged = new ArrayList<>( res.length );
+						
+						for ( int i=0; i<res.length; i++){
+							
+							FileSkeleton file = res[i];
+							
+							int np = newPriorities[i];
+							
+							if ( np != Integer.MIN_VALUE ){
+								
+								if ( file.priority != np ){
+								
+									file.priority = np;
+																									
+									priorityChanged.add( file );
+								}
+							}
+						}
 						if ( !loading[0] ){
 
-							DiskManagerImpl.storeFilePriorities( download_manager, res);
+							DiskManagerImpl.storeFilePriorities( download_manager, res );
 						}
 
-						for(int i=0;i<res.length;i++)
-							if(newPriorities[i] != 0 )
-								listener.filePriorityChanged(res[i]);
+						if ( !priorityChanged.isEmpty()){
+							
+							listener.filePriorityChanged(getDiskManager(),priorityChanged);
+						}
 					}
 
 					@Override
-					public void setSkipped(boolean[] toChange, boolean setSkipped) {
-						if(toChange.length != res.length)
-							throw new IllegalArgumentException("array length mismatches the number of files");
-
-		        		if (!setSkipped ){
-		    				String[] types = DiskManagerImpl.getStorageTypes(download_manager);
-
-		    				boolean[]	toLinear 	= new boolean[toChange.length];
-		    				boolean[]	toReorder 	= new boolean[toChange.length];
-
-		    				int	num_linear 	= 0;
-		    				int num_reorder	= 0;
-
-		    				for ( int i=0;i<toChange.length;i++){
-
-		    					if ( toChange[i] ){
-
-		    						int old_type = DiskManagerUtil.convertDMStorageTypeFromString( types[i] );
-
-		    						if ( old_type == DiskManagerFileInfo.ST_COMPACT ){
-
-		    							toLinear[i] = true;
-
-		    							num_linear++;
-
-		    						}else if ( old_type == DiskManagerFileInfo.ST_REORDER_COMPACT ){
-
-		    							toReorder[i] = true;
-
-		    							num_reorder++;
-		    						}
-		    					}
-		    				}
-
-		    				if ( num_linear > 0 ){
-
-		    					if (!Arrays.equals(toLinear, setStorageTypes(toLinear, DiskManagerFileInfo.ST_LINEAR))){
-
-		    						return;
-		    					}
-		    				}
-
-		    				if ( num_reorder > 0 ){
-
-		    					if (!Arrays.equals(toReorder, setStorageTypes(toReorder, DiskManagerFileInfo.ST_REORDER ))){
-
-		    						return;
-		    					}
-		    				}
-		        		}
-
-		        		File[]	to_link = new File[res.length];
-
-						for(int i=0;i<res.length;i++){
-							if(toChange[i]){
-								to_link[i] = res[i].setSkippedInternal( setSkipped );
+					public void 
+					setSkipped(
+							boolean[] toChange, boolean setSkipped) 
+					{
+						synchronized( DiskManagerUtil.skip_lock ){
+							if ( toChange.length != res.length ){
+								
+								throw new IllegalArgumentException("array length mismatches the number of files");
 							}
-						}
-
-						if ( !loading[0] ){
-
-							DiskManagerImpl.storeFilePriorities( download_manager, res);
-						}
-
-						List<Integer>	from_indexes 	= new ArrayList<>();
-						List<File>		from_links 		= new ArrayList<>();
-						List<File>		to_links		= new ArrayList<>();
-
-						for(int i=0;i<res.length;i++){
-							if ( to_link[i] != null ){
-								from_indexes.add( i );
-								from_links.add( res[i].getFile( false ));
-								to_links.add( to_link[i] );
+							
+			        		if ( !setSkipped ){
+			        			
+			    				String[] types = DiskManagerImpl.getStorageTypes(download_manager);
+	
+			    				boolean[]	toLinear 	= new boolean[toChange.length];
+			    				boolean[]	toReorder 	= new boolean[toChange.length];
+	
+			    				int	num_linear 	= 0;
+			    				int num_reorder	= 0;
+	
+			    				for ( int i=0;i<toChange.length;i++){
+	
+			    					if ( toChange[i] ){
+	
+			    						int old_type = DiskManagerUtil.convertDMStorageTypeFromString( types[i] );
+	
+			    						if ( old_type == DiskManagerFileInfo.ST_COMPACT ){
+	
+			    							toLinear[i] = true;
+	
+			    							num_linear++;
+	
+			    						}else if ( old_type == DiskManagerFileInfo.ST_REORDER_COMPACT ){
+	
+			    							toReorder[i] = true;
+	
+			    							num_reorder++;
+			    						}
+			    					}
+			    				}
+	
+			    				if ( num_linear > 0 ){
+	
+			    					if (!Arrays.equals(toLinear, setStorageTypes(toLinear, DiskManagerFileInfo.ST_LINEAR))){
+	
+			    						return;
+			    					}
+			    				}
+	
+			    				if ( num_reorder > 0 ){
+	
+			    					if (!Arrays.equals(toReorder, setStorageTypes(toReorder, DiskManagerFileInfo.ST_REORDER ))){
+	
+			    						return;
+			    					}
+			    				}
+			        		}
+	
+			        		File[]	to_link = new File[res.length];
+	
+							for(int i=0;i<res.length;i++){
+								if(toChange[i]){
+									to_link[i] = res[i].setSkippedInternal( setSkipped );
+								}
 							}
-						}
-
-						if ( from_links.size() > 0 ){
-							download_manager.getDownloadState().setFileLinks( from_indexes, from_links, to_links );
-						}
-
-						for(int i=0;i<res.length;i++){
-							if(toChange[i]){
-								listener.filePriorityChanged(res[i]);
+	
+							if ( !loading[0] ){
+	
+								DiskManagerImpl.storeFilePriorities( download_manager, res);
 							}
+	
+							List<Integer>	from_indexes 	= new ArrayList<>();
+							List<File>		from_links 		= new ArrayList<>();
+							List<File>		to_links		= new ArrayList<>();
+	
+							for(int i=0;i<res.length;i++){
+								if ( to_link[i] != null ){
+									from_indexes.add( i );
+									from_links.add( res[i].getFile( false ));
+									to_links.add( to_link[i] );
+								}
+							}
+	
+							if ( from_links.size() > 0 ){
+								download_manager.getDownloadState().setFileLinks( from_indexes, from_links, to_links );
+							}
+	
+							List<DiskManagerFileInfo> priority_change = new ArrayList<>( res.length );
+							
+							for( int i=0;i<res.length;i++){
+								
+								if ( toChange[i] ){
+									
+									priority_change.add( res[i] );
+								}
+							}
+	
+							if ( !priority_change.isEmpty()){
+							
+								listener.filePriorityChanged(getDiskManager(), priority_change);
+							}
+							
+							doFileExistenceChecksAfterSkipChange(this, toChange, setSkipped, download_manager );
 						}
-
-						doFileExistenceChecksAfterSkipChange(this, toChange, setSkipped, download_manager );
 					}
 
 					@Override
@@ -608,7 +678,7 @@ DiskManagerUtil
 									// files for dnd files which then force a recheck when the download
 									// starts for the first time)
 
-									if ( target_file.exists()){
+									if ( FileUtil.exists( target_file )){
 
 										CacheFile cache_file =
 											CacheFileManagerFactory.getSingleton().createFile(
@@ -632,7 +702,7 @@ DiskManagerUtil
 													public File
 													getCacheFileControlFileDir()
 													{
-														return( download_manager.getDownloadState().getStateFile( ));
+														return( download_manager.getDownloadState().getStateDir());
 													}
 													@Override
 													public int
@@ -640,13 +710,25 @@ DiskManagerUtil
 													{
 														return( CacheFileOwner.CACHE_MODE_NORMAL );
 													}
+													
+													@Override
+													public FileKey 
+													getCacheFileLink(
+														FileKey file )
+													{
+														return( download_manager.getDownloadState().getFileLink( idx, file ));
+													}
 												},
-												target_file,
+												new StringInterner.FileKey( target_file ),
 												DiskManagerUtil.convertDMStorageTypeToCache( newStorageType ), force );
 
-										cache_file.getLength();	// need this to trigger recovery for re-order files :(
+										try{
+											cache_file.getLength();	// need this to trigger recovery for re-order files :(
 
-										cache_file.close();
+										}finally{
+											
+											cache_file.close();
+										}
 									}
 
 									toSkip[i] = ( newStorageType == FileSkeleton.ST_COMPACT || newStorageType == FileSkeleton.ST_REORDER_COMPACT )&& !res[i].isSkipped();
@@ -727,6 +809,20 @@ DiskManagerUtil
 							dmState.save(false);
 						}
 
+							// hijack the priority change event to report storage change to detect DND->delete 'priority' change
+						
+						List<DiskManagerFileInfo> priorityChanged = new ArrayList<>( res.length );
+
+						for(int i=0;i<res.length;i++){
+							if(toChange[i]){
+								priorityChanged.add( res[i] );
+							}
+						}
+						
+						if ( !priorityChanged.isEmpty()){
+							listener.filePriorityChanged(getDiskManager(),priorityChanged);
+						}
+						
 						return modified;
 					}
 		        };
@@ -741,8 +837,10 @@ DiskManagerUtil
 
 		            	private volatile CacheFile   read_cache_file;
 		            	// do not access this field directly, use lazyGetFile() instead
-		            	private WeakReference dataFile = new WeakReference(null);
+		            	private WeakReference<StringInterner.FileKey> dataFile = new WeakReference<>(null);
 
+		            	private volatile Boolean skipping;
+		            	
 		            	@Override
 			            public void
 		            	setPriority(int b)
@@ -751,43 +849,55 @@ DiskManagerUtil
 
 		            		DiskManagerImpl.storeFilePriorities( download_manager, res );
 
-		            		listener.filePriorityChanged( this );
+		            		listener.filePriorityChanged( getDiskManager(), this );
 		            	}
 
 		            	@Override
 			            public void
 		            	setSkipped(boolean skipped)
 		            	{
-		            		if ( !skipped && getStorageType() == ST_COMPACT ){
-		            			if ( !setStorageType( ST_LINEAR )){
-		            				return;
-		            			}
+		            		synchronized( DiskManagerUtil.skip_lock ){
+			            		try{
+			            			skipping = skipped;
+				            		if ( !skipped && getStorageType() == ST_COMPACT ){
+				            			if ( !setStorageType( ST_LINEAR )){
+				            				return;
+				            			}
+				            		}
+		
+				            		if ( !skipped && getStorageType() == ST_REORDER_COMPACT ){
+				            			if ( !setStorageType( ST_REORDER )){
+				            				return;
+				            			}
+				            		}
+		
+				            		File to_link = setSkippedInternal( skipped );
+		
+				            		DiskManagerImpl.storeFilePriorities( download_manager, res );
+		
+				            		if ( to_link != null ){
+		
+				            			download_manager.getDownloadState().setFileLink( file_index, getFile( false ), to_link );
+				            		}
+		
+				            		listener.filePriorityChanged( getDiskManager(), this );
+		
+			            			boolean[] toCheck = new boolean[fileSetSkeleton.nbFiles()];
+				            			
+			            			toCheck[file_index] = true;
+				            			
+			            			doFileExistenceChecksAfterSkipChange( fileSetSkeleton, toCheck, skipped, download_manager );
+			            		}finally{
+			            			skipping = null;
+			            		}
 		            		}
-
-		            		if ( !skipped && getStorageType() == ST_REORDER_COMPACT ){
-		            			if ( !setStorageType( ST_REORDER )){
-		            				return;
-		            			}
-		            		}
-
-		            		File to_link = setSkippedInternal( skipped );
-
-		            		DiskManagerImpl.storeFilePriorities( download_manager, res );
-
-		            		if ( to_link != null ){
-
-		            			download_manager.getDownloadState().setFileLink( file_index, getFile( false ), to_link );
-		            		}
-
-		            		listener.filePriorityChanged( this );
-
-	            			boolean[] toCheck = new boolean[fileSetSkeleton.nbFiles()];
-		            			
-	            			toCheck[file_index] = true;
-		            			
-	            			doFileExistenceChecksAfterSkipChange( fileSetSkeleton, toCheck, skipped, download_manager );
 		            	}
 
+		            	@Override
+		            	public Boolean isSkipping(){
+		            		return( skipping );
+		            	}
+		            	 
 		            	@Override
 			            public int
 		            	getAccessMode()
@@ -881,147 +991,18 @@ DiskManagerUtil
 		            	{
 		            			// returns the file to link to if linkage is required
 
-		            		skipped_internal = _skipped;
-
-	    					if ( !download_manager.isDestroyed()){
-
-	    						DownloadManagerState dm_state = download_manager.getDownloadState();
-
-			            		String dnd_sf = dm_state.getAttribute( DownloadManagerState.AT_DND_SUBFOLDER );
-
-			            		if ( dnd_sf != null ){
-
-			            			File	link = getLink();
-
-			        				File 	file = getFile( false );
-
-				            		if ( _skipped ){
-
-				            			if ( link == null || link.equals( file )){
-
-			            					File parent = file.getParentFile();
-
-			            					if ( parent != null ){
-
-	    										String prefix = dm_state.getAttribute( DownloadManagerState.AT_DND_PREFIX );
-
-	    										String file_name = file.getName();
-
-	    										if ( prefix != null && !file_name.startsWith( prefix )){
-
-	    											file_name = prefix + file_name;
-	    										}
-
-			            						File new_parent = FileUtil.newFile( parent, dnd_sf );
-
-			            						File new_file = FileUtil.newFile( new_parent, file_name );
-
-			            						if ( !new_file.exists()){
-
-				            						if ( !new_parent.exists()){
-
-				            							new_parent.mkdirs();
-				            						}
-
-				            						if ( new_parent.canWrite()){
-
-					            						boolean ok;
-
-					            						if ( file.exists()){
-
-					            							ok = FileUtil.renameFile( file, new_file );
-
-					            						}else{
-
-					            							ok = true;
-					            						}
-
-					            						if ( ok ){
-
-					            							return( new_file );
-					            						}
-				            						}
-			            						}
-			            					}
-				            			}
-				            		}else{
-
-				            			if ( link != null && !file.exists()){
-
-			            					File parent = file.getParentFile();
-
-			            					if ( parent != null && parent.canWrite()){
-
-			            						File new_parent = parent.getName().equals( dnd_sf )?parent:FileUtil.newFile( parent, dnd_sf );
-
-			            							// use link name to handle incomplete file suffix if set
-
-			            						File new_file = FileUtil.newFile( new_parent, link.getName());
-
-			            						if ( new_file.equals( link )){
-
-			            							boolean	ok;
-
-			            							String incomp_ext = dm_state.getAttribute( DownloadManagerState.AT_INCOMP_FILE_SUFFIX );
-
-			    									String file_name = file.getName();
-
-			    									String prefix = dm_state.getAttribute( DownloadManagerState.AT_DND_PREFIX );
-
-			    									boolean prefix_removed = false;
-
-			    									if ( prefix != null && file_name.startsWith(prefix)){
-
-			    										file_name = file_name.substring( prefix.length());
-
-			    										prefix_removed = true;
-			    									}
-
-			    									if  ( 	incomp_ext != null && incomp_ext.length() > 0 &&
-			    											getDownloaded() != getLength()){
-
-															// retain the prefix if enabled and we have a suffix
-
-			    										if ( prefix == null ){
-
-			    											prefix = "";
-			    										}
-
-			    										file = FileUtil.newFile( file.getParentFile(), prefix + file_name + incomp_ext );
-
-			    									}else if ( prefix_removed ){
-
-			    										file = FileUtil.newFile( file.getParentFile(), file_name);
-			    									}
-
-			            							if ( new_file.exists()){
-
-			            								ok = FileUtil.renameFile( new_file, file );
-
-			            							}else{
-
-			            								ok = true;
-			            							}
-
-			            							if ( ok ){
-
-			            								File[] files = new_parent.listFiles();
-
-			            								if ( files != null && files.length == 0 ){
-
-			            									new_parent.delete();
-			            								}
-
-			            								return( file );
-			            							}
-			            						}
-			            					}
-				            			}
-				            		}
-			            		}
-	    					}
-
-	    					return( null );
+		            		synchronized( DiskManagerUtil.skip_lock ){
+		            			
+			            		skipped_internal = _skipped;
+	
+		    					if ( !download_manager.isDestroyed()){
+	
+		    						return( setSkippedInternalSupport( download_manager, this, null, _skipped ));
+				            		
+		    					}
+	
+		    					return( null );
+		            		}
 		            	}
 
 		            	@Override
@@ -1073,48 +1054,29 @@ DiskManagerUtil
 
 		            	private File lazyGetFile()
 		            	{
-		            		File toReturn = (File)dataFile.get();
-		            		if(toReturn != null)
-		            			return toReturn;
-
-		            		TOTorrent tor = download_manager.getTorrent();
-
-		            		File  dataPath = root_dir;
-		            		File simpleFile = null;
-
-		            		// for a simple torrent the target file can be changed
-
-		            		if ( tor == null || tor.isSimpleTorrent()){
-
-		            				// rumour has it tor can sometimes be null
-
-		            			simpleFile = download_manager.getAbsoluteSaveLocation();
-
-		            		}else{
-		            			byte[][]path_comps = torrent_file.getPathComponents();
-
-		            			for (int j=0;j<path_comps.length;j++){
-
-		            				String comp;
-		            				try
-		            				{
-		            					comp = locale_decoder.decodeString( path_comps[j] );
-		            				} catch (UnsupportedEncodingException e)
-		            				{
-		            					Debug.printStackTrace(e);
-		            					comp = "undecodableFileName"+file_index;
-		            				}
-
-		            				comp = FileUtil.convertOSSpecificChars( comp,  j != path_comps.length-1 );
-
-		            				dataPath = FileUtil.newFile(dataPath, comp);
-		            			}
+		            		StringInterner.FileKey fk = dataFile.get();
+		            		
+		            		if ( fk == null ){
+		            					            		
+			            		TOTorrent tor = download_manager.getTorrent();
+	
+			            		// for a simple torrent the target file can be changed
+	
+			            		if ( tor == null || tor.isSimpleTorrent()){
+	
+			            				// rumour has it tor can sometimes be null
+	
+			            			fk = new StringInterner.FileKey( download_manager.getAbsoluteSaveLocation());
+	
+			            		}else{
+	
+			            			fk = new StringInterner.FileKey( root_dir, torrent_file.getRelativePath( locale_decoder ));
+			            		}
+	
+			            		dataFile = new WeakReference<>( fk );
 		            		}
-
-		            		dataFile = new WeakReference(toReturn = simpleFile != null ? simpleFile : dataPath );
-
-		            		//System.out.println("new file:"+toReturn);
-		            		return toReturn;
+		            		
+	            			return( fk.getFile());
 		            	}
 
 		            	@Override
@@ -1127,7 +1089,8 @@ DiskManagerUtil
 	                	@Override
 		                public boolean
 	                	setLink(
-	                		File    link_destination )
+	                		File    	link_destination,
+	                		boolean		no_delete )
 	                	{
 	                		last_error = null;
 	                		
@@ -1149,7 +1112,7 @@ DiskManagerUtil
 	                				return false;
 	                			}
 	                		}
-	                		return setLinkAtomic(link_destination);
+	                		return setLinkAtomic(link_destination, no_delete );
 	                	}
 
 	    				@Override
@@ -1160,9 +1123,10 @@ DiskManagerUtil
 	                	@Override
 		                public boolean
 	                	setLinkAtomic(
-	                		File    link_destination )
+	                		File    	link_destination,
+	                		boolean		no_delete)
 	                	{
-	                		last_error = setFileLink( download_manager, res, this, lazyGetFile(), link_destination, null );
+	                		last_error = setFileLink( download_manager, res, this, lazyGetFile(), link_destination, no_delete, null );
 	                		
 	                		return( last_error == null );
 	                	}
@@ -1171,9 +1135,10 @@ DiskManagerUtil
 		                public boolean
 	                	setLinkAtomic(
 	                		File    						link_destination,
+	                		boolean							no_delete,
 	                		FileUtil.ProgressListener		pl )
 	                	{
-	                		last_error = setFileLink( download_manager, res, this, lazyGetFile(), link_destination , pl);
+	                		last_error = setFileLink( download_manager, res, this, lazyGetFile(), link_destination, no_delete, pl);
 	                		
 	                		return( last_error == null );
 	                	}
@@ -1182,7 +1147,7 @@ DiskManagerUtil
 		                public File
 	                	getLink()
 	                	{
-	                		return( download_manager.getDownloadState().getFileLink( file_index, lazyGetFile() ));
+	                		return( download_manager.getDownloadState().getFileLink( file_index));
 	                	}
 
 	                	@Override
@@ -1245,7 +1210,7 @@ DiskManagerUtil
 									                public File
 	                								getCacheFileControlFileDir()
 	                								{
-	                									return( download_manager.getDownloadState().getStateFile( ));
+	                									return( download_manager.getDownloadState().getStateDir());
 	                								}
 	                								@Override
 									                public int
@@ -1253,8 +1218,15 @@ DiskManagerUtil
 	                								{
 	                									return( CacheFileOwner.CACHE_MODE_NORMAL );
 	                								}
+	                								@Override
+													public FileKey 
+													getCacheFileLink(
+														FileKey file )
+													{
+														return( download_manager.getDownloadState().getFileLink( file_index, file ));
+													}
 	                							},
-	                							getFile( true ),
+	                							new StringInterner.FileKey( getFile( true )),
 	                							convertDMStorageTypeToCache( type ), false );
 
 	                				}catch( Throwable e ){
@@ -1625,7 +1597,9 @@ DiskManagerUtil
 	      }
 
 	      try{
-	          for (int i=0;i<files.length;i++){
+	    	  	// somehow it is possible to end up with a mismatch in files/downloaded size - handle best as possible
+	    	  
+	          for (int i=0, max=Math.min( files.length, downloaded.size());i<max;i++){
 
 	              files[i].setDownloaded(((Long)downloaded.get(i)).longValue());
 	          }
@@ -1654,9 +1628,30 @@ DiskManagerUtil
 		return( false );
 	}
 	
+	public static boolean
+	isFileWriteException(
+		Throwable e )
+	{
+		while( e != null ){
+			
+			if ( e instanceof FMFileManagerException ){
+				
+				if (((FMFileManagerException)e).getOperation() == FMFileManagerException.OP_WRITE ){
+					
+					return( true );
+				}
+			}
+			
+			e = e.getCause();
+		}
+		
+		return( false );
+	}
+	
 	public static DiskManagerPiece[]
 	getDiskManagerPiecesSnapshot(
-		DownloadManager		dm )
+		DownloadManager				dm,
+		DiskManagerFileInfoSet		file_set )
 	{
 		try{
 			TOTorrent torrent = dm.getTorrent();
@@ -1675,24 +1670,26 @@ DiskManagerUtil
 	
 	        DiskManagerPiece[] pieces      = new DiskManagerPiece[nbPieces];
 
+	        /*
 			DiskManagerFileInfoSet file_set = 
 				getFileInfoSkeleton(
 					dm,
 					new DiskManagerListener(){
 						
 						@Override
-						public void stateChanged(int oldState, int newState){
+						public void stateChanged(DiskManager dm, int oldState, int newState){
 						}
 						
 						@Override
-						public void pieceDoneChanged(DiskManagerPiece piece){
+						public void pieceDoneChanged(DiskManager dm, DiskManagerPiece piece){
 						}
 						
 						@Override
-						public void filePriorityChanged(DiskManagerFileInfo file){
+						public void filePriorityChanged(DiskManager dm, List<DiskManagerFileInfo> files){
 						}
 					});
-				
+			*/
+	        
 			DiskManagerFileInfo[] files = file_set.getFiles();
 	
 	        LocaleUtilDecoder   locale_decoder = LocaleTorrentUtil.getTorrentEncoding( torrent );
@@ -1759,7 +1756,13 @@ DiskManagerUtil
 					}
 					
 					@Override
-					public void moveDataFiles(File new_parent_dir, String dl_name, OperationStatus op_status){
+					public void moveDataFiles(File new_parent_dir, String dl_name ){
+					}
+					
+					@Override
+					public void 
+					rateLimitChanged()
+					{
 					}
 					
 					@Override
@@ -1804,7 +1807,7 @@ DiskManagerUtil
 					
 					@Override
 					public int getState(){
-						return 0;
+						return( SNAPSHOT );
 					}
 					
 					@Override
@@ -1829,6 +1832,11 @@ DiskManagerUtil
 					
 					@Override
 					public long[] getReadStats(){
+						return null;
+					}
+					
+					@Override
+					public long[] getWriteStats(){
 						return null;
 					}
 					
@@ -1923,6 +1931,13 @@ DiskManagerUtil
 					}
 					
 					@Override
+					public boolean
+					getRecheckCancelled()
+					{
+						return( false );
+					}
+					
+					@Override
 					public int getCacheMode(){
 						return 0;
 					}
@@ -1958,7 +1973,15 @@ DiskManagerUtil
 					}
 					
 					@Override
-					public void downloadEnded(OperationStatus op_status){
+					public DownloadEndedProgress
+					downloadEnded( boolean start_of_day )
+					{
+						return( new DownloadEndedProgress(){
+							@Override
+							public boolean isComplete(){
+								return( true );
+							}
+						});
 					}
 					
 					@Override
@@ -2011,11 +2034,20 @@ DiskManagerUtil
 					}
 					
 					@Override
-					public void setFailed(int type, String reason, Throwable cause){
+					public boolean isUploadOnly(){
+						return( false );
+					}
+					
+					@Override
+					public void setFailed(int type, String reason, Throwable cause, boolean can_continue ){
 					}
 										
 					@Override
 					public void priorityChanged(DiskManagerFileInfo file){
+					}
+					
+					@Override
+					public void storageTypeChanged(DiskManagerFileInfo file){
 					}
 					
 					@Override
@@ -2088,6 +2120,16 @@ DiskManagerUtil
 	
 	private static List<CoreOperationTask>	move_tasks = new ArrayList<>();
 	  
+	
+	private static boolean move_smallest_first;
+	
+	static{
+		COConfigurationManager.addAndFireParameterListener(
+			ConfigKeys.File.BCFG_DISKMANAGER_MOVE_SMALLESTFIRST, (n)->{
+				move_smallest_first = COConfigurationManager.getBooleanParameter(n);
+			});
+	}
+	
 	public static void
 	runMoveTask(
 		DownloadManager		download_manager,
@@ -2128,11 +2170,12 @@ DiskManagerUtil
 					return;
 				}
 			}
-
+			
 			FileUtil.runAsTask(
 				new CoreOperationTask()
 				{
-					private boolean		queued = true;
+					private boolean		added_to_tasks	= false;
+					private boolean		queued			= true;
 
 					@Override
 					public String 
@@ -2152,108 +2195,162 @@ DiskManagerUtil
 					public String[] 
 					getAffectedFileSystems()
 					{
-						return( FileUtil.getFileStoreNames( download_manager.getAbsoluteSaveLocation(), destination ));
+						File save_loc = download_manager.getAbsoluteSaveLocation();
+						
+						return( FileUtil.getFileStoreNames( save_loc, destination==null?save_loc:destination ));
 					}
 
 					private ProgressCallback callback = 
-					new ProgressCallbackAdapter()
-					{
-						private volatile int	current_state = ProgressCallback.ST_NONE;
-
-						@Override
-						public int 
-						getProgress()
+						new ProgressCallbackAdapter( move_smallest_first?ProgressCallbackAdapter.SORT_SIZE:ProgressCallbackAdapter.SORT_ALLOC_ORDER )
 						{
-							long[] mp = adapter.getMoveProgress();
-
-							return( mp==null?0:(int)mp[0]);
-						}
-
-						@Override
-						public long 
-						getSize()
-						{
-							long[] mp = adapter.getMoveProgress();
-
-							return( mp==null?download_manager.getStats().getSizeExcludingDND():mp[1] );
-						}
-
-						@Override
-						public String 
-						getSubTaskName()
-						{
-							return( adapter.getMoveSubTask());
-						}
-
-						@Override
-						public int 
-						getSupportedTaskStates()
-						{
-							return( 
-									ProgressCallback.ST_PAUSE |  
-									ProgressCallback.ST_RESUME |
-									ProgressCallback.ST_CANCEL |
-									ProgressCallback.ST_SUBTASKS );
-						}
-
-						@Override
-						public void 
-						setTaskState(
-								int state )
-						{
-							if ( current_state == ProgressCallback.ST_CANCEL ){
-
-								return;
+							private volatile int	current_state = ProgressCallback.ST_NONE;
+	
+							@Override
+							public int 
+							getProgress()
+							{
+								long[] mp = adapter.getMoveProgress();
+	
+								return( mp==null?0:(int)mp[0]);
 							}
-
-							if ( state == ProgressCallback.ST_PAUSE ){
-
-								adapter.setMoveState( ProgressListener.ST_PAUSED );
-
-								current_state = state;
-
-							}else if ( state == ProgressCallback.ST_RESUME ){
-
-								adapter.setMoveState( ProgressListener.ST_NORMAL );
-
-								current_state = ProgressCallback.ST_NONE;									
-
-							}else if ( state == ProgressCallback.ST_CANCEL ){
-
-								adapter.setMoveState( ProgressListener.ST_CANCELLED );
-
-								current_state = ProgressCallback.ST_CANCEL;									
+	
+							@Override
+							public long 
+							getSize()
+							{
+								long[] mp = adapter.getMoveProgress();
+	
+								return( mp==null?download_manager.getStats().getSizeExcludingDND():mp[1] );
 							}
-						}
-
-						public int
-						getTaskState()
-						{
-							if ( current_state == ProgressCallback.ST_NONE && queued ){
-
-								return( ProgressCallback.ST_QUEUED );
+	
+							@Override
+							public String 
+							getSubTaskName()
+							{
+								return( adapter.getMoveSubTask());
 							}
-
-							return( current_state );
-						}
-					};
-
+	
+							@Override
+							public int 
+							getSupportedTaskStates()
+							{
+								return( 
+										ProgressCallback.ST_PAUSE |  
+										ProgressCallback.ST_RESUME |
+										ProgressCallback.ST_CANCEL |
+										ProgressCallback.ST_SUBTASKS );
+							}
+	
+							@Override
+							public void 
+							setTaskState(
+									int state )
+							{
+								if ( current_state == ProgressCallback.ST_CANCEL ){
+	
+									return;
+								}
+	
+								if ( state == ProgressCallback.ST_PAUSE ){
+	
+									adapter.setMoveState( ProgressListener.ST_PAUSED );
+	
+									current_state = state;
+	
+								}else if ( state == ProgressCallback.ST_RESUME ){
+	
+									adapter.setMoveState( ProgressListener.ST_NORMAL );
+	
+									current_state = ProgressCallback.ST_NONE;									
+	
+								}else if ( state == ProgressCallback.ST_CANCEL ){
+	
+									adapter.setMoveState( ProgressListener.ST_CANCELLED );
+	
+									current_state = ProgressCallback.ST_CANCEL;									
+								}
+							}
+	
+							public int
+							getTaskState()
+							{
+								if ( current_state == ProgressCallback.ST_NONE && queued ){
+	
+									return( ProgressCallback.ST_QUEUED );
+								}
+	
+								return( current_state );
+							}
+						};
+	
 					@Override
-					public void
-					run(
-							CoreOperation operation)
+					public boolean
+					runOperation(
+						CoreOperation operation)
 					{
+						boolean has_scheduler = DiskManagerOperationScheduler.isEnabled();
+						
+							// if nothing is scheduling operations then we have to implement
+							// the 'recheck before move' ourselves (with a scheduler the move operation
+							// is guaranteed to be added after the recheck operation if so configured)
+						
+						if ( !has_scheduler ){
+							
+							while( true ){
+							
+								boolean checkBeforeMove	= COConfigurationManager.getBooleanParameter(ConfigKeys.File.BCFG_CHECK_PIECES_ON_COMPLETION_BEFORE_MOVE);
+
+								if ( checkBeforeMove ){
+									
+									DiskManager dm = download_manager.getDiskManager();
+									
+									if ( dm != null && dm.getCompleteRecheckStatus() >= 0 ){
+																				
+										try{
+											Thread.sleep( 500 );
+											
+										}catch( Throwable e ){
+											
+										}
+										
+										if ( callback.getTaskState() == ProgressCallback.ST_CANCEL ){
+
+											throw( new RuntimeException( "Cancelled" ));
+										}
+										
+											// come back later
+										
+										return( false );
+										
+									}else{
+										
+										break;
+									}
+								}else{
+									
+									break;
+								}
+							}
+						}
+						
 						boolean ready;
 
 						synchronized( move_tasks ){
 
-							move_tasks.add( this );
+							if ( !added_to_tasks ){
+								
+								move_tasks.add( this );
+								
+								added_to_tasks = true;
+							}
 
 							ready = move_tasks.size() == 1;
 						}
 
+						boolean deferred = false;
+						
 						try{
-							if ( DiskManagerOperationScheduler.isEnabled()){
+							if ( has_scheduler ){
 
 								while( callback.getTaskState() == ProgressCallback.ST_PAUSE ){
 
@@ -2263,6 +2360,12 @@ DiskManagerUtil
 									}catch( Throwable e ){
 
 									}
+									
+										// come back later
+									
+									deferred = true;
+									
+									return( false );
 								}
 
 								if ( callback.getTaskState() == ProgressCallback.ST_CANCEL ){
@@ -2306,6 +2409,15 @@ DiskManagerUtil
 											}
 										}
 									}
+									
+									if ( !ready ){
+										
+											// come back later
+										
+										deferred = true;
+										
+										return( false );
+									}
 								}
 							}
 
@@ -2313,15 +2425,20 @@ DiskManagerUtil
 
 							target.run();
 
+							return( true );
+							
 						}finally{
 
-							synchronized( move_tasks ){
-
-								move_tasks.remove( this );
+							if ( !deferred ){
+								
+								synchronized( move_tasks ){
+	
+									move_tasks.remove( this );
+								}
 							}
 						}
 					}
-
+				
 					@Override
 					public ProgressCallback 
 					getProgressCallback()
@@ -2355,5 +2472,421 @@ DiskManagerUtil
 		public void
 		setMoveState(
 			int	state );
+	}
+	
+	
+	protected static File
+	setSkippedInternalSupport(
+		DownloadManager			dm,
+		DiskManagerFileInfo		dm_file,
+		CacheFile				cache_file,
+		boolean					skipped )
+	{
+		DownloadManagerState	dm_state = dm.getDownloadState();
+		
+		int file_index = dm_file.getIndex();
+				
+		String dnd_sf = dm_state.getAttribute( DownloadManagerState.AT_DND_SUBFOLDER );
+
+ 		if ( dnd_sf != null ){
+
+			File	link = dm_file.getLink();				// where the file currently is, null if not amended at all
+
+			File 	base_file = dm_file.getFile( false );	// where the file should be without any renaming/moving
+
+    		if ( skipped ){
+
+				File	base_parent = base_file.getParentFile();
+				
+				boolean file_ok = base_parent != null;
+				
+				if ( file_ok ){	
+					
+	    				// if the file isn't pretty much where we expect it to be then we don't touch it
+	    			
+	    			file_ok = link == null || link.equals( base_file );
+	    			
+	    			if ( !file_ok ){
+	    				
+	    					// not identical but might still be good enough
+	    				
+	    				if ( base_parent != null && base_parent.equals( link.getParentFile())){
+	    					
+	    						// that'll do, we don't really care about the name to move it
+	    					
+	    					file_ok = true;
+	    				}
+	    			}
+				}
+				
+    			if ( file_ok ){
+
+					String new_name = link==null?base_file.getName():link.getName();
+
+						// just in case add in any expected stuff
+					
+					String prefix = dm_state.getAttribute( DownloadManagerState.AT_DND_PREFIX );
+
+					String incomp_ext = dm_state.getAttribute( DownloadManagerState.AT_INCOMP_FILE_SUFFIX );
+
+					boolean incomplete = dm_file.getDownloaded() != dm_file.getLength();
+					
+					if ( prefix != null && incomplete && !new_name.startsWith( prefix )){
+
+						new_name = prefix + new_name;
+					}
+
+					if ( incomp_ext != null && incomplete && !new_name.endsWith( incomp_ext )){
+												
+						new_name = new_name + incomp_ext;
+					}
+					
+					File new_parent = FileUtil.newFile( base_parent, dnd_sf );
+
+					File new_file = FileUtil.newFile( new_parent, new_name );
+
+					if ( !FileUtil.exists( new_file )){
+
+						if ( !FileUtil.exists( new_parent )){
+
+							new_parent.mkdirs();
+						}
+
+						if ( new_parent.canWrite()){
+
+							if ( cache_file == null ){
+								
+								boolean ok;
+								
+		   						File source = link==null?base_file:link;
+	    						
+	    						if ( FileUtil.exists( source )){
+
+	    							ok = FileUtil.renameFile( source, new_file );
+
+	    						}else{
+
+	    								// might not be allocated yet
+	    							
+	    							ok = true;
+	    							
+	    							File[] files = new_parent.listFiles();
+									
+									if ( files != null && files.length == 0 ){
+
+										new_parent.delete();
+									}
+	    						}
+
+	    						if ( ok ){
+
+	    							return( new_file );
+	    						}
+							}else{
+	    						boolean ok;
+	
+								try{
+									dm_state.setFileLink( file_index, base_file, new_file );
+	
+									cache_file.moveFile( new_file, null );
+	
+									ok = true;
+	
+								}catch( Throwable e ){
+	
+									ok = false;
+	
+									Debug.out( e );
+								}
+	
+	    						if ( !ok ){
+	
+	    							dm_state.setFileLink( file_index, base_file, link );
+	    						}
+							}
+						}
+					}
+    			}
+    		}else{
+
+ 					// here we are removing the added folder so there must be a link
+    			
+    			if ( link != null ){
+
+					File link_parent = link.getParentFile();
+
+					if ( link_parent != null && link_parent.getName().equals( dnd_sf )){
+
+						File new_parent = link_parent.getParentFile();
+
+						if ( new_parent != null ){
+									
+							File new_file = FileUtil.newFile( new_parent, link.getName());
+							
+							if ( cache_file == null ){
+								
+									// inactive case
+								
+								File result = null;
+								
+								if ( FileUtil.exists( link )){
+									
+									if ( FileUtil.renameFile( link, new_file )){
+		
+										result = new_file;
+									}
+								}else{
+									
+										// file might not be allocated yet
+									
+									result = new_file;
+								}
+								
+								if ( FileUtil.exists( link_parent )){
+									
+									File[] files = link_parent.listFiles();
+									
+									if ( files != null && files.length == 0 ){
+
+										link_parent.delete();
+									}
+								}
+								
+								return( result );
+								
+							}else{
+					
+									// active case
+								
+								boolean	ok;
+	
+								try{
+	
+									dm_state.setFileLink( file_index, base_file, new_file );
+	
+									cache_file.moveFile( new_file, null );
+									
+									File[] files = link_parent.listFiles();
+	
+									if ( files != null && files.length == 0 ){
+	
+										link_parent.delete();
+									}
+	
+									ok = true;
+	
+								}catch( Throwable e ){
+	
+									ok = false;
+	
+									Debug.out( e );
+								}
+	
+								if ( !ok ){
+	
+									dm_state.setFileLink( file_index, base_file, link );
+	    						}
+							}
+						}
+					}
+    			}
+    		}
+    		
+    		return( null );
+		}
+	
+		String dnd_al = dm_state.getAttribute( DownloadManagerState.AT_DND_ALT_LOC );
+
+ 		if ( dnd_al != null ){
+
+ 			File dnd_root	= FileUtil.newFile( dnd_al );
+ 			 			
+ 			String save_location_path = dm.getSaveLocation().getAbsolutePath();
+ 			
+			File	link = dm_file.getLink();				// where the file currently is, null if not amended at all
+
+			File 	base_file = dm_file.getFile( false );	// where the file should be without any renaming/moving
+
+    		if ( skipped ){ 
+   			
+				File	base_parent = base_file.getParentFile();
+				
+				boolean file_ok = base_parent != null && base_file.getAbsolutePath().startsWith( save_location_path );
+				
+				if ( file_ok ){	
+					
+	    				// if the file isn't pretty much where we expect it to be then we don't touch it
+	    			
+	    			file_ok = link == null || link.equals( base_file );
+	    			
+	    			if ( !file_ok ){
+	    				
+	    					// not identical but might still be good enough
+	    				
+	    				if ( base_parent != null && base_parent.equals( link.getParentFile())){
+	    					
+	    						// that'll do, we don't really care about the name to move it
+	    					
+	    					file_ok = true;
+	    				}
+	    			}
+				}
+				
+    			if ( file_ok ){
+
+					String new_name = link==null?base_file.getName():link.getName();
+
+						// just in case add in any expected stuff
+					
+					String prefix = dm_state.getAttribute( DownloadManagerState.AT_DND_PREFIX );
+
+					String incomp_ext = dm_state.getAttribute( DownloadManagerState.AT_INCOMP_FILE_SUFFIX );
+
+					boolean incomplete = dm_file.getDownloaded() != dm_file.getLength();
+					
+					if ( prefix != null && incomplete && !new_name.startsWith( prefix )){
+
+						new_name = prefix + new_name;
+					}
+
+					if ( incomp_ext != null && incomplete && !new_name.endsWith( incomp_ext )){
+												
+						new_name = new_name + incomp_ext;
+					}
+					
+					File new_parent = FileUtil.newFile( dnd_root, base_parent.getAbsolutePath().substring( save_location_path.length()));
+
+					File new_file = FileUtil.newFile( new_parent, new_name );
+
+					if ( !FileUtil.exists( new_file )){
+
+						if ( !FileUtil.exists( new_parent )){
+
+							new_parent.mkdirs();
+						}
+
+						if ( new_parent.canWrite()){
+
+							if ( cache_file == null ){
+								
+								boolean ok;
+								
+		   						File source = link==null?base_file:link;
+	    						
+	    						if ( FileUtil.exists( source )){
+
+	    							ok = FileUtil.renameFile( source, new_file );
+
+	    						}else{
+
+	    								// might not be allocated yet
+	    							
+	    							ok = true;
+	    							
+	    							File[] files = new_parent.listFiles();
+									
+									if ( files != null && files.length == 0 ){
+
+										new_parent.delete();
+									}
+	    						}
+
+	    						if ( ok ){
+
+	    							return( new_file );
+	    						}
+							}else{
+	    						boolean ok;
+	
+								try{
+									dm_state.setFileLink( file_index, base_file, new_file );
+	
+									cache_file.moveFile( new_file, null );
+	
+									ok = true;
+	
+								}catch( Throwable e ){
+	
+									ok = false;
+	
+									Debug.out( e );
+								}
+	
+	    						if ( !ok ){
+	
+	    							dm_state.setFileLink( file_index, base_file, link );
+	    						}
+							}
+						}
+					}
+    			}
+    		}else{
+
+ 					// here we are removing the added folder so there must be a link
+    			
+    			if ( link != null ){
+
+					if ( link.getAbsolutePath().startsWith( dnd_root.getAbsolutePath())){
+
+						File new_parent = base_file.getParentFile();
+
+						if ( new_parent != null ){
+									
+							File new_file = FileUtil.newFile( new_parent, link.getName());
+							
+							if ( cache_file == null ){
+								
+									// inactive case
+								
+								File result = null;
+								
+								if ( FileUtil.exists( link )){
+									
+									if ( FileUtil.renameFile( link, new_file )){
+		
+										result = new_file;
+									}
+								}else{
+									
+										// file might not be allocated yet
+									
+									result = new_file;
+								}
+								
+								return( result );
+								
+							}else{
+					
+									// active case
+								
+								boolean	ok;
+	
+								try{
+	
+									dm_state.setFileLink( file_index, base_file, new_file );
+	
+									cache_file.moveFile( new_file, null );
+	
+									ok = true;
+	
+								}catch( Throwable e ){
+	
+									ok = false;
+	
+									Debug.out( e );
+								}
+	
+								if ( !ok ){
+	
+									dm_state.setFileLink( file_index, base_file, link );
+	    						}
+							}
+						}
+					}
+    			}
+    		}
+		}
+ 		
+ 		return( null );
 	}
 }

@@ -181,25 +181,19 @@ ConnectionEndpoint
 				new ConnectListener()
 				{
 					//private long		start_time;
-					private int			timeout = Integer.MIN_VALUE;
 					private int			fail_count;
 
 					@Override
 					public int
 					connectAttemptStarted(
-						int default_connect_timeout)
+						Transport	transport,	
+						int			default_connect_timeout)
 					{
-						synchronized( connected ){
-
-							if ( timeout == Integer.MIN_VALUE ){
-
-								//start_time = SystemTime.getCurrentTime();
-
-								timeout = listener.connectAttemptStarted( default_connect_timeout );
-							}
-
-							return( timeout);
-						}
+							// we can come through here twice for uTP and TCP. Each has their own
+							// timeout settings (well, -1 for uTP and 15secs for TCP)
+							// listener obviously has to expect this
+						
+						return( listener.connectAttemptStarted( transport, default_connect_timeout ));
 					}
 
 				    @Override
@@ -242,7 +236,8 @@ ConnectionEndpoint
 				    @Override
 				    public void
 				    connectFailure(
-				    	Throwable failure_msg )
+				    	Transport	transport,	
+				    	Throwable	failure_msg )
 				    {
 				    	boolean	inform;
 
@@ -255,7 +250,7 @@ ConnectionEndpoint
 
 				    	if ( inform ){
 
-				    		listener.connectFailure(failure_msg);
+				    		listener.connectFailure( transport, failure_msg);
 				    	}
 				    }
 
@@ -365,7 +360,7 @@ ConnectionEndpoint
 
 				Debug.out( "No supportified!" );
 
-				listener.connectFailure( new Exception( "Not Supported" ));
+				listener.connectFailure( null, new Exception( "Not Supported" ));
 			}
 
 			return(
@@ -424,9 +419,10 @@ ConnectionEndpoint
 		@Override
 		public int
 		connectAttemptStarted(
+			Transport		transport,
 			int 			default_connect_timeout )
 		{
-			return( listener.connectAttemptStarted(default_connect_timeout));
+			return( listener.connectAttemptStarted(transport,default_connect_timeout));
 		}
 
 		@Override
@@ -456,6 +452,7 @@ ConnectionEndpoint
 		@Override
 		public void
 		connectFailure(
+			Transport		transport,
 			Throwable 		failure_msg )
 		{
 			synchronized( this ){
@@ -468,7 +465,7 @@ ConnectionEndpoint
 				failed = true;
 			}
 
-			listener.connectFailure( failure_msg );
+			listener.connectFailure( transport, failure_msg );
 		}
 
 		@Override

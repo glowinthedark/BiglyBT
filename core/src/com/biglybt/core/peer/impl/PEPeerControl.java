@@ -28,8 +28,10 @@ package com.biglybt.core.peer.impl;
 
 import java.util.Map;
 
+import com.biglybt.core.disk.DiskManagerReadRequest;
 import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPeerManager;
+import com.biglybt.core.peer.PEPiece;
 import com.biglybt.core.peermanager.peerdb.PeerItem;
 
 
@@ -53,6 +55,12 @@ PEPeerControl
 		int 			offset,
 		int 			length );
 
+	public void
+	requestAdded(
+		PEPiece					piece,
+		PEPeerTransport			peer,
+		DiskManagerReadRequest	request);
+	
 	public void
 	havePiece(
 		int pieceNumber,
@@ -90,9 +98,6 @@ PEPeerControl
 
 	public int
 	getUploadPriority();
-
-	public int
-	getHiddenPiece();
 
 	public void addPeerTransport( PEPeerTransport transport );
 
@@ -155,4 +160,15 @@ PEPeerControl
 	
 	public PEPeerControlHashHandler
 	getHashHandler();
+	
+	public boolean
+	isHolePunchOperationOK(
+		PEPeerTransport		peer,
+		boolean				is_connect );
+	
+	public void
+	handleCloseReason(
+		PEPeerTransport		peer,
+		boolean				reason_outgoing,
+		int					reason );
 }

@@ -92,7 +92,7 @@ public class ViewDownSpeedGraph
 
 	private void initialize(Composite composite) {
 		GridData gridData;
-		composite.setLayout( new GridLayout());
+		composite.setLayout( Utils.getSimpleGridLayout(1));
 		downSpeedCanvas = new Canvas(composite, SWT.DOUBLE_BUFFERED);
 		gridData = new GridData(GridData.FILL_BOTH);
 		downSpeedCanvas.setLayoutData(gridData);
@@ -116,7 +116,9 @@ public class ViewDownSpeedGraph
 
 	private void delete() {
 		Utils.disposeComposite(downSpeedCanvas);
-		downSpeedGraphic.dispose();
+		if ( downSpeedGraphic != null ){
+			downSpeedGraphic.dispose();
+		}
 	}
 
 	private String getFullTitle() {
@@ -130,6 +132,10 @@ public class ViewDownSpeedGraph
 	}
 
 	private void refresh() {
+		if ( downSpeedGraphic == null ){
+			return;
+		}
+		
 		if (!everRefreshed) {
 			everRefreshed = true;
 			timerEvent = SimpleTimer.addPeriodicEvent("TopBarSpeedGraphicView", 1000, new TimerEventPerformer() {
@@ -138,7 +144,9 @@ public class ViewDownSpeedGraph
 					if ( downSpeedCanvas.isDisposed()){
 						timerEvent.cancel();
 					}else{
-						periodicUpdate();
+						if ( Utils.isUIUpdateEnabled()){
+							periodicUpdate();
+						}
 					}
 				}
 			});

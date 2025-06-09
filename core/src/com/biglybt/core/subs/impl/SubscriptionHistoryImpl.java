@@ -31,6 +31,7 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.metasearch.Engine;
 import com.biglybt.core.subs.*;
 import com.biglybt.core.util.*;
+import com.biglybt.pif.utils.search.SearchResult;
 import com.biglybt.util.MapUtils;
 
 public class
@@ -55,7 +56,11 @@ SubscriptionHistoryImpl
 	
 	private long		max_age_secs	= -1;
 	
+	private long			next_scheduled;
+	
 	private String			last_error;
+	private long			last_error_time;
+	
 	private boolean			auth_failed;
 	private int				consec_fails;
 
@@ -78,10 +83,11 @@ SubscriptionHistoryImpl
 
 	protected SubscriptionResultImpl[]
 	reconcileResults(
-		Engine							engine,
-		SubscriptionResultImpl[]		latest_results )
+		Engine							engine_maybe_null,
+		SubscriptionResultImpl[]		latest_results,
+		boolean							allow_reincarnation )
 	{
-		auto_dl_supported	= engine.getAutoDownloadSupported() == Engine.AUTO_DL_SUPPORTED_YES;
+		auto_dl_supported	= engine_maybe_null==null?false:engine_maybe_null.getAutoDownloadSupported() == Engine.AUTO_DL_SUPPORTED_YES;
 
 		int	new_unread 	= 0;
 		int new_read	= 0;
@@ -138,17 +144,19 @@ SubscriptionHistoryImpl
 
 		synchronized( this ){
 
-			boolean	got_new_or_changed_result	= false;
+			boolean got_changed	= false;
 
 			LinkedHashMap<String,SubscriptionResultImpl> results_map = manager.loadResults( subs );
 
 			SubscriptionResultImpl[] existing_results = results_map.values().toArray( new SubscriptionResultImpl[results_map.size()] );
 
-			ByteArrayHashMap	result_key_map 	= new ByteArrayHashMap();
-			ByteArrayHashMap	result_key2_map = new ByteArrayHashMap();
+			ByteArrayHashMap<SubscriptionResultImpl>	result_key_map 	= new ByteArrayHashMap<>();
+			ByteArrayHashMap<SubscriptionResultImpl>	result_key2_map = new ByteArrayHashMap<>();
 
-			List	new_results = new ArrayList();
+			List<SubscriptionResultImpl>	updated_results = new ArrayList<>(existing_results.length+latest_results.length);
 
+			List<SubscriptionResultImpl>	new_results		= new ArrayList<>(latest_results.length);
+			
 			for (int i=0;i<existing_results.length;i++){
 
 				SubscriptionResultImpl r = existing_results[i];
@@ -162,7 +170,7 @@ SubscriptionHistoryImpl
 					result_key2_map.put( key2, r );
 				}
 
-				new_results.add( r );
+				updated_results.add( r );
 
 				if ( !r.isDeleted()){
 
@@ -202,7 +210,7 @@ SubscriptionHistoryImpl
 
 					last_new_result = now;
 
-					new_results.add( r );
+					updated_results.add( r );
 
 					result_key_map.put( r.getKey1(), r );
 
@@ -213,7 +221,7 @@ SubscriptionHistoryImpl
 						result_key2_map.put( key2, r );
 					}
 
-					got_new_or_changed_result = true;
+					new_results.add( r );
 
 					if ( r.getRead()){
 
@@ -230,9 +238,9 @@ SubscriptionHistoryImpl
 					}
 				}else{
 
-					if ( existing.updateFrom( r )){
+					if ( existing.updateFrom( r, allow_reincarnation )){
 
-						got_new_or_changed_result = true;
+						got_changed = true;
 					}
 				}
 			}
@@ -241,9 +249,9 @@ SubscriptionHistoryImpl
 
 			if ( max_results > 0 && (new_unread + new_read ) > max_results ){
 
-				for (int i=0;i<new_results.size();i++){
+				for (int i=0;i<updated_results.size();i++){
 
-					SubscriptionResultImpl r = (SubscriptionResultImpl)new_results.get(i);
+					SubscriptionResultImpl r = (SubscriptionResultImpl)updated_results.get(i);
 
 					if ( !r.isDeleted()){
 
@@ -258,7 +266,7 @@ SubscriptionHistoryImpl
 
 						r.deleteInternal();
 
-						got_new_or_changed_result = true;
+						got_changed = true;
 
 						if (( new_unread + new_read ) <= max_results ){
 
@@ -268,11 +276,11 @@ SubscriptionHistoryImpl
 				}
 			}
 
-			if ( got_new_or_changed_result ){
+			if ( got_changed || !new_results.isEmpty()){
 
-				result = (SubscriptionResultImpl[])new_results.toArray( new SubscriptionResultImpl[new_results.size()]);
+				result = (SubscriptionResultImpl[])updated_results.toArray( new SubscriptionResultImpl[updated_results.size()]);
 
-				manager.saveResults( subs, result );
+				manager.saveResults( subs, result, new_results );
 
 			}else{
 
@@ -344,6 +352,12 @@ SubscriptionHistoryImpl
 		}
 	}
 
+	public Subscription
+	getSubscription()
+	{
+		return( subs );
+	}
+	
 	@Override
 	public boolean
 	isEnabled()
@@ -361,6 +375,34 @@ SubscriptionHistoryImpl
 			enabled	= _enabled;
 
 			saveConfig(SubscriptionListener.CR_METADATA);
+			
+			if ( _enabled && isAutoDownload()){
+				
+				List<SubscriptionResult>	unread_results = new ArrayList<>();
+
+				synchronized( this ){
+
+					LinkedHashMap<String,SubscriptionResultImpl> results_map = manager.loadResults( subs );
+
+					for ( SubscriptionResult result: results_map.values()){
+
+						if ( result.isDeleted()){
+
+							continue;
+						}
+
+						if ( !result.getRead()){
+
+							unread_results.add( result );
+						}
+					}
+				}
+				
+				for ( SubscriptionResult result: unread_results ){
+					
+					manager.getScheduler().download( subs, result);
+				}
+			}
 		}
 	}
 
@@ -509,6 +551,26 @@ SubscriptionHistoryImpl
 		return( last_new_result );
 	}
 
+	@Override
+	public void 
+	setNextScheduledUpdate(
+		long when )
+	{
+		if ( next_scheduled != when ){
+		
+			next_scheduled = when;
+		
+			subs.fireChanged( SubscriptionListener.CR_METADATA, false );
+		}
+	}
+	
+	@Override
+	public long 
+	getNextScheduledUpdate()
+	{
+		return( next_scheduled );
+	}
+	
 	@Override
 	public long
 	getNextScanTime()
@@ -705,7 +767,16 @@ SubscriptionHistoryImpl
 
 				updateReadUnread( results );
 
-				manager.saveResults( subs, results );
+				List<SubscriptionResultImpl>	new_unread_results = null;
+								
+				if ( !result.getRead()){
+					
+					new_unread_results= new ArrayList<>(1);
+					
+					new_unread_results.add( result );
+				}
+				
+				manager.saveResults( subs, results, new_unread_results );
 			}
 		}
 
@@ -714,7 +785,7 @@ SubscriptionHistoryImpl
 			saveConfig(SubscriptionListener.CR_RESULTS);
 		}
 
-		if ( isAutoDownload() && !result.getRead() && !result.isDeleted()){
+		if ( isEnabled() && isAutoDownload() && !result.getRead() && !result.isDeleted()){
 
 			manager.getScheduler().download( subs, result );
 		}
@@ -726,7 +797,7 @@ SubscriptionHistoryImpl
 	deleteResults(
 		String[] result_ids )
 	{
-		ByteArrayHashMap rids = new ByteArrayHashMap();
+		ByteArrayHashMap<String> rids = new ByteArrayHashMap<>();
 
 		for (int i=0;i<result_ids.length;i++){
 
@@ -757,7 +828,7 @@ SubscriptionHistoryImpl
 
 				updateReadUnread( results );
 
-				manager.saveResults( subs, results );
+				manager.saveResults( subs, results, null );
 			}
 		}
 
@@ -795,7 +866,7 @@ SubscriptionHistoryImpl
 
 				updateReadUnread( results );
 
-				manager.saveResults( subs, results );
+				manager.saveResults( subs, results, null );
 			}
 		}
 
@@ -805,6 +876,56 @@ SubscriptionHistoryImpl
 		}
 	}
 
+	@Override
+	public void
+	removeResults(
+		String[] result_ids )
+	{
+		ByteArrayHashMap<String> rids = new ByteArrayHashMap<>();
+
+		for (int i=0;i<result_ids.length;i++){
+
+			rids.put( Base32.decode( result_ids[i]), "" );
+		}
+
+		boolean	changed = false;
+
+		synchronized( this ){
+
+			LinkedHashMap<String,SubscriptionResultImpl> results_map = manager.loadResults( subs );
+
+			List<SubscriptionResultImpl>	new_results = new ArrayList<>( results_map.size());
+			
+			for ( SubscriptionResultImpl result: results_map.values()){
+
+				if ( !result.isDeleted() && rids.containsKey( result.getKey1())){
+
+					changed = true;
+
+					result.deleteInternal();
+					
+				}else{
+					
+					new_results.add( result );
+				}
+			}
+
+			if ( changed ){
+
+				SubscriptionResultImpl[] results = new_results.toArray( new SubscriptionResultImpl[ new_results.size()]);
+				
+				updateReadUnread( results );
+
+				manager.saveResults( subs, results, null );
+			}
+		}
+
+		if ( changed ){
+
+			saveConfig(SubscriptionListener.CR_RESULTS);
+		}
+	}
+	
 	@Override
 	public void
 	markAllResultsRead()
@@ -833,7 +954,7 @@ SubscriptionHistoryImpl
 
 				updateReadUnread( results );
 
-				manager.saveResults( subs, results );
+				manager.saveResults( subs, results, null );
 			}
 		}
 
@@ -871,7 +992,9 @@ SubscriptionHistoryImpl
 
 				updateReadUnread( results );
 
-				manager.saveResults( subs, results );
+				List<SubscriptionResultImpl> new_unread_results = Arrays.asList( results );
+				
+				manager.saveResults( subs, results, new_unread_results );
 			}
 		}
 
@@ -887,7 +1010,7 @@ SubscriptionHistoryImpl
 		String[] 		result_ids,
 		boolean[]		reads )
 	{
-		ByteArrayHashMap rid_map = new ByteArrayHashMap();
+		ByteArrayHashMap<Boolean> rid_map = new ByteArrayHashMap<>();
 
 		for (int i=0;i<result_ids.length;i++){
 
@@ -896,7 +1019,7 @@ SubscriptionHistoryImpl
 
 		boolean	changed = false;
 
-		List	newly_unread = new ArrayList();
+		List<SubscriptionResultImpl>	new_unread_results = new ArrayList<>( result_ids.length );
 
 		synchronized( this ){
 
@@ -927,7 +1050,7 @@ SubscriptionHistoryImpl
 
 						if ( !read ){
 
-							newly_unread.add( result );
+							new_unread_results.add( result );
 						}
 					}
 				}
@@ -937,7 +1060,7 @@ SubscriptionHistoryImpl
 
 				updateReadUnread( results );
 
-				manager.saveResults( subs, results );
+				manager.saveResults( subs, results, new_unread_results );
 			}
 		}
 
@@ -946,15 +1069,83 @@ SubscriptionHistoryImpl
 			saveConfig(SubscriptionListener.CR_RESULTS);
 		}
 
-		if ( isAutoDownload()){
+		if ( isEnabled() && isAutoDownload()){
 
-			for (int i=0;i<newly_unread.size();i++){
+			for (int i=0;i<new_unread_results.size();i++){
 
-				manager.getScheduler().download( subs, (SubscriptionResult)newly_unread.get(i));
+				manager.getScheduler().download( subs, (SubscriptionResult)new_unread_results.get(i));
 			}
 		}
 	}
 
+	protected void
+	markResults(
+		Set<String>		hashes,
+		Set<String>		name_sizes )
+	{
+		boolean	changed = false;
+
+		synchronized( this ){
+
+			LinkedHashMap<String,SubscriptionResultImpl> results_map = manager.loadResults( subs );
+
+			SubscriptionResultImpl[] results = results_map.values().toArray( new SubscriptionResultImpl[results_map.size()] );
+
+			for (int i=0;i<results.length;i++){
+
+				SubscriptionResultImpl result = results[i];
+
+				if ( result.isDeleted()){
+
+					continue;
+				}
+
+				if ( !result.getRead()){
+
+					String	hash = result.getAssetHash();
+					
+					if ( hash != null && hashes.contains( hash )){
+
+						changed = true;
+
+						result.setReadInternal( true );
+						
+					}else{
+						
+						Map<Integer,Object>	properties = result.toPropertyMap();
+
+						String 	name = (String)properties.get( SearchResult.PR_NAME );
+						Long	size = (Long)properties.get( SearchResult.PR_SIZE );
+
+						if ( name != null && size != null ){
+							
+							String ns = name + ":" + size;
+							
+							if ( name_sizes.contains( ns )){
+								
+								changed = true;
+
+								result.setReadInternal( true );
+							}
+						}
+					}
+				}
+			}
+
+			if ( changed ){
+
+				updateReadUnread( results );
+
+				manager.saveResults( subs, results, null );
+			}
+		}
+
+		if ( changed ){
+
+			saveConfig(SubscriptionListener.CR_RESULTS);
+		}
+	}
+	
 	@Override
 	public void
 	reset()
@@ -969,7 +1160,7 @@ SubscriptionHistoryImpl
 
 				results = new SubscriptionResultImpl[0];
 
-				manager.saveResults( subs, results );
+				manager.saveResults( subs, results, null );
 			}
 
 			updateReadUnread( results );
@@ -1029,7 +1220,7 @@ SubscriptionHistoryImpl
 
 				if ( changed ){
 
-					manager.saveResults( subs, results );
+					manager.saveResults( subs, results, null );
 				}
 			}
 		}
@@ -1079,7 +1270,10 @@ SubscriptionHistoryImpl
 		String		_error )
 	{
 		last_error		= _error;
+		last_error_time	= SystemTime.getCurrentTime();
 		consec_fails	= 1024;
+		
+		subs.fireChanged( SubscriptionListener.CR_METADATA );
 	}
 
 	protected void
@@ -1097,6 +1291,8 @@ SubscriptionHistoryImpl
 		}else{
 
 			consec_fails++;
+			
+			last_error_time	= SystemTime.getCurrentTime();
 		}
 
 		subs.fireChanged( SubscriptionListener.CR_METADATA );
@@ -1109,6 +1305,13 @@ SubscriptionHistoryImpl
 		return( last_error );
 	}
 
+	@Override
+	public long 
+	getLastErrorTime()
+	{
+		return( last_error_time );
+	}
+	
 	@Override
 	public boolean
 	isAuthFail()
@@ -1202,7 +1405,7 @@ SubscriptionHistoryImpl
 	saveConfig(
 		int		reason )
 	{
-		Map	map = new HashMap();
+		Map<String,Object>	map = new HashMap<>();
 
 		map.put( "enabled", new Long( enabled?1:0 ));
 		map.put( "auto_dl", new Long( auto_dl?1:0 ));

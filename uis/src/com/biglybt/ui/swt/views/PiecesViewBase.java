@@ -21,11 +21,14 @@ package com.biglybt.ui.swt.views;
 
 
 import java.util.*;
+import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.layout.FormAttachment;
+import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -43,6 +46,8 @@ import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.disk.DiskManagerPiece;
 import com.biglybt.core.disk.DiskManagerReadRequest;
+import com.biglybt.core.disk.impl.piecemapper.DMPieceList;
+import com.biglybt.core.disk.impl.piecemapper.DMPieceMapEntry;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.global.GlobalManager;
 import com.biglybt.core.peer.PEPeer;
@@ -52,6 +57,7 @@ import com.biglybt.core.peermanager.piecepicker.PiecePicker;
 import com.biglybt.core.util.CopyOnWriteSet;
 import com.biglybt.core.util.HashWrapper;
 import com.biglybt.core.util.IdentityHashSet;
+import com.biglybt.core.util.RegExUtil;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
@@ -62,6 +68,7 @@ import com.biglybt.ui.mdi.MdiEntry;
 import com.biglybt.ui.mdi.MultipleDocumentInterface;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
+import com.biglybt.ui.swt.components.BubbleTextBox;
 import com.biglybt.ui.swt.components.Legend;
 import com.biglybt.ui.swt.mdi.MdiEntrySWT;
 import com.biglybt.ui.swt.mdi.MultipleDocumentInterfaceSWT;
@@ -70,7 +77,7 @@ import com.biglybt.ui.swt.pif.UISWTViewEventListener;
 import com.biglybt.ui.swt.pifimpl.UISWTViewBuilderCore;
 import com.biglybt.ui.swt.pifimpl.UISWTViewCoreEventListener;
 import com.biglybt.ui.swt.views.piece.MyPieceDistributionView;
-import com.biglybt.ui.swt.views.piece.PieceInfoView;
+import com.biglybt.ui.swt.views.piece.PieceMapView;
 import com.biglybt.ui.swt.views.table.TableViewSWT;
 import com.biglybt.ui.swt.views.table.TableViewSWTMenuFillListener;
 import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
@@ -96,6 +103,7 @@ public abstract class PiecesViewBase
 		TableViewSWTMenuFillListener,
 		TableSelectionListener,
 		UISWTViewCoreEventListener,
+		TableViewFilterCheck<PEPiece>,
 		ViewTitleInfo2
 {
 	public static final Class<PEPiece> PLUGIN_DS_TYPE = PEPiece.class;
@@ -142,6 +150,7 @@ public abstract class PiecesViewBase
 		return( Legend.getLegendColor( key, legendKeys, BlocksItem.colors ));
 	}
 	
+	private BubbleTextBox bubbleTextBox;
 	
 	protected TableViewSWT<PEPiece> 	tv;
 
@@ -161,6 +170,9 @@ public abstract class PiecesViewBase
 		super( id );
 	}
 	
+	protected abstract String
+	getTableID();
+
 	@Override
 	public Composite 
 	initComposite(
@@ -179,15 +191,21 @@ public abstract class PiecesViewBase
 			parent.setLayoutData(Utils.getFilledFormData());
 		}
 		
+		boolean hasFilter = getTableID() == TableManager.TABLE_ALL_PIECES;
+
 		Composite header = new Composite(parent, SWT.NONE);
-		layout = new GridLayout(1,true);
-		layout.marginHeight = layout.marginWidth = 0;
-		header.setLayout(layout);
+		
+		header.setLayout( new FormLayout());
+		
 		
 		header.setLayoutData(new GridData( GridData.FILL_HORIZONTAL ));
 
 		Button lp_enable = new Button( header, SWT.CHECK );
-		lp_enable.setLayoutData(new GridData( GridData.FILL_HORIZONTAL ));
+		
+		FormData fd = Utils.getFilledFormData();
+		fd.left = new FormAttachment(0, 10);
+		fd.right = null;
+		lp_enable.setLayoutData( fd );
 		
 		Messages.setLanguageText( lp_enable, "label.show.uploading.pieces" );
 		lp_enable.addListener( SWT.Selection, (ev)->{
@@ -215,6 +233,25 @@ public abstract class PiecesViewBase
 					setShowUploading( enabled );
 				}
 			});
+
+		if ( hasFilter ){
+			bubbleTextBox = new BubbleTextBox(header, SWT.BORDER | SWT.SEARCH | SWT.ICON_SEARCH | SWT.ICON_CANCEL | SWT.SINGLE);
+			
+			fd = Utils.getFilledFormData();
+			fd.width = 150;
+			fd.top = null;
+			fd.right = new FormAttachment(100, -10);
+			fd.left = null;
+			
+			bubbleTextBox.setMessageAndLayout( "" , fd);
+
+			bubbleTextBox.setAllowRegex( true );
+			
+			if ( tv != null ){
+				
+				tv.enableFilterCheck(bubbleTextBox, this );
+			}
+		}
 		
 		Composite tableParent = new Composite(parent, SWT.NONE);
 		
@@ -232,7 +269,7 @@ public abstract class PiecesViewBase
 		if ( table_id == TableManager.TABLE_TORRENT_PIECES ){
 
 			tv = TableViewFactory.createTableViewSWT(PLUGIN_DS_TYPE,
-					TableManager.TABLE_TORRENT_PIECES, getPropertiesPrefix(), basicItems,
+					TableManager.TABLE_TORRENT_PIECES, getTextPrefixID(), basicItems,
 					basicItems[0].getName(), SWT.SINGLE | SWT.FULL_SELECTION | SWT.VIRTUAL);
 		}else{
 		
@@ -247,10 +284,15 @@ public abstract class PiecesViewBase
 			tcManager.setDefaultColumnNames( TableManager.TABLE_ALL_PIECES, basicItems );
 
 			tv = TableViewFactory.createTableViewSWT(PEPiece[].class,	// PEPiece subviews assume single download
-					TableManager.TABLE_ALL_PIECES, getPropertiesPrefix(), basicItems,
+					TableManager.TABLE_ALL_PIECES, getTextPrefixID(), basicItems,
 					basicItems[0].getName(), SWT.SINGLE | SWT.FULL_SELECTION | SWT.VIRTUAL);
 		}
 
+		if ( bubbleTextBox != null ){
+			
+			tv.enableFilterCheck(bubbleTextBox, this );
+		}
+		
 		registerPluginViews();
 
 		tv.addMenuFillListener(this);
@@ -284,7 +326,7 @@ public abstract class PiecesViewBase
 		}
 
 		vm.registerView(PLUGIN_DS_TYPE, new UISWTViewBuilderCore(
-			PieceInfoView.MSGID_PREFIX, null, PieceInfoView.class));
+			PieceMapView.MSGID_PREFIX, null, PieceMapView.class));
 
 		vm.registerView(PLUGIN_DS_TYPE, new UISWTViewBuilderCore(
 			"MyPieceDistributionView", null, MyPieceDistributionView.class));
@@ -571,7 +613,82 @@ public abstract class PiecesViewBase
 		}
 	}
 	
+	@Override
+	public void 
+	filterSet(String filter)
+	{	
+	}
 	
+	@Override
+	public boolean
+	filterCheck(
+		PEPiece 	piece, 
+		String 		filter, 
+		boolean 	regex,
+		boolean		confusable )
+	{
+		if ( confusable ){
+			
+			return( false );
+		}
+		
+		if ( filter.isEmpty()){
+			
+			return( true );
+		}
+		
+		List<String>	names = new ArrayList<>();
+		
+		PEPeerManager manager = piece.getManager();
+		
+		if ( manager != null ){
+			
+			names.add( manager.getDisplayName());
+		}
+		
+        DiskManagerPiece dmp = piece.getDMPiece();
+        
+        if ( dmp != null ){
+       	 
+        	DMPieceList l = dmp.getManager().getPieceList( piece.getPieceNumber());
+
+        	for ( int i=0;i<l.size();i++) {
+
+        		DMPieceMapEntry entry = l.get( i );
+
+        		String name = entry.getFile().getTorrentFile().getRelativePath();
+        		
+        		names.add( name );
+        	}
+        }
+
+		String s = regex ? filter : RegExUtil.splitAndQuote( filter, "\\s*[|;]\\s*" );
+
+		boolean	match_result = true;
+
+		if ( regex && s.startsWith( "!" )){
+
+			s = s.substring(1);
+
+			match_result = false;
+		}
+
+		Pattern pattern = RegExUtil.getCachedPattern( "piecesview:search", s, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE );
+
+		boolean result = !match_result;
+		
+		for ( String name: names ){
+		
+			if ( pattern.matcher(name).find()){
+			
+				result = match_result;
+				
+				break;
+			}
+		}
+		
+		return( result );
+	}
 	
 	protected boolean
 	updateUploadingPieces(
@@ -827,14 +944,14 @@ public abstract class PiecesViewBase
 	
 	  @Override
 	public void defaultSelected(TableRowCore[] rows, int keyMask, int origin) {
-	  // Show piece in PieceInfoView
+	  // Show piece in PieceMapView
 
 	  // Show subtab if we have one
 	  TableViewSWT_TabsCommon tabsCommon = tv.getTabsCommon();
 		if (tabsCommon != null) {
 			MultipleDocumentInterfaceSWT mdi = tabsCommon.getMDI();
 			if (mdi != null) {
-				mdi.showEntryByID(PieceInfoView.MSGID_PREFIX);
+				mdi.showEntryByID(PieceMapView.MSGID_PREFIX);
 				return;
 			}
 		}
@@ -844,8 +961,8 @@ public abstract class PiecesViewBase
 		}
 
 		// Show in sister tab
-		if (mdi != null && mdi.getEntry(PieceInfoView.MSGID_PREFIX ) != null ){
-			mdi.showEntryByID(PieceInfoView.MSGID_PREFIX, rows[0].getDataSource());
+		if (mdi != null && mdi.getEntry(PieceMapView.MSGID_PREFIX ) != null ){
+			mdi.showEntryByID(PieceMapView.MSGID_PREFIX, rows[0].getDataSource());
 		}else{
 			UIFunctions uif = UIFunctionsManager.getUIFunctions();
 			if (uif != null) {
@@ -1005,7 +1122,7 @@ public abstract class PiecesViewBase
 
 		public int			getNbWritten(){ return( 0 ); }
 
-		public int			getAvailability(){ return( 0 ); }
+		public int			getAvailability(){ return pm.getAvailability(piece_number); }
 
 		public boolean		hasUnrequestedBlock(){ return( false ); }
 		public int[]		getAndMarkBlocks(PEPeer peer, int nbWanted, int[] request_hint, boolean reverse_order ){ return( null ); }

@@ -85,6 +85,8 @@ public interface MultipleDocumentInterface
 	public static final String SIDEBAR_SECTION_ALLPEERS = "AllPeersView";
 	
 	public static final String SIDEBAR_SECTION_ALLPIECES = "AllPiecesView";
+	
+	public static final String SIDEBAR_SECTION_ALLBLOCKS = "AllBlocksView";
 
 	public static final String SIDEBAR_SECTION_TORRENT_OPTIONS = "TorrentOptionsView";
 
@@ -118,6 +120,7 @@ public interface MultipleDocumentInterface
 			SIDEBAR_SECTION_ALL_TRACKERS,
 			SIDEBAR_SECTION_ALLPEERS,
 			SIDEBAR_SECTION_ALLPIECES,
+			SIDEBAR_SECTION_ALLBLOCKS,
 			SIDEBAR_SECTION_MY_TRACKER,
 			SIDEBAR_SECTION_MY_SHARES,
 			SIDEBAR_SECTION_ARCHIVED_DOWNLOADS,
@@ -130,6 +133,8 @@ public interface MultipleDocumentInterface
 	public boolean showEntryByID(String id);
 
 	public boolean showEntryByID(String id, Object datasource);
+
+	public boolean popoutEntryByID(String id, Object datasource, Map<String,Object> options );
 
 	/**
 		 * If you prefix the 'preferedAfterID' string with '~' then the operation will actually
@@ -148,10 +153,14 @@ public interface MultipleDocumentInterface
 			String configID, String title, ViewTitleInfo titleInfo, Object params,
 			boolean closeable, String preferedAfterID);
 
-	public MdiEntry getCurrentEntry();
+	public MdiEntry getSelectedEntry();
 
+	public MdiEntry getMenuEntry( boolean activeOnly);
+	
 	public MdiEntry getEntry(String id);
 
+	public MdiEntry getEntry(String id, Object datasource );
+	
 	public void addListener(MdiListener l);
 
 	public void removeListener(MdiListener l);
@@ -251,4 +260,8 @@ public interface MultipleDocumentInterface
 	String getViewID();
 
 	Class getDataSourceType();
+	
+	public void
+	runWhenIdle(
+		Runnable	r );
 }

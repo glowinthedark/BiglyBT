@@ -27,6 +27,7 @@ import java.util.Arrays;
 import com.biglybt.core.peer.PEPeerSource;
 import com.biglybt.core.peer.util.PeerUtils;
 import com.biglybt.core.util.AENetworkClassifier;
+import com.biglybt.core.util.DataSourceResolver.ExportedDataSource;
 import com.biglybt.pif.peers.PeerDescriptor;
 
 
@@ -216,6 +217,7 @@ public class PeerItem implements PeerDescriptor {
       case PeerItemFactory.PEER_SOURCE_PEER_EXCHANGE:  return PEPeerSource.PS_OTHER_PEER;
       case PeerItemFactory.PEER_SOURCE_PLUGIN:         return PEPeerSource.PS_PLUGIN;
       case PeerItemFactory.PEER_SOURCE_INCOMING:       return PEPeerSource.PS_INCOMING;
+      case PeerItemFactory.PEER_SOURCE_HOLE_PUNCH:       return PEPeerSource.PS_HOLE_PUNCH;
       default:                                         return "<unknown>";
     }
   }
@@ -227,6 +229,7 @@ public class PeerItem implements PeerDescriptor {
     if( source.equals( PEPeerSource.PS_OTHER_PEER ) )  return PeerItemFactory.PEER_SOURCE_PEER_EXCHANGE;
     if( source.equals( PEPeerSource.PS_PLUGIN ) )      return PeerItemFactory.PEER_SOURCE_PLUGIN;
     if( source.equals( PEPeerSource.PS_INCOMING ) )    return PeerItemFactory.PEER_SOURCE_INCOMING;
+    if( source.equals( PEPeerSource.PS_HOLE_PUNCH ) )  return PeerItemFactory.PEER_SOURCE_HOLE_PUNCH;
     return -1;
   }
 
@@ -234,6 +237,14 @@ public class PeerItem implements PeerDescriptor {
 	  return address.length == 4;
   }
 
+  @Override
+  public ExportedDataSource 
+  exportDataSource()
+  {
+	  // TODO Auto-generated method stub
+	  return null;
+  }
+  
   /*
   public String toString() {
 	  return com.biglybt.core.util.ByteFormatter.encodeString(this.address) + ":" + this.tcp_port;

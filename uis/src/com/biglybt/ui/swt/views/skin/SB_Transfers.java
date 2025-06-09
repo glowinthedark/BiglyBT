@@ -72,7 +72,6 @@ import com.biglybt.ui.swt.views.skin.sidebar.SideBar;
 import com.biglybt.ui.swt.views.skin.sidebar.SideBarEntrySWT;
 import com.biglybt.ui.swt.views.utils.CategoryUIUtils;
 import com.biglybt.ui.swt.views.utils.TagUIUtils;
-
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.ui.UIInstance;
 import com.biglybt.pif.ui.UIManager;
@@ -104,8 +103,20 @@ public class SB_Transfers
 
 	private static final String ID_VITALITY_ALERT = "image.sidebar.vitality.alert";
 	private final HasBeenOpenedListener hasBeenOpenedListener;
-
-	private CategoryListener categoryListener;
+	
+	private final CategoryListener categoryListener = 
+		new CategoryListener() {
+		@Override
+			public void downloadManagerRemoved(Category cat, DownloadManager removed) {
+				RefreshCategorySideBar(cat);
+			}
+	
+			@Override
+			public void downloadManagerAdded(Category cat, DownloadManager manager) {
+				RefreshCategorySideBar(cat);
+			}
+	};
+	
 	private DownloadManagerListener dmListener;
 	private GlobalManagerAdapter gmListener;
 	private TimerEventPeriodic timerEventPeriodic;
@@ -474,7 +485,7 @@ public class SB_Transfers
 		
 		infoLibraryUn.setImageLeftID("image.sidebar.unopened");
 
-		addGeneralLibraryMenus(mdi,SideBar.SIDEBAR_SECTION_LIBRARY_UNOPENED);
+		addGeneralLibraryMenus(mdi, infoLibraryUn, SideBar.SIDEBAR_SECTION_LIBRARY_UNOPENED);
 		
 		infoLibraryUn.setViewTitleInfo(new ViewTitleInfo() {
 			@Override
@@ -507,21 +518,29 @@ public class SB_Transfers
 		
 		return infoLibraryUn;
 	}
-
-	private static void addGeneralLibraryMenus( MultipleDocumentInterface mdi, String id ){
-
-		addMenuUnwatched( id );
+	
+	private static void 
+	addGeneralLibraryMenus( 
+		MultipleDocumentInterface mdi, MdiEntry entry, String id )
+	{		
+		MenuItem mi1 = addMenuUnwatched( id );
 		
-		addMenuCollapseAll( mdi, id );
+		MenuItem mi2 = addMenuCollapseAll( mdi, id );
+		
+		entry.addListener((MdiCloseListener)(e,u)->{
+			mi1.remove();
+			mi2.remove();
+		});
 	}
 	
-	private static void addMenuUnwatched(String id) {
+	
+	private static MenuItem addMenuUnwatched(String id) {
 		PluginInterface pi = PluginInitializer.getDefaultInterface();
 		UIManager uim = pi.getUIManager();
 		MenuManager menuManager = uim.getMenuManager();
 
-		MenuItem menuItem = menuManager.addMenuItem("sidebar." + id,
-				"v3.activity.button.watchall");
+		MenuItem menuItem = menuManager.addMenuItem("sidebar." + id, "v3.activity.button.watchall");
+
 		menuItem.setDisposeWithUIDetach(UIInstance.UIT_SWT);
 		menuItem.addListener(new MenuItemListener() {
 			@Override
@@ -544,6 +563,8 @@ public class SB_Transfers
 						});
 			}
 		});
+		
+		return( menuItem );
 	}
 	
 	private static void
@@ -571,7 +592,10 @@ public class SB_Transfers
 	}
 
 
-	private static void addMenuCollapseAll( MultipleDocumentInterface mdi, String id ){
+	private static MenuItem 
+	addMenuCollapseAll( 
+		MultipleDocumentInterface mdi, String id )
+	{
 		PluginInterface pi = PluginInitializer.getDefaultInterface();
 		UIManager uim = pi.getUIManager();
 		MenuManager menuManager = uim.getMenuManager();
@@ -593,9 +617,14 @@ public class SB_Transfers
 							
 			}
 		});
+		
+		return( menuItem );
 	}
 	
-	private static void addMenuCollapseAll( MultipleDocumentInterface mdi,  Menu menu, String group_id ){
+	private static void 
+	addMenuCollapseAll( 
+		MultipleDocumentInterface mdi,  Menu menu, String group_id )
+	{
 		org.eclipse.swt.widgets.MenuItem item = new org.eclipse.swt.widgets.MenuItem( menu, SWT.PUSH );
 		
 		item.setText( MessageText.getString( "menu.collapse.all" ));
@@ -640,7 +669,7 @@ public class SB_Transfers
 				titleInfoSeeding, null, false, getSectionPosition( mdi, SideBar.SIDEBAR_SECTION_LIBRARY_CD ));
 		entry.setImageLeftID("image.sidebar.downloading");
 
-		addGeneralLibraryMenus(mdi,SideBar.SIDEBAR_SECTION_LIBRARY_CD);
+		addGeneralLibraryMenus(mdi, entry, SideBar.SIDEBAR_SECTION_LIBRARY_CD);
 		
 		MdiEntryVitalityImage vitalityImage = entry.addVitalityImage(ID_VITALITY_ALERT);
 		vitalityImage.setVisible(false);
@@ -719,7 +748,7 @@ public class SB_Transfers
 
 		entry.setImageLeftID("image.sidebar.downloading");
 
-		addGeneralLibraryMenus(mdi,SideBar.SIDEBAR_SECTION_LIBRARY_DL);
+		addGeneralLibraryMenus(mdi, entry, SideBar.SIDEBAR_SECTION_LIBRARY_DL);
 		
 		entry.addListener(
 			new MdiCloseListener(){
@@ -771,8 +800,9 @@ public class SB_Transfers
 	}
 
 	protected void
-	setupViewTitleWithCore(Core _core) {
-
+	setupViewTitleWithCore(
+		Core _core) 
+	{
 		synchronized( SB_Transfers.class ){
 			if (!first) {
 				return;
@@ -782,19 +812,6 @@ public class SB_Transfers
 			core			= _core;
 			coreCreateTime 	= core.getCreateTime();
 		}
-
-		categoryListener = new CategoryListener() {
-
-			@Override
-			public void downloadManagerRemoved(Category cat, DownloadManager removed) {
-				RefreshCategorySideBar(cat);
-			}
-
-			@Override
-			public void downloadManagerAdded(Category cat, DownloadManager manager) {
-				RefreshCategorySideBar(cat);
-			}
-		};
 
 		paramCatInSidebarListener = new ParameterListener() {
 			@Override
@@ -1134,7 +1151,7 @@ public class SB_Transfers
 					}
 				});
 	}
-
+	
 	private void
 	resetStats(
 		GlobalManager				gm,
@@ -1298,7 +1315,7 @@ public class SB_Transfers
 		if (mdi == null) {
 			return(null);
 		}
-
+		
 		String name = category.getName();
 		String id = "Cat." + Base32.encode(name.getBytes());
 		
@@ -1343,7 +1360,24 @@ public class SB_Transfers
 							return "" + dms.size();
 						}
 					}
+				}else if ( propertyID == TITLE_INDICATOR_COLOR ){
+
+					TagType tag_type = category.getTagType();
+
+					int[] def_color = tag_type.getColorDefault();
+
+					int[] tag_color = category.getColor();
+
+					if ( tag_color != def_color ){
+
+						return( tag_color );
+					}
+
+				}else if ( propertyID == TITLE_INDICATOR_TEXT_TOOLTIP ){
+
+					return( TagUtils.getTagTooltip( category ));
 				}
+				
 				return null;
 			}
 		};
@@ -1359,7 +1393,7 @@ public class SB_Transfers
 
 			entry.setUserData( CAT_KEY, category );
 			
-			addGeneralLibraryMenus( mdi, id );
+			addGeneralLibraryMenus( mdi, entry, id );
 			
 			entry.addListener(new MdiEntryDropListener() {
 				@Override
@@ -1430,6 +1464,23 @@ public class SB_Transfers
 
 		// tag stuff
 
+	private boolean
+	isTagVisible(
+		Tag		tag )
+	{
+		boolean visible = tag.isVisible();
+		
+		if ( visible ){
+			
+			if ( tag.isHiddenWhenEmpty() && tag.getTaggedCount() == 0 ){
+				
+				visible = false;
+			}
+		}
+		
+		return( visible );
+	}
+	
 	private void refreshTagSideBar(Tag tag) {
 		UIFunctions uiFunctions = UIFunctionsManager.getUIFunctions();
 		MultipleDocumentInterface mdi = uiFunctions != null ? uiFunctions.getMDI() : null;
@@ -1443,7 +1494,7 @@ public class SB_Transfers
 
 		if ( entry == null ){
 
-			if ( tag.isVisible()){
+			if ( isTagVisible(tag)){
 
 				setupTag( tag );
 			}
@@ -1451,7 +1502,7 @@ public class SB_Transfers
 			return;
 		}
 
-		if ( !tag.isVisible()){
+		if ( !isTagVisible(tag)){
 
 			closeTagView( tag);
 
@@ -1468,7 +1519,18 @@ public class SB_Transfers
 			
 			boolean is_group		= group != null && !group.isEmpty();
 			
-			boolean parent_is_group = parent_id.startsWith( "Tag." + tag.getTagType().getTagType() + ".group." + (is_group?group:"" ));
+			boolean parent_is_group;
+			
+			String group_prefix = "Tag." + tag.getTagType().getTagType() + ".group.";
+			
+			if ( is_group ){
+				
+				parent_is_group = parent_id.equals( group_prefix + group );
+				
+			}else{
+				
+				parent_is_group = parent_id.startsWith( group_prefix );
+			}
 			
 			if ( is_group != parent_is_group ){
 				
@@ -1528,6 +1590,11 @@ public class SB_Transfers
 	setupTag(
 		final Tag tag )
 	{
+		if ( tag.isTagRemoved()){
+			
+			return( null );
+		}
+		
 		MultipleDocumentInterfaceSWT mdi = UIFunctionsManagerSWT.getUIFunctionsSWT().getMDISWT();
 
 		if ( mdi == null ){
@@ -1536,6 +1603,11 @@ public class SB_Transfers
 		}
 		
 		if ( !show_tag_tab_views ){
+			
+			return( null );
+		}
+		
+		if ( !isTagVisible(tag)){
 			
 			return( null );
 		}
@@ -1563,11 +1635,15 @@ public class SB_Transfers
 					if ( tag.getTaggableTypes() == Taggable.TT_DOWNLOAD || tag.getTaggableTypes() == Taggable.TT_PEER ){
 						
 						group_id = "Tag." + tag_type + ".group." + tag_group;
-						
+												
 						if ( mdi.getEntry( group_id ) == null ){
 							
 							// Create Entry for Group
-						
+													
+							TagGroup group = tag.getGroupContainer();
+
+							String gid= group_id;
+							
 							ViewTitleInfo viewTitleInfo =
 									new ViewTitleInfo()
 									{
@@ -1581,12 +1657,20 @@ public class SB_Transfers
 												return( tag_group );
 												
 											}else if ( pid == TITLE_INDICATOR_TEXT ){
-	
 												
-	
+												MdiEntry entry =  mdi.getEntry( gid );
+												
+												if ( entry != null && !entry.isExpanded()){
+												
+													return( String.valueOf( group.getTags().size()));
+												}
 											}else if ( pid == TITLE_INDICATOR_COLOR ){
 	
 	
+												int[] colour = group.getColor();
+												
+												return( colour );
+												
 											}else if ( pid == TITLE_INDICATOR_TEXT_TOOLTIP ){
 	
 												
@@ -1596,40 +1680,120 @@ public class SB_Transfers
 										}
 									};
 									
+							TagGroupListener tgl = 
+								new TagGroupListener(){
+									
+									@Override
+									public void tagRemoved(TagGroup group, Tag tag){
+										update();
+									}
+									
+									@Override
+									public void tagAdded(TagGroup group, Tag tag){
+										update();
+									}
+									@Override
+									public void groupChanged(TagGroup group){
+										update();
+									}
+									
+									private void
+									update()
+									{
+										MdiEntry entry =  mdi.getEntry( gid );
+
+										if ( entry != null ){
+										
+											if ( entry.isEntryDisposed()){
+												
+												group.removeListener( this );
+												
+											}else{
+											
+												ViewTitleInfoManager.refreshTitleInfo( viewTitleInfo );
+																				
+												requestRedraw( entry );
+											}
+										}
+									}
+								};
+								
+							group.addListener( tgl, false );								
+							
 									// find where to locate this in the sidebar
 
 							String prev_id = getTagPosition( mdi, parent_id, tag_type, tag_group );
 							
 							MdiEntry entry;
 							
+							boolean closeable = true;
+							
 							if ( tag.getTaggableTypes() == Taggable.TT_DOWNLOAD ){
 							
 								entry = mdi.createEntryFromSkinRef(
-									parent_id, group_id, "library", tag_group, viewTitleInfo, tag.getGroupContainer(), false, prev_id );
+									parent_id, group_id, "library", tag_group, viewTitleInfo, group, closeable, prev_id );
 							
 							}else{
 								
 								UISWTViewBuilderCore builder = new UISWTViewBuilderCore( group_id, null,
 										PeersGeneralView.class);
 								builder.setParentEntryID(parent_id);
-								builder.setPreferredAfterID(prev_id).setInitialDatasource( tag.getGroupContainer() );
-								entry = mdi.createEntry(builder, false);
+								builder.setPreferredAfterID(prev_id).setInitialDatasource( group );
+								entry = mdi.createEntry(builder, closeable);
 
 								entry.setViewTitleInfo( viewTitleInfo );
 							}
 							
 							setTagIcon( tag, entry, true );
-							
-							entry.setUserData( TAG_TAG_OR_GROUP_KEY, tag.getGroupContainer());
+														
+							entry.setUserData( TAG_TAG_OR_GROUP_KEY, group );
 
-							// remove header when there are no children
-							entry.addListener((parent, ch, user) -> {
-								String viewID = parent.getViewID();
-								if (mdi.getChildrenOf(viewID).isEmpty()) {
-									mdi.closeEntry(parent,false);
+							entry.addListener((e,user )->{
+								if ( user ){
+									List<Tag> kids = group.getTags();
+									
+									for ( Tag kid: kids ){
+										kid.setVisible( false );
+									}
 								}
 							});
-
+							
+							// remove header when there are no children
+							entry.addListener(
+								new MdiChildCloseListener(){
+								
+									boolean closed;
+									
+									public void 
+									mdiChildEntryClosed(
+										MdiEntry parent, 
+										MdiEntry child, 
+										boolean user)
+									{
+									
+										String viewID = parent.getViewID();
+										
+										if (mdi.getChildrenOf(viewID).isEmpty()) {
+									
+											synchronized( this ){
+												if ( closed ){
+													return;
+												}
+												closed = true;
+											}
+											
+												// need to defer this in case there are outstanding sidebar
+												// additions that are located relative to this entry...
+											
+											mdi.runWhenIdle(()->{
+												
+												mdi.closeEntry(parent,false);
+												
+												
+											});
+										}
+									}
+								});
 
 							if ( entry instanceof MdiEntrySWT ){
 								final MdiEntrySWT entrySWT = (MdiEntrySWT) entry;
@@ -1650,13 +1814,16 @@ public class SB_Transfers
 									@Override
 									public void menuWillBeShown(MdiEntry entry, Menu menuTree) {
 										
-										TagGroup tg = tag.getGroupContainer();
-										
-										addMenuCollapseAll( mdi, menuTree, entry.getViewID());
-										
-										new org.eclipse.swt.widgets.MenuItem( menuTree, SWT.SEPARATOR );
-										
-										TagUIUtils.createSideBarMenuItems(menuTree, tg );
+										if ( tag.getTaggableTypes() == Taggable.TT_DOWNLOAD ){
+											
+											TagGroup tg = tag.getGroupContainer();
+											
+											addMenuCollapseAll( mdi, menuTree, entry.getViewID());
+											
+											new org.eclipse.swt.widgets.MenuItem( menuTree, SWT.SEPARATOR );
+											
+											TagUIUtils.createSideBarMenuItems(menuTree, tg );
+										}
 									}
 								});
 							}
@@ -1730,8 +1897,8 @@ public class SB_Transfers
 				entry = mdi.createEntryFromSkinRef(
 						parent_id, id, "library", name, viewTitleInfo, tag, closable, prev_id );
 				
-				addGeneralLibraryMenus( mdi, id );
-				
+				addGeneralLibraryMenus( mdi, entry, id );
+
 			}else{
 
 				UISWTViewBuilderCore builder = new UISWTViewBuilderCore(id, null,
@@ -1850,16 +2017,23 @@ public class SB_Transfers
 							return;
 						}
 
-						for (DownloadManager dm : dms) {
-							if ( doAdd ){
-								if ( !tag.hasTaggable( dm )){
-									tag.addTaggable( dm );
-								}
-							}else{
-								if ( tag.hasTaggable( dm )){
-									tag.removeTaggable( dm );
+						try{
+							tag.addTaggableBatch( true );
+							
+							for (DownloadManager dm : dms) {
+								if ( doAdd ){
+									if ( !tag.hasTaggable( dm )){
+										tag.addTaggable( dm );
+									}
+								}else{
+									if ( tag.hasTaggable( dm )){
+										tag.removeTaggable( dm );
+									}
 								}
 							}
+						}finally{
+							
+							tag.addTaggableBatch( false );
 						}
 					}
 				};
@@ -2274,7 +2448,10 @@ public class SB_Transfers
 		
 			closeTagView( tag);
 		
-			setupTag( tag );
+			if ( isTagVisible(tag)){
+			
+				setupTag( tag );
+			}
 		}
 	}
 	
@@ -2608,7 +2785,9 @@ public class SB_Transfers
 			
 			Tag tag = (Tag)ds;
 			
-			if ( tag.getTagType().getTagType() == TagType.TT_DOWNLOAD_MANUAL ){
+			int tt = tag.getTagType().getTagType();
+					
+			if ( tt == TagType.TT_DOWNLOAD_MANUAL || tt == TagType.TT_DOWNLOAD_STATE ){
 			
 				return( "Tag_" + ((Tag)ds).getTagUID());
 			}
@@ -2737,7 +2916,7 @@ public class SB_Transfers
 				public void tagTypeChanged(TagType tag_type) {
 					for (Tag tag : tag_type.getTags()) {
 
-						if (tag.isVisible()) {
+						if (isTagVisible(tag)) {
 
 							setupTag(tag);
 
@@ -2775,7 +2954,7 @@ public class SB_Transfers
 
 				public void tagAdded(Tag tag) {
 					synchronized (tag_listener_lock) {
-						if (tag.isVisible() && tagListener != null) {
+						if (isTagVisible(tag) && tagListener != null) {
 
 							setupTag(tag);
 
@@ -2799,8 +2978,10 @@ public class SB_Transfers
 					synchronized (tag_listener_lock) {
 						int tt = tag_type.getTagType();
 						
-						if (	( tt != TagType.TT_DOWNLOAD_CATEGORY && tt != TagType.TT_DOWNLOAD_INTERNAL ) &&
-								tagTypeListener != null) {
+						if ( 	tt != TagType.TT_DOWNLOAD_CATEGORY &&
+								tt != TagType.TT_DOWNLOAD_INTERNAL &&
+								tt != TagType.TT_SWARM_TAG &&
+								tagTypeListener != null ){
 
 							tag_type.addTagTypeListener(tagTypeListener, true);
 						}
@@ -2977,7 +3158,7 @@ public class SB_Transfers
 					"");
 			entry.setImageLeftID("image.sidebar.library");
 			
-			addGeneralLibraryMenus(mdi,SideBar.SIDEBAR_SECTION_LIBRARY);
+			addGeneralLibraryMenus( mdi, entry, SideBar.SIDEBAR_SECTION_LIBRARY);
 
 			return entry;
 		}

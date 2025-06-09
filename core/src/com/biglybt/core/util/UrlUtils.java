@@ -16,7 +16,6 @@
  */
 package com.biglybt.core.util;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.*;
@@ -125,7 +124,10 @@ public class UrlUtils
 				Debug.out( "Invalid hash length " + length );
 			}
 
-			return( "magnet:?xt=urn:btih:" + Base32.encode( hash ));
+				// switched this as apparently the standard is base16...
+			
+			//return( "magnet:?xt=urn:btih:" + Base32.encode( hash ));
+			return( "magnet:?xt=urn:btih:" + ByteFormatter.encodeString( hash ).toLowerCase( Locale.US ));
 		}
 	}
 
@@ -933,7 +935,8 @@ public class UrlUtils
 			url.startsWith( "azplug:") ||
 			url.startsWith( "vuze:") ||
 			url.startsWith( "biglybt:") ||
-			url.startsWith( "tor:" ));
+			url.startsWith( "tor:" ) ||
+			url.startsWith( "i2p:" ));
 	}
 
 	public static String parseTextForURL(String text, boolean accept_magnets,
@@ -960,6 +963,14 @@ public class UrlUtils
 			String href = parseTextForURL(text.substring(4), false, false );
 			if (href != null) {
 				return( "tor:" + href );
+			}
+		}
+
+		if ( text.startsWith( "i2p:" )){
+
+			String href = parseTextForURL(text.substring(4), false, false );
+			if (href != null) {
+				return( "i2p:" + href );
 			}
 		}
 
@@ -1110,15 +1121,17 @@ public class UrlUtils
 
 						// accept raw hash of 32 base-32 chars, with garbage around it
 				
+					String garbageText = "-" + text + "-";	// add extra garbage...
+					
 					Pattern pattern = Pattern.compile("[^a-zA-Z2-7]([a-zA-Z2-7]{" + b32_len + "})[^a-zA-Z2-7]");
-					Matcher matcher = pattern.matcher(text);
+					Matcher matcher = pattern.matcher(garbageText);
 					if (matcher.find()) {
 						String infohash = matcher.group(1);
 						return( getMagnetURI(Base32.decode(infohash)));
 					}
 		
 					pattern = Pattern.compile("[^a-fA-F0-9]([a-fA-F0-9]{" + hex_len + "})[^a-fA-F0-9]");
-					matcher = pattern.matcher(text);
+					matcher = pattern.matcher(garbageText);
 					if (matcher.find()) {
 						String hash = matcher.group(1);
 						// convert from HEX to raw bytes
@@ -1136,6 +1149,14 @@ public class UrlUtils
 	public static String
 	parseTextForMagnets(
 		String		text )
+	{
+		return( parseTextForMagnets( text, true ));
+	}
+	
+	public static String
+	parseTextForMagnets(
+		String		text,
+		boolean		check_raw_embeded_hashes )
 	{
 		if (text.startsWith("magnet:") || text.startsWith( "maggot:" )){
 			return text;
@@ -1229,28 +1250,33 @@ public class UrlUtils
 			}
 		}
 
-		// accept raw hash of 32 base-32 chars, with garbage around it
-		
-		for ( int i=0;i<2;i++){
+		if ( check_raw_embeded_hashes ){
 			
-			int hex_len = i==0?40:64;		// sha1/sha256
-			int b32_len	= i==0?32:52;		// sha1/sha256
+			// accept raw hash of 32 base-32 chars, with garbage around it
+			
+			String garbageText = "-" + text + "-";	// add extra garbage...
 
-			pattern = Pattern.compile("[^a-zA-Z2-7]([a-zA-Z2-7]{" + b32_len + "})[^a-zA-Z2-7]");
-			matcher = pattern.matcher(text);
-			if (matcher.find()) {
-				String hash = matcher.group(1);
-				return( getMagnetURI(Base32.decode(hash)));
-			}
-
-			pattern = Pattern.compile("[^a-fA-F0-9]([a-fA-F0-9]{" + hex_len + "})[^a-fA-F0-9]");
-			matcher = pattern.matcher(text);
-			if (matcher.find()) {
-				String hash = matcher.group(1);
-				// convert from HEX to raw bytes
-				byte[] infohash = ByteFormatter.decodeString(hash.toUpperCase());
-				// convert to BASE32
-				return( getMagnetURI(infohash));
+			for ( int i=0;i<2;i++){
+				
+				int hex_len = i==0?40:64;		// sha1/sha256
+				int b32_len	= i==0?32:52;		// sha1/sha256
+	
+				pattern = Pattern.compile("[^a-zA-Z2-7]([a-zA-Z2-7]{" + b32_len + "})[^a-zA-Z2-7]");
+				matcher = pattern.matcher(garbageText);
+				if (matcher.find()) {
+					String hash = matcher.group(1);
+					return( getMagnetURI(Base32.decode(hash)));
+				}
+	
+				pattern = Pattern.compile("[^a-fA-F0-9]([a-fA-F0-9]{" + hex_len + "})[^a-fA-F0-9]");
+				matcher = pattern.matcher(garbageText);
+				if (matcher.find()) {
+					String hash = matcher.group(1);
+					// convert from HEX to raw bytes
+					byte[] infohash = ByteFormatter.decodeString(hash.toUpperCase());
+					// convert to BASE32
+					return( getMagnetURI(infohash));
+				}
 			}
 		}
 
@@ -1298,7 +1324,8 @@ public class UrlUtils
 		try {
 			return URLEncoder.encode(s, "UTF-8").replaceAll("\\+", "%20");
 		} catch (UnsupportedEncodingException e) {
-			return URLEncoder.encode(s).replaceAll("\\+", "%20");
+			Debug.out(e);
+			return(s);
 		}
 	}
 
@@ -1325,7 +1352,9 @@ public class UrlUtils
 			}
 		} catch (UnsupportedEncodingException e) {
 
-			return( URLDecoder.decode(s));
+			Debug.out(e);
+			
+			return( s );
 		}
 	}
 
@@ -1433,19 +1462,23 @@ public class UrlUtils
 	public static String
 	resolveIPv6Host(
 		String		url )
+	
+		throws Exception
 	{
+		String str = url;
+		
 		try{
 			DNSUtils.DNSUtilsIntf dns_utils = DNSUtils.getSingleton();
-
+	
 			URL http_server_url = new URL( url );
-
+	
+			str = http_server_url.getHost();
+			
 			return( setHost( http_server_url, "[" + dns_utils.getIPV6ByName( http_server_url.getHost()).getHostAddress() + "]").toExternalForm());
 			
 		}catch( Throwable e ){
 			
-			Debug.out( e );
-			
-			return( url );
+			throw( new Exception( "Failed to resolve IPv6 address for '" + str + "'"));
 		}
 	}
 	
@@ -2008,6 +2041,7 @@ public class UrlUtils
 
 
 		try{
+			/*
 			Object sni_host_name = Class.forName( "javax.net.ssl.SNIHostName").getConstructor( String.class ).newInstance( host_name );
 
 			List<Object> sni_host_names = new ArrayList<>(1);
@@ -2020,17 +2054,20 @@ public class UrlUtils
 
 			ssl_parameters_class.getMethod( "setServerNames", List.class ).invoke( ssl_parameters, sni_host_names );
 
-			socket.getClass().getMethod( "setSSLParameters" , ssl_parameters_class ).invoke( socket, ssl_parameters );
-
-			/*
-			SNIHostName serverName = new SNIHostName("whatever.com");
+			SSLSocket.class.getMethod( "setSSLParameters" , ssl_parameters_class ).invoke( socket, ssl_parameters );
+			*/
+			
+			SNIHostName serverName = new SNIHostName( host_name );
+			
 			List<SNIServerName> serverNames = new ArrayList<>(1);
+			
 			serverNames.add(serverName);
 
 			SSLParameters params = socket.getSSLParameters();
+			
 			params.setServerNames(serverNames);
+			
 			socket.setSSLParameters(params);
-			*/
 
 			return( true );
 
@@ -2305,7 +2342,7 @@ public class UrlUtils
 		int			connect_timeout,
 		int			read_timeout )
 
-		throws Exception
+		throws Throwable
 	{
 
 		return( connectSocketAndWrite( is_ssl, target_host, target_port, bytes, connect_timeout, read_timeout, false ));
@@ -2321,7 +2358,54 @@ public class UrlUtils
 		int			read_timeout,
 		boolean		unconnected_socket_hack )
 
-		throws Exception
+		throws Throwable
+	{
+		List<InetAddress[]> binds =  NetworkAdmin.getSingleton().getSingleHomedServiceBindings( target_host );
+
+		Throwable last_error = null;
+		
+		for( InetAddress[] bind: binds ){
+			
+			try{
+				return(
+					connectSocketAndWrite(
+						is_ssl,
+						target_host,
+						bind[1],
+						bind[0],
+						target_port,
+						bytes,
+						connect_timeout,
+						read_timeout,
+						unconnected_socket_hack ));
+				
+			}catch( Throwable e ){
+				
+				last_error = e;
+			}
+		}
+		
+		if ( last_error != null ){
+			
+			throw( last_error );
+		}
+		
+		throw( new Exception( "hmm"));
+	}
+	
+	public static Socket
+	connectSocketAndWrite(
+		boolean			is_ssl,
+		String			target_host_name,
+		InetAddress		bind_ip,
+		InetAddress		target_host,
+		int				target_port,
+		byte[]			bytes,
+		int				connect_timeout,
+		int				read_timeout,
+		boolean			unconnected_socket_hack )
+
+		throws Throwable
 	{
 		boolean	cert_hack			= false;
 		boolean	dh_hack 			= false;
@@ -2339,17 +2423,8 @@ public class UrlUtils
 			boolean	ok = false;
 
 			try{
-
-				// InetSocketAddress targetSockAddress = new InetSocketAddress(  InetAddress.getByName(target_host) , target_port  );
-
-			    // InetAddress bindIP = NetworkAdmin.getSingleton().getSingleHomedServiceBindAddress(targetSockAddress.getAddress() instanceof Inet6Address ? NetworkAdmin.IP_PROTOCOL_VERSION_REQUIRE_V6 : NetworkAdmin.IP_PROTOCOL_VERSION_REQUIRE_V4);
-				
-			    InetAddress[] bindDetails = NetworkAdmin.getSingleton().getSingleHomedServiceBinding( target_host );
-
-			    InetSocketAddress targetSockAddress = new InetSocketAddress( bindDetails[0], target_port );
-			    
-			    InetAddress bindIP	= bindDetails[1];
-			    
+			    InetSocketAddress targetSockAddress = new InetSocketAddress( target_host, target_port );
+			    			    
 				if ( is_ssl ){
 
 					TrustManager[] tms_delegate = SESecurityManager.getAllTrustingTrustManager();
@@ -2371,13 +2446,13 @@ public class UrlUtils
 
 					if ( unconnected_socket_hack ){
 
-						if ( bindIP == null ){
+						if ( bind_ip == null ){
 
 							target = factory.createSocket(targetSockAddress.getAddress(), targetSockAddress.getPort());
 
 						}else{
 
-							target = factory.createSocket(targetSockAddress.getAddress(), targetSockAddress.getPort(), bindIP, 0 );
+							target = factory.createSocket(targetSockAddress.getAddress(), targetSockAddress.getPort(), bind_ip, 0 );
 						}
 					}else{
 
@@ -2387,13 +2462,13 @@ public class UrlUtils
 
 					if ( unconnected_socket_hack ){
 
-						if ( bindIP == null ){
+						if ( bind_ip == null ){
 
 							target = new Socket(targetSockAddress.getAddress(), targetSockAddress.getPort());
 
 						}else{
 
-							target = new Socket(targetSockAddress.getAddress(), targetSockAddress.getPort(), bindIP, 0 );
+							target = new Socket(targetSockAddress.getAddress(), targetSockAddress.getPort(), bind_ip, 0 );
 						}
 					}else{
 
@@ -2403,16 +2478,16 @@ public class UrlUtils
 
 				if ( internal_error_hack ){
 
-					SSLSocketSNIHack( target_host, (SSLSocket)target );
+					SSLSocketSNIHack( target_host_name, (SSLSocket)target );
 				}
 
 				target.setSoTimeout( read_timeout );
 
 				if ( !unconnected_socket_hack ){
 
-			        if ( bindIP != null ){
+			        if ( bind_ip != null ){
 
-			        	target.bind( new InetSocketAddress( bindIP, 0 ) );
+			        	target.bind( new InetSocketAddress( bind_ip, 0 ) );
 			        }
 
 			        target.connect( targetSockAddress, connect_timeout );
@@ -2454,7 +2529,7 @@ public class UrlUtils
 
 						cert_hack = true;
 
-						SESecurityManager.installServerCertificates( new URL( "https://" + target_host +  ":" + target_port + "/" ));
+						SESecurityManager.installServerCertificates( new URL( "https://" + target_host.getHostAddress() +  ":" + target_port + "/" ));
 
 						hacks_to_do = true;
 					}
@@ -2477,5 +2552,48 @@ public class UrlUtils
 		}
 
 		throw( last_error );
+	}
+	
+	public static List<InetSocketAddress>
+	getURLAddresses(
+		URL		url )
+	{
+		String	host	= url.getHost();
+		int		port	= url.getPort()==-1?url.getDefaultPort():url.getPort();
+			
+		if ( port == -1 ){
+			
+			port = 80;
+		}
+		
+		List<InetAddress> addresses = null;
+			
+		try{
+			addresses = DNSUtils.getSingleton().getAllByName( host );
+				
+		}catch( Throwable e ){
+				
+			try{
+				addresses = Arrays.asList( InetAddress.getAllByName( host ));
+					
+			}catch( Throwable f ){
+			}
+		}
+		
+		List<InetSocketAddress> result = new ArrayList<>();
+		
+		if ( addresses == null ){
+			
+			result.add( new InetSocketAddress( host, port ));
+			
+		}else{
+			
+			for ( InetAddress ia: addresses ){
+				
+				result.add( new InetSocketAddress( ia, port ));
+			}
+		}
+		
+		return( result );
 	}
 }

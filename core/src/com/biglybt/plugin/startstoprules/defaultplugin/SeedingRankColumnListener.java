@@ -23,6 +23,7 @@
 package com.biglybt.plugin.startstoprules.defaultplugin;
 
 import com.biglybt.pif.download.Download;
+import com.biglybt.pif.download.Download.SeedingRank;
 import com.biglybt.pif.ui.tables.TableCell;
 import com.biglybt.pif.ui.tables.TableCellRefreshListener;
 
@@ -32,32 +33,78 @@ public class
 SeedingRankColumnListener 
 	implements TableCellRefreshListener
 {
-	private StartStopRulesDefaultPlugin		plugin;
+	private static final Object		KEY = new Object();
 	
-	public SeedingRankColumnListener(StartStopRulesDefaultPlugin _plugin) {
-		plugin = _plugin;
-	}
-
 	@Override
 	public void refresh(TableCell cell) {
 		Download dl = (Download) cell.getDataSource();
 		if (dl == null)
 			return;
 
-		DefaultRankCalculator dlData = null;
+		DefaultRankCalculator dlData;
 		Object o = cell.getSortValue();
 		if (o instanceof DefaultRankCalculator)
 			dlData = (DefaultRankCalculator) o;
 		else {
 			dlData = StartStopRulesDefaultPlugin.getRankCalculator( dl );
-			cell.setSortValue(dlData);
 		}
-		if (dlData == null)
-			return;
-
-		String[] status = dl.getSeedingRank().getStatus( false );
 		
+		if (dlData == null){
+			cell.setSortValue( null );
+			return;
+		}
+			
+		Sorter	comp = (Sorter)dlData.getUserData( KEY );
+		
+		if ( comp == null ){
+			
+			comp = new Sorter( dlData );
+			
+			dlData.setUserData( KEY, comp );
+		}
+		
+		cell.setSortValue( comp );	
+
+		SeedingRank sr = dl.getSeedingRank();
+		
+		String[] status = sr.getStatus( false );
+
 		cell.setText(status[0]);
+		
+		/* 
+ 		int state = dlData.getState();
+
+		if ( state == Download.ST_STOPPED || state == Download.ST_ERROR ){
+			
+			cell.setText( "" );
+			
+		}else{
+						
+			cell.setText(status[0]);
+		}
+		*/
+		
 		cell.setToolTip(status[1] );
+	}
+	
+	private class
+	Sorter
+		implements Comparable<Sorter>
+	{
+		private DefaultRankCalculator		drc;
+		
+		Sorter(
+			DefaultRankCalculator		_drc )
+		{
+			drc = _drc;
+		}
+		
+		@Override
+		public int 
+		compareTo(
+			Sorter o)
+		{
+			return( drc.compareToIgnoreStopped( o.drc ));
+		}
 	}
 }

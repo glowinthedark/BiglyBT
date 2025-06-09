@@ -20,27 +20,20 @@
 
 package com.biglybt.ui.swt.search;
 
-import java.util.Locale;
+import java.util.ArrayList;
+import java.util.List;
 
 import com.biglybt.core.CoreFactory;
-import com.biglybt.core.util.Constants;
 import com.biglybt.ui.UIFunctionsManager;
-import org.eclipse.swt.SWT;
 import com.biglybt.core.config.COConfigurationManager;
-import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.Debug;
-import com.biglybt.core.util.UrlUtils;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.debug.ObfuscateTab;
-import com.biglybt.ui.swt.shells.MessageBoxShell;
-import com.biglybt.ui.webplugin.WebPlugin;
 
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
 import com.biglybt.ui.mdi.MdiEntry;
 import com.biglybt.ui.mdi.MultipleDocumentInterface;
-import com.biglybt.ui.swt.UIFunctionsManagerSWT;
-import com.biglybt.ui.swt.UIFunctionsSWT;
 import com.biglybt.ui.swt.views.skin.SkinViewManager;
 
 public class
@@ -76,6 +69,8 @@ SearchHandler
 		}
 	}
 
+	private static List<MdiEntry>		active_searches = new ArrayList<>();
+	
 	public static void
 	handleSearch(
 		String		sSearchText,
@@ -96,7 +91,15 @@ SearchHandler
 							pi.getPluginState().isOperational() &&
 							pi.getIPC().canInvoke("lookupByExpression", new Object[]{ "" })){
 
-						pi.getIPC().invoke("lookupByExpression", new Object[]{ sSearchText });
+						//don't take it off UI thread as this causes the IPC result to be selected instead of the actual search result
+						//Utils.getOffOfSWTThread(()->{
+								try{pi.getIPC().invoke("lookupByExpression", new Object[]{ sSearchText });
+								
+								}catch( Throwable e ){
+							
+									Debug.out( e );
+								}
+						//});
 					}
 				}
 			}catch (Throwable e ){
@@ -121,6 +124,7 @@ SearchHandler
 			return;
 		}
 
+				
 		final MdiEntry entry = mdi.createEntryFromSkinRef(
 				MultipleDocumentInterface.SIDEBAR_HEADER_DISCOVERY, id,
 				"main.area.searchresultstab", sSearchText, null, sq, true, MultipleDocumentInterface.SIDEBAR_POS_FIRST );
@@ -128,6 +132,31 @@ SearchHandler
 			entry.setImageLeftID("image.sidebar.search");
 			entry.setDatasource(sq);
 			entry.setViewTitleInfo(new ViewTitleInfoImplementation());
+			
+			MdiEntry to_remove = null;
+			
+			entry.addListener((e,user)->{
+				
+				synchronized( active_searches ){
+					
+					active_searches.remove( e );
+				}
+			});
+			
+			synchronized( active_searches ){
+			
+				active_searches.add( entry );
+				
+				if ( active_searches.size() > 5 ){
+					
+					to_remove = active_searches.remove(0);
+				}
+			}
+			
+			if ( to_remove != null ){
+				
+				to_remove.closeView();
+			}
 		}
 
 		mdi.showEntryByID(id);

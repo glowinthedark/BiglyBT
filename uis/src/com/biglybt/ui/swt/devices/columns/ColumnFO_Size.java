@@ -1,7 +1,5 @@
-/*
- * Created on Feb 26, 2009
- *
- * Copyright (C) Azureus Software, Inc, All Rights Reserved.
+/* 
+ * Copyright (C) Bigly Software, Inc, All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +23,7 @@ import com.biglybt.core.CoreOperation;
 import com.biglybt.core.CoreOperationTask.ProgressCallback;
 import com.biglybt.core.util.DisplayFormatters;
 import com.biglybt.pif.ui.tables.*;
+import com.biglybt.ui.swt.views.table.utils.TableColumnSWTUtils;
 
 public class ColumnFO_Size
 	implements TableCellRefreshListener, TableColumnExtraInfoListener
@@ -69,6 +68,8 @@ public class ColumnFO_Size
 		if ( cell.setSortValue( size )){
 		
 			cell.setText( size<=0?"":DisplayFormatters.formatByteCountToKiBEtc( size ));
+			
+			TableColumnSWTUtils.setSizeAlpha( cell, size );
 		}
 	}
 }

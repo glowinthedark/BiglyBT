@@ -70,7 +70,9 @@ import com.biglybt.ui.swt.progress.ProgressWindow;
 import com.biglybt.ui.swt.search.SearchUI;
 import com.biglybt.ui.swt.shells.CoreWaiterSWT;
 import com.biglybt.ui.swt.shells.MessageBoxShell;
+import com.biglybt.ui.swt.shells.PopOutManager;
 import com.biglybt.ui.swt.shells.main.MainWindowFactory;
+import com.biglybt.ui.swt.shells.opentorrent.OpenTorrentOptionsWindow;
 import com.biglybt.ui.swt.skin.SWTSkin;
 import com.biglybt.ui.swt.skin.SWTSkinPropertiesImpl;
 import com.biglybt.ui.swt.subscriptions.SubscriptionManagerUI;
@@ -175,7 +177,7 @@ public class Initializer
 		};
 		core.addLifecycleListener(coreLifecycleAdapter);
 
-		Utils.initStatic();
+		Utils.initStatic( core );
 
 		try {
       SWTThread.createInstance(this);
@@ -267,11 +269,8 @@ public class Initializer
 			return;
 		}
 
-		UIConfigDefaultsSWT.initialize();
-
-		UIConfigDefaultsSWTv3.initialize(core);
-
-		// Ensure colors initialized
+			// Ensure colors initialized
+		
 		Colors.getInstance();
 
 		checkInstallID();
@@ -318,6 +317,8 @@ public class Initializer
 		ColorCache2.dispose();
 		FontUtils.dispose();
 		SWTSkinPropertiesImpl.destroyStatics();
+		ProgressWindow.unregister();
+		OpenTorrentOptionsWindow.close();
 	}
 
 	/**
@@ -373,10 +374,9 @@ public class Initializer
 		new UIMagnetHandler(core);
 
 		if (!STARTUP_UIFIRST) {
-			UIConfigDefaultsSWT.initialize();
-			UIConfigDefaultsSWTv3.initialize(core);
 
-			// Ensure colors initialized
+				// Ensure colors initialized
+			
 			Colors.getInstance();
 		} else {
 			COConfigurationManager.setBooleanDefault("Show Splash", false);
@@ -431,7 +431,7 @@ public class Initializer
 
 			@Override
 			public void stopping(Core core) {
-				Alerts.stopInitiated();
+				handleCoreStopping();
 			}
 
 			@Override
@@ -707,8 +707,12 @@ public class Initializer
 
 			//Tell listeners that all is initialized :
 			Alerts.initComplete();
-		}
-		finally{
+			
+			OpenTorrentOptionsWindow.initialise();
+			
+			PopOutManager.initialise( core );
+			
+		}finally{
 
 			if ( !main_window_will_report_complete ){
 				init_task.release();
@@ -716,6 +720,14 @@ public class Initializer
 		}
 	}
 
+	void
+	handleCoreStopping()
+	{
+		Alerts.stopInitiated();
+		
+		OpenTorrentOptionsWindow.close();
+	}
+	
 	@Override
 	public void 
 	stopIt(
@@ -748,7 +760,7 @@ public class Initializer
 							public int 
 							getStyle()
 							{
-								return( STYLE_NO_CLOSE | STYLE_MODAL );
+								return( STYLE_NO_CLOSE | STYLE_MINIMIZE | STYLE_MODAL );
 							}
 							
 							@Override
@@ -761,7 +773,21 @@ public class Initializer
 							public int
 							getSupportedTaskStates()
 							{
-								return( ProgressCallback.ST_SUBTASKS );
+								return( ProgressCallback.ST_SUBTASKS | ProgressCallback.ST_MINIMIZE );
+							}
+							
+							@Override
+							public void 
+							setTaskState(
+								int state )
+							{
+								if ( state == ProgressCallback.ST_MINIMIZE ){
+									
+									UIFunctionsSWT functionsSWT = UIFunctionsManagerSWT.getUIFunctionsSWT();
+									if (functionsSWT != null) {
+										functionsSWT.getMainWindow().setVisible( IMainWindow.WINDOW_ELEMENT_ALL, false );
+									}
+								}
 							}
 						};
 						
@@ -795,8 +821,8 @@ public class Initializer
 											}
 											
 											@Override
-											public void
-											run(
+											public boolean
+											runOperation(
 												CoreOperation operation)
 											{
 												try{												
@@ -806,6 +832,8 @@ public class Initializer
 		
 													throw( new RuntimeException( e ));
 												}
+												
+												return( true );
 											}
 		
 											@Override
@@ -1006,7 +1034,7 @@ public class Initializer
 			clientMsgContext.setMessageDispatcher(new MessageDispatcherSWT(clientMsgContext));
 			clientMsgContext.addMessageListener(new TorrentListener());
 			clientMsgContext.addMessageListener(new VuzeListener());
-			clientMsgContext.addMessageListener(new DisplayListener());
+			clientMsgContext.addMessageListener(new DisplayListener(null));
 			clientMsgContext.addMessageListener(new ConfigListener(null));
 		}
 	}

@@ -27,10 +27,12 @@ import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.torrent.TOTorrent;
+import com.biglybt.core.util.StringInterner;
 import com.biglybt.pif.ui.tables.TableCell;
 import com.biglybt.pif.ui.tables.TableCellRefreshListener;
 import com.biglybt.pif.ui.tables.TableColumnInfo;
 import com.biglybt.pif.ui.tables.TableManager;
+import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.views.FilesView;
 import com.biglybt.ui.swt.views.table.CoreTableColumnSWT;
 
@@ -78,19 +80,19 @@ public class PathItem
   @Override
   public void refresh(TableCell cell) {
     DiskManagerFileInfo fileInfo = (DiskManagerFileInfo)cell.getDataSource();
-    cell.setText(determinePath(fileInfo, show_full_path));
+    cell.setText( determinePath(fileInfo, show_full_path));
   }
 
-  protected static String determinePath(DiskManagerFileInfo fileInfo, boolean _show_file_path) {
+  protected static StringInterner.DirKey determinePath(DiskManagerFileInfo fileInfo, boolean _show_file_path) {
 
     if( fileInfo == null ) {
-    	return "";
+    	return StringInterner.DirKey.EMPTY_PATH;
     }
 
     if ( fileInfo instanceof FilesView.FilesViewTreeNode ){
 		FilesView.FilesViewTreeNode node = (FilesView.FilesViewTreeNode)fileInfo;
 		if ( !node.isLeaf()){
-			return( "" );
+			return( StringInterner.DirKey.EMPTY_PATH );
 		}
     }
     
@@ -100,7 +102,7 @@ public class PathItem
   	DownloadManager dm = fileInfo.getDownloadManager();
 
   	if ( dm == null ){
-  		return( "" );
+  		return( StringInterner.DirKey.EMPTY_PATH );
   	}
    	File dl_save_path_file = dm.getAbsoluteSaveLocation();
 
@@ -124,8 +126,18 @@ public class PathItem
    	 * download save path.
    	 */
    	//
+   	
+   	String dnd_al = null;
    	if (has_link && !show_full_path) {
-   		show_full_path = !file.getAbsolutePath().startsWith(dl_save_path);
+   		String abs_path = file.getAbsolutePath();
+   		show_full_path = !abs_path.startsWith(dl_save_path);
+   		
+   		if ( show_full_path ){
+   			dnd_al = dm.getDownloadState().getAttribute( DownloadManagerState.AT_DND_ALT_LOC );
+   			if ( dnd_al != null && abs_path.startsWith(dnd_al)){
+   				show_full_path = false;
+   			}
+   		}
    	}
    	String path = "";
 
@@ -135,43 +147,51 @@ public class PathItem
     	
     	if ( parent != null ){
 		      try {
-		          path = parent.getCanonicalPath();
+		          path = Utils.getCanonicalPathWithTimeout( parent );
 		      }
 		      catch( IOException e ) {
 		          path = file.getParentFile().getAbsolutePath();
 		      }
 	
-		      if ( !path.endsWith( File.separator )){
+		      if ( path != null && !path.endsWith( File.separator )){
 	
 		    	  path += File.separator;
 		      }
     	}
     }else{
-    	String apath = file.getAbsolutePath();
-    	
-    	if ( !apath.startsWith( dl_save_path )){
-    		path = apath;
+    	if ( dnd_al != null ){
+    		
+    		path = "dnd" + File.separator + fileInfo.getFile( false ).getAbsolutePath().substring( dl_save_path.length());
     	}else{
-	    	path = apath.substring(dl_save_path.length());
-	    	if (path.length() == 0) {
-	    		path = File.separator;
-	    	}
-	    	else {
-	    		if (path.charAt(0) == File.separatorChar) {
-	    			path = path.substring(1);
-	    		}
-	    		int	pos = path.lastIndexOf(File.separator);
-	
-	    		if (pos > 0 ) {
-	    			path = File.separator + path.substring( 0, pos );
-	    		}
-	    		else {
-	    			path = File.separator;
-	    		}
+	    	String apath = file.getAbsolutePath();
+	    	
+	    	if ( !apath.startsWith( dl_save_path )){
+	    		path = apath;
+	    	}else{
+		    	path = apath.substring(dl_save_path.length());
+		    	if (path.length() == 0) {
+		    		path = File.separator;
+		    	}else{
+		    		if (path.charAt(0) == File.separatorChar){
+		    			path = path.substring(1);
+		    		}
+		    		int	pos = path.lastIndexOf(File.separator);
+		
+		    		if (pos > 0 ) {
+		    			path = File.separator + path.substring( 0, pos );
+		    		}
+		    		else {
+		    			path = File.separator;
+		    		}
+		    	}
+		    		// relative to save root
+		    	
+		    	path = "." + path;
 	    	}
       }
     }
 
+    /*
     if ( fileInfo.isSkipped()){
 
     	String dnd_sf = dm.getDownloadState().getAttribute( DownloadManagerState.AT_DND_SUBFOLDER );
@@ -205,8 +225,9 @@ public class PathItem
     		}
     	}
     }
+    */
 
-    return path;
+    return( new StringInterner.DirKey( path ));
   }
 
 }

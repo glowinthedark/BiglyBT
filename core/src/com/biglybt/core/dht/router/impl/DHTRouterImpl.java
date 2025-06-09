@@ -162,7 +162,9 @@ DHTRouterImpl
 
 						if ( seed_in_ticks == 0 ){
 
-							seedSupport();
+							AEThread2.createAndStartDaemon( "router:seed", ()->{
+								seedSupport();
+							});
 						}
 					}
 				}
@@ -410,7 +412,7 @@ DHTRouterImpl
 				if ( contact != null ){
 
 					// some protection against network drop outs - start ignoring dead
-					// notifications if we're getting significant continous fails
+					// notifications if we're getting significant continuous fails
 
 					if ( consecutive_dead < 100 || force ){
 

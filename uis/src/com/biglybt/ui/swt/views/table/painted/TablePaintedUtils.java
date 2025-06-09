@@ -26,6 +26,7 @@ import org.eclipse.swt.graphics.GC;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.util.Debug;
+import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.mainwindow.Colors;
 
 public class 
@@ -42,7 +43,8 @@ TablePaintedUtils
 				@Override
 				public void parameterChanged(String parameterName){
 
-					is_dark = COConfigurationManager.getBooleanParameter("Dark Table Colors" );
+					is_dark = 	Utils.isDarkAppearanceNativeWindows() ||
+								COConfigurationManager.getBooleanParameter("Dark Table Colors" );
 					
 					if ( first ){
 						first = false;
@@ -53,7 +55,7 @@ TablePaintedUtils
 			});
 	}
 	
-	protected static boolean
+	public static boolean
 	isDark()
 	{
 		return( is_dark );
@@ -72,33 +74,39 @@ TablePaintedUtils
 		Device		device,
 		int			type )
 	{
-		if ( is_dark ){
+		if ( Utils.isDarkAppearanceNativeWindows()){
 			
-			switch( type ){
-				case SWT.COLOR_LIST_BACKGROUND:{
-					return( Colors.black );
-				}
-				case SWT.COLOR_LIST_FOREGROUND:{
-					return( Colors.white );
-				}
-				case SWT.COLOR_LIST_SELECTION:{
-					return( Colors.dark_grey );
-				}
-				case SWT.COLOR_LIST_SELECTION_TEXT:{
-					return( Colors.white );
-				}
-				case SWT.COLOR_WIDGET_NORMAL_SHADOW:{
-					return( Colors.grey );
-				}
-				case SWT.COLOR_WIDGET_LIGHT_SHADOW:{
-					return( Colors.black );
-				}
-				case SWT.COLOR_WIDGET_BACKGROUND:{
-					return( Colors.dark_grey );
-				}
-				default:{
-					
-					Debug.out( "Unhandled colour: " + type );
+			return( Colors.getSystemColor(device, type));
+			
+		}else{
+			if ( is_dark ){
+				
+				switch( type ){
+					case SWT.COLOR_LIST_BACKGROUND:{
+						return( Colors.black );
+					}
+					case SWT.COLOR_LIST_FOREGROUND:{
+						return( Colors.white );
+					}
+					case SWT.COLOR_LIST_SELECTION:{
+						return( Colors.dark_grey );
+					}
+					case SWT.COLOR_LIST_SELECTION_TEXT:{
+						return( Colors.white );
+					}
+					case SWT.COLOR_WIDGET_NORMAL_SHADOW:{
+						return( Colors.grey );
+					}
+					case SWT.COLOR_WIDGET_LIGHT_SHADOW:{
+						return( Colors.black );
+					}
+					case SWT.COLOR_WIDGET_BACKGROUND:{
+						return( Colors.dark_grey );
+					}
+					default:{
+						
+						Debug.out( "Unhandled colour: " + type );
+					}
 				}
 			}
 		}

@@ -22,11 +22,14 @@ package com.biglybt.ui.swt.config;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.ToolBar;
+import org.eclipse.swt.widgets.ToolItem;
 
 import com.biglybt.pifimpl.local.ui.config.ActionParameterImpl;
 import com.biglybt.pifimpl.local.ui.config.ParameterImpl;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.Utils;
+import com.biglybt.ui.swt.imageloader.ImageLoader;
 import com.biglybt.ui.swt.widgets.ButtonWithMinWidth;
 
 import com.biglybt.pif.ui.config.ActionParameter;
@@ -34,13 +37,8 @@ import com.biglybt.pif.ui.config.ActionParameter;
 public class ButtonSwtParameter
 	extends BaseSwtParameter<ButtonSwtParameter, Object>
 {
-	final Button button;
-
-	public ButtonSwtParameter(Composite parent, ActionParameterImpl pluginParam) {
-		this(parent, pluginParam.getActionResource(), pluginParam.getLabelKey());
-		setPluginParameter(pluginParam);
-	}
-
+	Button button;
+	
 	/**
 	 * Make a button.
 	 * <p/>
@@ -50,25 +48,58 @@ public class ButtonSwtParameter
 	 * @param buttonTextKey Messagebundle key text displayed in button
 	 * @param labelKey Messagebundle key for the checkbox
 	 */
-	public ButtonSwtParameter(Composite composite, String buttonTextKey,
-			String labelKey) {
+	public ButtonSwtParameter(Composite composite, ActionParameterImpl pluginParam ){
 		super(null);
 
-		createStandardLabel(composite, labelKey);
+		createStandardLabel(composite, pluginParam.getLabelKey());
 
-		button = new ButtonWithMinWidth(composite, SWT.PUSH, 40);
-		setMainControl(button);
+		String button_key	= pluginParam.getActionResource();
+		String image_id		= ((ActionParameter)pluginParam).getImageID();
 
-		Messages.setLanguageText(button, buttonTextKey);
-
-		button.addListener(SWT.Selection, event -> {
-			// Force control to ensure we aren't on an un-processed parameter
-			// On OSX, button doesn't automatically get focused on click, so
-			// if the user edits a StringParameter, and clicks a button, the
-			// StringParameter will not be saved yet..
-			button.forceFocus();
-			triggerChangeListeners(true);
-		});
+		int width = 40;
+		
+		if ( image_id == null ){
+			image_id = "";
+		}
+		
+		if ( button_key.isEmpty() && !image_id.isEmpty()){
+		
+			ToolBar toolBar = new ToolBar( composite, SWT.FLAT );
+		
+			ToolItem item = new ToolItem( toolBar, SWT.PUSH );
+			
+			item.setImage( ImageLoader.getInstance().getImage( image_id ));
+			
+			item.addListener( SWT.Selection, ev->{
+				
+				toolBar.forceFocus();
+				triggerChangeListeners(true);
+			});
+			
+		}else{
+		
+			Button button = new ButtonWithMinWidth(composite, SWT.PUSH, width);
+			setMainControl(button);
+	
+			Messages.setLanguageText(button, button_key );
+	
+			
+			if ( !image_id.isEmpty()){
+				
+				button.setImage(ImageLoader.getInstance().getImage( image_id ));
+			}
+			
+			button.addListener(SWT.Selection, event -> {
+				// Force control to ensure we aren't on an un-processed parameter
+				// On OSX, button doesn't automatically get focused on click, so
+				// if the user edits a StringParameter, and clicks a button, the
+				// StringParameter will not be saved yet..
+				button.forceFocus();
+				triggerChangeListeners(true);
+			});
+		}
+		
+		setPluginParameter(pluginParam);
 	}
 
 	@Override
@@ -84,7 +115,7 @@ public class ButtonSwtParameter
 		if (pluginParam instanceof ActionParameter) {
 
 			Utils.execSWTThread(() -> {
-				if (button.isDisposed()) {
+				if (button == null || button.isDisposed()) {
 					return;
 				}
 

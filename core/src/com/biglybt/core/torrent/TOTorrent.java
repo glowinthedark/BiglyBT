@@ -164,9 +164,6 @@ TOTorrent
 	setCreatedBy(
 		byte[]		cb );
 
-	public boolean
-	isCreated();
-
 	/**
 	 * A torrent must have a URL that identifies the tracker. This method returns it. However
 	 * an extension to this exists to allow multiple trackers, and their backups, to be defined.
@@ -310,6 +307,17 @@ TOTorrent
 
 		throws TOTorrentException;
 
+	public TOTorrent
+	setSimpleTorrentDisabled(
+		boolean		disabled )
+	
+		throws TOTorrentException;
+	
+	public boolean
+	isSimpleTorrentDisabled()
+	
+		throws TOTorrentException;
+	
 	/**
 	 * compares two torrents by hash
 	 * @param other

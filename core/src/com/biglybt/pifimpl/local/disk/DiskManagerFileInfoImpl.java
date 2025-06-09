@@ -65,6 +65,13 @@ DiskManagerFileInfoImpl
 	}
 
 	@Override
+	public Boolean 
+	isSkipping()
+	{
+		return( core.isSkipping());
+	}
+	
+	@Override
 	public int getNumericPriority() {
 		return( core.getPriority());
 	}
@@ -132,9 +139,10 @@ DiskManagerFileInfoImpl
 	@Override
 	public void
 	setLink(
-		File	link_destination )
+		File		link_destination,
+		boolean		no_delete )
 	{
-		core.setLink( link_destination );
+		core.setLink( link_destination, no_delete );
 	}
 
 	@Override

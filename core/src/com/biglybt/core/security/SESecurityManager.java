@@ -162,22 +162,6 @@ SESecurityManager
 		return( SESecurityManagerImpl.getSingleton().getKeyDetails( alias ));
 	}
 
-	public static KeyStore
-	getKeyStore()
-
-		throws Exception
-	{
-		return( SESecurityManagerImpl.getSingleton().getKeyStore());
-	}
-
-	public static KeyStore
-	getTrustStore()
-
-		throws Exception
-	{
-		return( SESecurityManagerImpl.getSingleton().getTrustStore());
-	}
-
 	public static PasswordAuthentication
 	getPasswordAuthentication(
 		String		realm,
@@ -265,9 +249,19 @@ SESecurityManager
 		return( SESecurityManagerImpl.getSingleton().getClassContext());
 	}
 	
+	public static boolean
+	filterNetworkInterfaces( 
+		List<NetworkInterface>		interfaces )
+	{
+		return( SESecurityManagerImpl.getSingleton().filterNetworkInterfaces( interfaces ));
+	}
+	
 	public interface 
 	MySecurityManager
 	{
+		public Class[]
+		getClassContext();
+		
 		public boolean
 		filterNetworkInterfaces( 
 			List<NetworkInterface>		interfaces );

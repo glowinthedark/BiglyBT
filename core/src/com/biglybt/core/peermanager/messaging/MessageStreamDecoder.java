@@ -45,7 +45,7 @@ public interface MessageStreamDecoder {
 
   /**
    * Get the number of protocol (overhead) bytes decoded from the transport, from the last decode op.
-   * @return number of protocol bytes recevied
+   * @return number of protocol bytes received
    */
   public int getProtocolBytesDecoded();
 
@@ -57,10 +57,10 @@ public interface MessageStreamDecoder {
 
 
   /**
-   * Get the percentage of the current message that has already been received (read from the transport).
-   * @return percentage complete (0-99), or -1 if no message is currently being received
+   * Get the details of the current message that is being received (read from the transport).
+   * @return [ size, done ] or null
    */
-  public int getPercentDoneOfCurrentMessage();
+  public int[] getCurrentMessageProgress();
 
 
   /**

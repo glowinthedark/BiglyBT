@@ -19,6 +19,7 @@ package com.biglybt.ui.swt;
 
 import java.util.*;
 import java.util.List;
+import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.DisposeEvent;
@@ -33,10 +34,13 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.ui.swt.components.shell.ShellFactory;
+import com.biglybt.ui.swt.mainwindow.SWTThread;
 
 public class TextViewerWindow {
 	
   private boolean reuseWindow;
+  
+  private Consumer<TextViewerWindow> refresher;
   
   private boolean modal;
   private boolean defer_modal;
@@ -46,10 +50,13 @@ public class TextViewerWindow {
   
   private final Composite buttonArea;
   
+  private Button refresh;
   private Button ok;
   private Button cancel;
   
-  private boolean	cancel_enabled;
+  private boolean	ok_is_apply		= false;
+  private boolean	ok_enabled		= true;
+  private boolean	cancel_enabled	= false;
   
   private Font	np_font;
   
@@ -83,6 +90,15 @@ public class TextViewerWindow {
   TextViewerWindow(
 	Shell parent_shell, String sTitleID, String sMessageID, String sText, boolean _modal, boolean _defer_modal )
   {
+	  this( parent_shell, sTitleID, sMessageID, sText, null, _modal, _defer_modal );
+  }
+  
+  public
+  TextViewerWindow(
+	Shell parent_shell, String sTitleID, String sMessageID, String sText, Consumer<TextViewerWindow> _refresher, boolean _modal, boolean _defer_modal )
+  {
+	refresher = _refresher;
+	  
 	modal = _modal;
 	defer_modal = _defer_modal;
 	
@@ -183,7 +199,7 @@ public class TextViewerWindow {
 			widgetDisposed(
 				DisposeEvent arg0)
 			{
-				if ( reuseWindow ){
+				if ( reuseWindow && !SWTThread.getInstance().isTerminated()){
 					Debug.out( "What?" );
 				}
 				if ( np_font != null ){
@@ -222,6 +238,12 @@ public class TextViewerWindow {
     }
   }
 
+  public Shell
+  getShell()
+  {
+	  return( shell );
+  }
+  
   public void
   setReuseWindow()
   {
@@ -261,6 +283,17 @@ public class TextViewerWindow {
 	  GridData gridData = new GridData( GridData.FILL_HORIZONTAL );
 	  label.setLayoutData(gridData);
 
+	  if ( refresher != null ){
+		  refresh = new Button(buttonArea, SWT.PUSH);
+		  refresh.setText(MessageText.getString("upnp.refresh.button"));
+		  refresh.addListener(SWT.Selection, new Listener() {
+			  @Override
+			  public void handleEvent(Event event) {
+				  refresher.accept(TextViewerWindow.this);
+			  }
+		  });
+	  }
+	  
 	  if ( cancel_enabled ){
 		  if (Constants.isOSX) {
 			  cancel = new Button(buttonArea, SWT.PUSH);
@@ -274,9 +307,12 @@ public class TextViewerWindow {
 		  cancel = null;
 		  ok = new Button(buttonArea, SWT.PUSH);
 	  }
-	  ok.setText(MessageText.getString("Button.ok"));
+	  
+	  ok.setEnabled( ok_enabled );
+	  
+	  ok.setText(MessageText.getString( ok_is_apply?"Button.apply":"Button.ok"));
 
-	  Utils.makeButtonsEqualWidth( Arrays.asList( ok, cancel ));
+	  Utils.makeButtonsEqualWidth( Arrays.asList( refresh, ok, cancel ));
 
 	  shell.setDefaultButton(ok);
 	  
@@ -332,11 +368,7 @@ public class TextViewerWindow {
   public void
   goModal()
   {
-	    Display display = Utils.getDisplay();
-
-	  	while ( (!shell.isDisposed()) && shell.isVisible()){
-    		if (!display.readAndDispatch()) display.sleep();
-	  	}
+	  Utils.readAndDispatchLoop( shell, true );
   }
 
   public void
@@ -379,9 +411,20 @@ public class TextViewerWindow {
   setText(
 	 String	text )
   {
+	  setText( text, true );
+  }
+  
+  public void
+  setText(
+	 String		text,
+	 boolean	scrollToBottom )
+  {
 	  txtInfo.setText( text);
 
-	  txtInfo.setSelection( txtInfo.getTextLimit());
+	  if ( scrollToBottom ){
+		  
+		  txtInfo.setSelection( txtInfo.getTextLimit());
+	  }
   }
 
   public void
@@ -390,7 +433,10 @@ public class TextViewerWindow {
   {
 	  txtInfo.setEditable( editable );
 	 
-	  cancel_enabled = true;
+	  if ( editable ){
+		  
+		  cancel_enabled = true;
+	  }
 	  
 	  buildButtons();
   }
@@ -399,18 +445,33 @@ public class TextViewerWindow {
   setOKEnabled(
 	boolean	enabled )
   {
-	  ok.setEnabled( enabled );
+	  ok_enabled = enabled;
+	  
+	  ok.setEnabled( ok_enabled );
   }
   
   public void
   setCancelEnabled(
 	boolean	enabled )
   {
+	  cancel_enabled = true;
+	  
 	  if ( cancel != null ){
 		  cancel.setEnabled( enabled );
+	  }else{
+		  buildButtons();
 	  }
   }
 
+  public void
+  setOKisApply(
+		boolean		b )
+  {
+	  ok_is_apply = b;
+	  
+	  buildButtons();
+  }
+  
   public void
   setNonProportionalFont()
   {

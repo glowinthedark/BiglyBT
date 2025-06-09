@@ -25,7 +25,6 @@ import org.eclipse.swt.graphics.Image;
 import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.disk.DiskManagerPiece;
-import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.peer.PEPiece;
@@ -101,7 +100,7 @@ public class PeerFilesView
 	{
 		tv = TableViewFactory.createTableViewSWT(
 				PeersFilesViewRow.class,
-				TABLEID_PEER_FILES, getPropertiesPrefix(), basicItems,
+				TABLEID_PEER_FILES, getTextPrefixID(), basicItems,
 				"firstpiece", SWT.MULTI | SWT.FULL_SELECTION | SWT.VIRTUAL);
 
 		tv.addTableDataSourceChangedListener(this, true);
@@ -396,7 +395,6 @@ public class PeerFilesView
 				if (img != null && !img.isDisposed()){
 					Utils.execSWTThread(() -> Utils.disposeSWTObjects(img));
 
-						// see http://forum.vuze.com/thread.jspa?threadID=117243
 						// could it be that it isn't being marked as disposed after disposal and
 						// being double-disposed?
 					((UISWTGraphic) graphic).setImage( null );

@@ -22,14 +22,12 @@
 
 package com.biglybt.ui.swt.views.configsections;
 
-import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
 import com.biglybt.core.config.COConfigurationManager;
-import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.TimeFormatter;
@@ -42,15 +40,18 @@ import com.biglybt.pif.ui.config.ConfigSection;
 import com.biglybt.pif.ui.config.Parameter;
 import com.biglybt.pif.ui.config.ParameterValidator.ValidationInfo;
 
-import static com.biglybt.ui.swt.ConfigKeysSWT.ICFG_TABLE_HEADER_HEIGHT;
+import static com.biglybt.ui.swt.ConfigKeysSWT.*;
 
 public class ConfigSectionInterfaceTablesSWT
 	extends ConfigSectionImpl
 {
+	public static final String REFID_SECTION_LIBRARY = "section-library";
 
 	public static final String SECTION_ID = "tables";
 
-	private ParameterListener configOSX;
+
+	
+	// private ParameterListener configOSX;
 
 	public ConfigSectionInterfaceTablesSWT() {
 		super(SECTION_ID, ConfigSection.SECTION_INTERFACE);
@@ -59,16 +60,20 @@ public class ConfigSectionInterfaceTablesSWT
 	@Override
 	public void deleteConfigSection() {
 		super.deleteConfigSection();
+		/*
 		if (configOSX != null) {
 			for (int i = 0; i < 4; i++) {
 				COConfigurationManager.removeParameterListener("Table.lh" + i + ".prog",
 						configOSX);
 			}
 		}
+		*/
 	}
 
 	@Override
-	public void build() {
+	public void 
+	build() 
+	{	
 		setDefaultUITypesForAdd(UIInstance.UIT_SWT);
 		boolean isAZ3 = Utils.isAZ3UI();
 
@@ -93,9 +98,10 @@ public class ConfigSectionInterfaceTablesSWT
 				"ConfigView.section.style.defaultSortOrder", sortOrderValues,
 				sortOrderLabels), listGeneral);
 
-		add(new BooleanParameterImpl("Table.sort.intuitive",
-				"ConfigView.section.table.sort.intuitive"), listGeneral);
+		add(new BooleanParameterImpl("Table.sort.intuitive", "ConfigView.section.table.sort.intuitive"), listGeneral);
 
+		add(new BooleanParameterImpl("Table.filter.confusable", "ConfigView.section.table.filter.confusable"), listGeneral);
+		
 		int[] values = {
 			10,
 			25,
@@ -139,14 +145,20 @@ public class ConfigSectionInterfaceTablesSWT
 				"ConfigView.section.style.reOrderDelay"), Parameter.MODE_INTERMEDIATE,
 				listGeneral);
 
+		/* replace with per-table specific config and column header right-click options
 		add(new BooleanParameterImpl("NameColumn.showProgramIcon",
 				"ConfigView.section.style.showProgramIcon"),
 				Parameter.MODE_INTERMEDIATE, listGeneral);
-
+		*/
+		
 		////
 
 		add(new BooleanParameterImpl("Table.extendedErase",
 				"ConfigView.section.style.extendedErase"), Parameter.MODE_INTERMEDIATE,
+				listGeneral);
+
+		add(new BooleanParameterImpl("Table Header Gradient Fill",
+				"ConfigView.section.style.header.gradient"), Parameter.MODE_INTERMEDIATE,
 				listGeneral);
 
 		////
@@ -221,15 +233,26 @@ public class ConfigSectionInterfaceTablesSWT
 						paramCustomDate).setNumberOfColumns2(2),
 				Parameter.MODE_INTERMEDIATE, listGeneral);
 
-		add(new BooleanParameterImpl("Table.tooltip.disable",
+		BooleanParameterImpl disableTT = 
+			add(new BooleanParameterImpl("Table.tooltip.disable",
 				"ConfigView.section.table.disable.tooltips"),
 				Parameter.MODE_INTERMEDIATE, listGeneral);
 
+		BooleanParameterImpl truncTT = 
+				add(new BooleanParameterImpl("Table.tooltip.truncate",
+					"ConfigView.section.table.truncate.tooltips"),
+					Parameter.MODE_INTERMEDIATE, listGeneral);
+
+		disableTT.addDisabledOnSelection(truncTT);
+		
 		add(new ParameterGroupImpl("ConfigView.section.global", listGeneral));
 
+			// Library section
+		
 		List<Parameter> listLibrary = new ArrayList<>();
 
-		// User tree
+		add(new BooleanParameterImpl("Library.ShowTitle",
+				"menu.show.title"), listLibrary);
 
 		add(new BooleanParameterImpl("Table.useTree",
 				"ConfigView.section.style.useTree"), listLibrary);
@@ -268,13 +291,15 @@ public class ConfigSectionInterfaceTablesSWT
 
 		// double-click
 
-		String[] dblclickOptions = {
-			"ConfigView.option.dm.dblclick.play",
-			"ConfigView.option.dm.dblclick.details",
-			"ConfigView.option.dm.dblclick.show",
-			"ConfigView.option.dm.dblclick.launch",
-			"ConfigView.option.dm.dblclick.launch.qv",
-			"ConfigView.option.dm.dblclick.open.browser",
+		String[][] dblclickOptions = {
+			{ "ConfigView.option.dm.dblclick.play", 			"0" },
+			{ "ConfigView.option.dm.dblclick.show", 			"2" },
+			{ "ConfigView.option.dm.dblclick.launch", 			"3" },
+			{ "ConfigView.option.dm.dblclick.launch.content",	"7" },
+			{ "ConfigView.option.dm.dblclick.launch.qv", 		"4" },
+			{ "ConfigView.option.dm.dblclick.open.browser", 	"5" },
+			{ "ConfigView.option.dm.dblclick.details", 			"1" },
+			{ "ConfigView.option.dm.dblclick.details.pop", 		"6" }
 		};
 
 		String dblclickLabels[] = new String[dblclickOptions.length];
@@ -282,8 +307,8 @@ public class ConfigSectionInterfaceTablesSWT
 
 		for (int i = 0; i < dblclickOptions.length; i++) {
 
-			dblclickLabels[i] = MessageText.getString(dblclickOptions[i]);
-			dblclickValues[i] = "" + i;
+			dblclickLabels[i] = MessageText.getString(dblclickOptions[i][0]);
+			dblclickValues[i] = dblclickOptions[i][1];
 		}
 		add(new StringListParameterImpl("list.dm.dblclick",
 				"ConfigView.label.dm.dblclick", dblclickValues, dblclickLabels),
@@ -306,14 +331,16 @@ public class ConfigSectionInterfaceTablesSWT
 
 		// enter action
 
-		String[] enterOptions = {
-			"ConfigView.option.dm.enter.sameasdblclick",
-			"ConfigView.option.dm.dblclick.play",
-			"ConfigView.option.dm.dblclick.details",
-			"ConfigView.option.dm.dblclick.show",
-			"ConfigView.option.dm.dblclick.launch",
-			"ConfigView.option.dm.dblclick.launch.qv",
-			"ConfigView.option.dm.dblclick.open.browser",
+		String[][] enterOptions = {
+			{ "ConfigView.option.dm.enter.sameasdblclick", 		"-1" },
+			{ "ConfigView.option.dm.dblclick.play", 			"0" },
+			{ "ConfigView.option.dm.dblclick.show", 			"2" },
+			{ "ConfigView.option.dm.dblclick.launch", 			"3" },
+			{ "ConfigView.option.dm.dblclick.launch.content",	"7" },
+			{ "ConfigView.option.dm.dblclick.launch.qv", 		"4" },
+			{ "ConfigView.option.dm.dblclick.open.browser", 	"5" },
+			{ "ConfigView.option.dm.dblclick.details", 			"1" },
+			{ "ConfigView.option.dm.dblclick.details.pop", 		"6" },
 		};
 
 		String enterLabels[] = new String[enterOptions.length];
@@ -321,8 +348,8 @@ public class ConfigSectionInterfaceTablesSWT
 
 		for (int i = 0; i < enterOptions.length; i++) {
 
-			enterLabels[i] = MessageText.getString(enterOptions[i]);
-			enterValues[i] = "" + (i - 1);
+			enterLabels[i] = MessageText.getString(enterOptions[i][0]);
+			enterValues[i] = enterOptions[i][1];
 		}
 
 		add(new StringListParameterImpl("list.dm.enteraction",
@@ -335,93 +362,52 @@ public class ConfigSectionInterfaceTablesSWT
 		List<Parameter> listLaunchGroup = new ArrayList<>();
 
 		add(new LabelParameterImpl("ConfigView.label.lh.info"), listLaunchGroup);
+		
+		if ( Constants.isUnix ){
+			
+				// only need this for linux at the moment
+			
+			String sf = MessageText.getString( "explicit.helper.showfile", new String[]{  Utils.PL_SHOW_FILE });
+			
+			String info3 = MessageText.getString( "ConfigView.label.lh.info3", new String[]{ sf });
+			
+			add(new LabelParameterImpl("!" + info3 + "!"), listLaunchGroup);
+		}
+		
+		add(new LabelParameterImpl("ConfigView.label.lh.info2"), listLaunchGroup);
 
 		List<Parameter> listLaunchHelpers = new ArrayList<>();
 
-		for (int i = 0; i < 4; i++) {
+		for ( int i = 0; i < getLaunchHelperEntryCount(); i++ ){
 
-			StringParameterImpl exts = new StringParameterImpl(
-					"Table.lh" + i + ".exts", "ConfigView.label.lh.ext");
-			add(exts, listLaunchHelpers);
-			exts.setWidthInCharacters(15);
-
-			FileParameterImpl prog = new FileParameterImpl("Table.lh" + i + ".prog",
-					"ConfigView.label.lh.prog");
-			add(prog, listLaunchHelpers);
-
-			if (Constants.isOSX) {
-				if (configOSX != null) {
-					// Probably could be changed to prog.addListener(..), but I'm not touching it [tux]
-					configOSX = new ParameterListener() {
-						private boolean changing = false;
-
-						private String last_changed = "";
-
-						@Override
-						public void parameterChanged(String parameter_name) {
-							if (changing) {
-
-								return;
-
-							}
-
-							final String value = COConfigurationManager.getStringParameter(
-									parameter_name);
-
-							if (value.equals(last_changed)) {
-
-								return;
-							}
-
-							if (value.endsWith(".app")) {
-
-								Utils.execSWTThreadLater(1, new Runnable() {
-									@Override
-									public void run() {
-										last_changed = value;
-
-										try {
-											changing = true;
-
-											File file = new File(value);
-
-											String app_name = file.getName();
-
-											int pos = app_name.lastIndexOf(".");
-
-											app_name = app_name.substring(0, pos);
-
-											String new_value = value + "/Contents/MacOS/" + app_name;
-
-											if (new File(new_value).exists()) {
-
-												prog.setFileName(new_value);
-											}
-										} finally {
-
-											changing = false;
-										}
-									}
-								});
-							}
-						}
-					};
-				}
-				COConfigurationManager.addParameterListener("Table.lh" + i + ".prog",
-						configOSX);
-			}
+			addLaunchHelperLine( listLaunchHelpers, i );
 		}
 
+		// add another folder
+		ActionParameterImpl addButton = new ActionParameterImpl( "label.add.another", "Button.add" );
+		add("addAnother", addButton, listLaunchHelpers);
+
+		addButton.addListener(param -> {
+
+			int num = getLaunchHelperEntryCount();
+
+			setLaunchHelperEntryCount( num+1 );
+			
+			requestRebuild();
+		});
+		
 		add("pgLaunchHelpersInt",
-				new ParameterGroupImpl(null, listLaunchHelpers).setNumberOfColumns2(2),
+				new ParameterGroupImpl(null, listLaunchHelpers).setNumberOfColumns2(3),
 				listLaunchGroup);
 
 		add(new ParameterGroupImpl("ConfigView.section.style.launch",
 				listLaunchGroup));
 
-		add(new ParameterGroupImpl("ConfigView.section.style.library",
+		ParameterGroupImpl pgLibrary = add(new ParameterGroupImpl("ConfigView.section.style.library",
 				listLibrary));
 
+		pgLibrary.setReferenceID( REFID_SECTION_LIBRARY );
+		
 		List<Parameter> listSearchSubs = new ArrayList<>();
 
 		add(new BooleanParameterImpl("Search View Is Web View",
@@ -437,5 +423,133 @@ public class ConfigSectionInterfaceTablesSWT
 		add(new ParameterGroupImpl("ConfigView.section.style.searchsubs",
 				listSearchSubs));
 
+	}
+	
+	protected void
+	addLaunchHelperLine(
+		List<Parameter>		listLaunchHelpers,
+		int					index )
+	{
+		StringParameterImpl extsParam = new StringParameterImpl(	getLaunchHelperExtConfig( index ), "ConfigView.label.lh.ext");
+		add(extsParam, listLaunchHelpers);
+		extsParam.setWidthInCharacters(15);
+
+		FileParameterImpl progParam = new FileParameterImpl( getLaunchHelperProgConfig( index ), "ConfigView.label.lh.prog");
+		add(progParam, listLaunchHelpers);
+
+		/* This never worked due to the test "if (configOSX != null) {" being wrong... As I'm reworking this
+		 * I am removing it. Also note that the listener refers to "prog" so, if it was fixed to say "if (configOSX == null) {"
+		 * then the listener would also only refer to the first launch helper "prog" var...
+		if (Constants.isOSX) {
+			if (configOSX != null) {
+				// Probably could be changed to prog.addListener(..), but I'm not touching it [tux]
+				configOSX = new ParameterListener() {
+					private boolean changing = false;
+
+					private String last_changed = "";
+
+					@Override
+					public void parameterChanged(String parameter_name) {
+						if (changing) {
+
+							return;
+
+						}
+
+						final String value = COConfigurationManager.getStringParameter(
+								parameter_name);
+
+						if (value.equals(last_changed)) {
+
+							return;
+						}
+
+						if (value.endsWith(".app")) {
+
+							Utils.execSWTThreadLater(1, new Runnable() {
+								@Override
+								public void run() {
+									last_changed = value;
+
+									try {
+										changing = true;
+
+										File file = new File(value);
+
+										String app_name = file.getName();
+
+										int pos = app_name.lastIndexOf(".");
+
+										app_name = app_name.substring(0, pos);
+
+										String new_value = value + "/Contents/MacOS/" + app_name;
+
+										if (new File(new_value).exists()) {
+
+											prog.setFileName(new_value);
+										}
+									} finally {
+
+										changing = false;
+									}
+								}
+							});
+						}
+					}
+				};
+			}
+			COConfigurationManager.addParameterListener("Table.lh" + index + ".prog",
+					configOSX);
+		}
+		*/
+		
+		ActionParameterImpl deleteRow = new ActionParameterImpl( "", "" );
+		
+		deleteRow.setImageID( "smallx-c" );
+		
+		add( deleteRow, listLaunchHelpers);
+
+		deleteRow.addListener(param -> {
+			
+			Utils.execSWTThread(()->{
+
+				int num_lines = getLaunchHelperEntryCount();
+
+					// always blank the current row as we don't want the values re-appearing
+					// if rows re-added
+				
+				setLaunchHelpersExts( index, "" );
+				setLaunchHelpersProg( index, "" );
+				
+				if ( index == num_lines-1 ){
+					
+						// last one
+					
+					if ( index > 0 ){
+					
+							// remove last
+						
+						COConfigurationManager.setParameter( ICFG_LAUNCH_HELPERS_ENTRY_COUNT, num_lines-1);
+					}
+				}else{
+					
+						// copy down 
+					
+					for ( int i=index+1; i<= num_lines;i++ ){
+						
+						String exts = getLaunchHelpersExts( i );
+						String prog	= getLaunchHelpersProg( i );
+					
+						setLaunchHelpersExts( i-1, exts );
+						setLaunchHelpersProg( i-1, prog );
+					}
+					
+						// remove last
+					
+					COConfigurationManager.setParameter( ICFG_LAUNCH_HELPERS_ENTRY_COUNT, num_lines-1);
+				}
+				requestRebuild();
+			});
+		});
 	}
 }

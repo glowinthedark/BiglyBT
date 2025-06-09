@@ -31,6 +31,8 @@ import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.disk.DiskManagerPiece;
 import com.biglybt.core.disk.DiskManagerReadRequest;
 import com.biglybt.core.impl.CoreImpl;
+import com.biglybt.core.ipfilter.IpFilter;
+import com.biglybt.core.ipfilter.IpFilterManagerFactory;
 import com.biglybt.core.logging.*;
 import com.biglybt.core.networkmanager.*;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
@@ -63,6 +65,7 @@ import com.biglybt.pif.clientid.ClientIDGenerator;
 import com.biglybt.pif.dht.mainline.MainlineDHTProvider;
 import com.biglybt.pif.network.Connection;
 import com.biglybt.pif.peers.Peer;
+import com.biglybt.pif.peers.PeerDescriptor;
 import com.biglybt.pifimpl.local.clientid.ClientIDManagerImpl;
 import com.biglybt.pifimpl.local.network.ConnectionImpl;
 
@@ -74,6 +77,8 @@ implements PEPeerTransport
 {
 	protected final static LogIDs LOGID = LogIDs.PEER;
 
+	private static final IpFilter ip_filter = IpFilterManagerFactory.getSingleton().getIPFilter();
+
 	private volatile int	_lastPiece =-1;		//last piece that was requested from this peer (mostly to try to request from same one)
 
 	protected final PEPeerControl 	manager;
@@ -84,7 +89,7 @@ implements PEPeerTransport
 
 	private final String			peer_source;
 	private byte[] peer_id;
-	private final String ip;
+	private String ip;
 	private final String network;
 	protected String ip_resolved;
 	private IPToHostNameResolverRequest	ip_resolver_request;
@@ -103,7 +108,6 @@ implements PEPeerTransport
 	protected PEPeerStats peer_stats;
 
 	private final ArrayList<DiskManagerReadRequest> requested = new ArrayList<>();
-	private final AEMonitor	requested_mon = new AEMonitor( "PEPeerTransportProtocol:Req" );
 
 	private Map data;
 
@@ -116,8 +120,7 @@ implements PEPeerTransport
 	protected boolean choking_other_peer = true;
 	private boolean interested_in_other_peer = false;
 	private boolean other_peer_interested_in_me = false;
-	private long snubbed =0;
-
+	
 	/** lazy allocation; null until needed */
 	private volatile BitFlags	peerHavePieces =null;
 	private volatile boolean	availabilityAdded =false;
@@ -136,7 +139,8 @@ implements PEPeerTransport
 	private static final byte RELATIVE_SEEDING_UPLOAD_ONLY_SEED = 0x02;
 	private byte relativeSeeding = RELATIVE_SEEDING_NONE;
 
-	private final boolean incoming;
+	private final boolean incoming_raw;
+	private boolean incoming_effective;
 
 	protected volatile boolean closing = false;
 	private volatile int current_peer_state;
@@ -148,8 +152,11 @@ implements PEPeerTransport
 
 	private boolean identityAdded = false;  //needed so we don't remove id's in closeAll() on duplicate connection attempts
 
-	protected int connection_state = PEPeerTransport.CONNECTION_PENDING;
-
+	private int connection_state = PEPeerTransport.CONNECTION_PENDING;
+	
+	private long 	outbound_connection_start;
+	private int 	outbound_connection_progress	= CP_UNKNOWN;
+	
 	private String client = ""; // Client name to show to user.
 	private String client_peer_id = ""; // Client name derived from the peer ID.
 	private String client_handshake = ""; // Client name derived from the handshake.
@@ -164,13 +171,13 @@ implements PEPeerTransport
 	//Spread time (0 secs , fake default)
 	private int spreadTimeHint = 0 * 1000;
 
-	private long last_message_sent_time = 0;
-	private long last_message_received_time = 0;
-	private long last_data_message_received_time = -1;
-	private long last_good_data_time =-1;			// time data written to disk was recieved
-	private long last_data_message_sent_time = -1;
-
-	private long connection_established_time = 0;
+	private long snubbed_time_mono 						= -1;
+	private long last_message_sent_time_mono 			= -1;
+	private long last_message_received_time_mono 		= -1;
+	private long last_data_message_received_time_mono 	= -1;
+	private long last_good_data_time_mono				= -1;		// time data written to disk was received
+	private long last_data_message_sent_time_mono 		= -1;
+	private long connection_established_time_mono 		= -1;
 
 	private int consecutive_no_request_count;
 
@@ -209,6 +216,7 @@ implements PEPeerTransport
 	private static final boolean DEBUG_FAST = false;
 
 	private boolean ut_pex_enabled 			= false;
+	private boolean ut_holepunch_enabled	= false;
 	private boolean fast_extension_enabled 	= false;
 	private boolean ml_dht_enabled 			= false;
 
@@ -396,9 +404,9 @@ implements PEPeerTransport
 	private HashWrapper peerSessionID;
 	private HashWrapper mySessionID;
 
-	// allow reconnect if we've sent or recieved at least 1 piece over the current connection
+	// allow reconnect if we've sent or received at least 1 piece over the current connection
 	private boolean allowReconnect;
-
+	private boolean isReconnect;
 
 	private Set<Object>		upload_disabled_set;
 	private Set<Object>		download_disabled_set;
@@ -427,6 +435,9 @@ implements PEPeerTransport
 
 	private long request_latency;
 
+	private volatile long 			hp_last_send;
+	private volatile InetAddress	hp_last_address;
+	
 	//INCOMING
 	public
 	PEPeerTransportProtocol(
@@ -440,13 +451,25 @@ implements PEPeerTransport
 		connection 		= _connection;
 		data			= _initial_user_data;
 
-		incoming = true;
+		incoming_raw = true;
 
+		Boolean b_incoming = (Boolean)connection.getEndpoint().getProperty( AEProxyAddressMapper.MAP_PROPERTY_CONNECTION_INCOMING );
+		
+		if ( b_incoming != null ){
+			
+			incoming_effective = b_incoming;
+			
+		}else{
+			
+			incoming_effective = true;
+		}
+		
 		is_metadata_download = manager.isMetadataDownload();
 
 		diskManager =manager.getDiskManager();
 		piecePicker =manager.getPiecePicker();
-		nbPieces =diskManager.getNbPieces();
+		
+		nbPieces =manager.getNbPieces();
 
 
 		InetSocketAddress notional_address = _connection.getEndpoint().getNotionalAddress();
@@ -459,7 +482,7 @@ implements PEPeerTransport
 
 		peer_item_identity = PeerItemFactory.createPeerItem( ip, port, PeerItem.convertSourceID( _peer_source ), PeerItemFactory.HANDSHAKE_TYPE_PLAIN, 0, PeerItemFactory.CRYPTO_LEVEL_1, 0 );  //this will be recreated upon az handshake decode
 
-		plugin_connection = new ConnectionImpl(connection, incoming);
+		plugin_connection = new ConnectionImpl(connection, incoming_raw );
 
 		peer_stats = manager.createPeerStats( this );
 
@@ -473,7 +496,7 @@ implements PEPeerTransport
 		// split out connection initiation from constructor so we can get access to the peer transport
 		// before message processing starts
 
-		if ( incoming ){
+		if ( incoming_raw ){
 
 			//"fake" a connect request to register our listener
 			connection.connect(
@@ -516,7 +539,7 @@ implements PEPeerTransport
 						Throwable failure_msg )
 					{  //should never happen
 						Debug.out( "ERROR: incoming connect failure: ", failure_msg );
-						closeConnectionInternally( "ERROR: incoming connect failure [" + PEPeerTransportProtocol.this + "] : " + failure_msg.getMessage(), true, true );
+						closeConnectionInternally( "ERROR: incoming connect failure [" + PEPeerTransportProtocol.this + "] : " + failure_msg.getMessage(), Transport.CR_NONE, true, true );
 					}
 
 					@Override
@@ -528,7 +551,7 @@ implements PEPeerTransport
 							Debug.out( error );
 						}
 
-						closeConnectionInternally( "connection exception: " + error.getMessage(), false, true );
+						closeConnectionInternally( "connection exception: " + error.getMessage(), Transport.CR_NONE, false, true );
 					}
 
 					@Override
@@ -600,12 +623,12 @@ implements PEPeerTransport
 
 		peer_item_identity = PeerItemFactory.createPeerItem( ip, tcp_listen_port, PeerItem.convertSourceID( _peer_source ), PeerItemFactory.HANDSHAKE_TYPE_PLAIN, _udp_port, crypto_level, 0 );  //this will be recreated upon az handshake decode
 
-		incoming = false;
+		incoming_raw = incoming_effective = false;
 
 		peer_stats = manager.createPeerStats( this );
 
 		if( port < 0 || port > 65535 ) {
-			closeConnectionInternally( "given remote port is invalid: " + port );
+			closeConnectionInternally( "given remote port is invalid: " + port, Transport.CR_PORT_BLOCKED );
 			connection = null;
 			return;
 		}
@@ -635,7 +658,7 @@ implements PEPeerTransport
 		InetSocketAddress	endpoint_address;
 		ProtocolEndpoint	pe1 = null;
 		ProtocolEndpoint	pe2 = null;
-
+		
 		if ( _use_tcp ){
 
 			boolean utp_available = ProtocolEndpointFactory.isHandlerRegistered( ProtocolEndpoint.PROTOCOL_UTP );
@@ -673,9 +696,23 @@ implements PEPeerTransport
 	
 					if ( !socks_active ){
 	
-						if ( RandomUtils.nextInt(2) == 1 ){
+						if ( RandomUtils.nextInt(4) != 0 ){
 	
 							pe2 = ProtocolEndpointFactory.createEndpoint( ProtocolEndpoint.PROTOCOL_UTP, endpoint_address );
+							
+						}else{
+					
+							if ( _initial_user_data != null ){
+							
+								Boolean prefer_utp = (Boolean)_initial_user_data.get( Peer.PR_PREFER_UTP );
+			
+								if ( prefer_utp != null && prefer_utp ){
+																	
+										// note that ConnectionEndpoint preferentially connects to uTP before TCP
+		
+									pe2 = ProtocolEndpointFactory.createEndpoint( ProtocolEndpoint.PROTOCOL_UTP, endpoint_address );							
+								}
+							}
 						}
 					}
 				}else{
@@ -705,7 +742,7 @@ implements PEPeerTransport
 
 		if ( pe1 == null ){
 			
-			closeConnectionInternally( "No enabled public peer protocols" );
+			closeConnectionInternally( "No enabled public peer protocols", Transport.CR_PROTOCOL_BLOCKED );
 			
 			connection = null;
 			
@@ -730,7 +767,7 @@ implements PEPeerTransport
 					!_require_crypto_handshake,
 					manager.getSecrets( _crypto_level ));
 
-		plugin_connection = new ConnectionImpl(connection, incoming);
+		plugin_connection = new ConnectionImpl(connection, incoming_raw);
 
 		changePeerState( PEPeer.CONNECTING );
 
@@ -812,17 +849,32 @@ implements PEPeerTransport
 				priority,
 				new NetworkConnection.ConnectionListener()
 				{
-					private boolean	connect_ok;
-
+					boolean first_time = true;
+					
 					@Override
 					public final int
 					connectStarted(
 						int		default_connect_timeout )
 					{
-						connection_state = PEPeerTransport.CONNECTION_CONNECTING;
+							// we can end up here twice when connecting to both TCP and uTP...
+						
+						synchronized( this ){
+							
+							if ( first_time ){
+						
+								first_time = false;
+								
+								connection_state = PEPeerTransport.CONNECTION_CONNECTING;
 
+								outbound_connection_start		= SystemTime.getMonotonousTime();
+								outbound_connection_progress	= CP_CONNECTING;
+							}
+						}
+						
 						if ( default_connect_timeout <= 0 ){
 
+								// uTP case - timeouts handled separately
+							
 							return( default_connect_timeout );
 						}
 
@@ -834,7 +886,7 @@ implements PEPeerTransport
 					connectSuccess(
 						ByteBuffer remaining_initial_data )
 					{
-						connect_ok = true;
+						outbound_connection_progress = CP_CONNECT_OK;
 
 						if( closing ) {
 							//Debug.out( "PEPeerTransportProtocol::connectSuccess() called when closing." );
@@ -865,7 +917,9 @@ implements PEPeerTransport
 					connectFailure(
 						Throwable failure_msg )
 					{
-						closeConnectionInternally( "failed to establish outgoing connection: " + failure_msg.getMessage(), true, true );
+						outbound_connection_progress = CP_CONNECT_FAILED;
+						
+						closeConnectionInternally( "failed to establish outgoing connection: " + failure_msg.getMessage(), Transport.CR_NONE, true, true );
 					}
 
 					@Override
@@ -877,7 +931,16 @@ implements PEPeerTransport
 							Debug.out( "error.getMessage() == null", error );
 						}
 
-						closeConnectionInternally( "connection exception: " + error.getMessage(), !connect_ok, true );
+							// this method can be called anytime, not just during connection
+						
+						boolean connecting = outbound_connection_progress == CP_CONNECTING;
+							
+						if ( connecting ){
+							
+							outbound_connection_progress = CP_CONNECT_FAILED;
+						}
+						
+						closeConnectionInternally( "connection exception: " + error.getMessage(), Transport.CR_NONE, connecting, true );
 					}
 
 					@Override
@@ -946,7 +1009,7 @@ implements PEPeerTransport
 		//link in outgoing have message aggregator
 		outgoing_have_message_aggregator = new OutgoingBTHaveMessageAggregator( connection.getOutgoingMessageQueue(), other_peer_bt_have_version, other_peer_az_have_version );
 
-		connection_established_time = SystemTime.getCurrentTime();
+		connection_established_time_mono = SystemTime.getMonotonousTime();
 
 		connection_state = PEPeerTransport.CONNECTION_WAITING_FOR_HANDSHAKE;
 		changePeerState( PEPeer.HANDSHAKING );
@@ -969,34 +1032,49 @@ implements PEPeerTransport
 		return( peer_source );
 	}
 
-
+	@Override
+	public int
+	getOutboundConnectionProgress()
+	{
+		int cp = outbound_connection_progress;
+		
+		if ( cp == CP_CONNECT_OK ){
+			
+			if ( last_message_received_time_mono >= 0 ){
+				
+				cp = CP_RECEIVED_DATA;
+			}
+		}
+		
+		return( cp );
+	}
 
 	/**
 	 * Close the peer connection from within the PEPeerTransport object.
 	 * @param reason
 	 */
-	protected void closeConnectionInternally( String reason, boolean connect_failed, boolean network_failure ) {
-		performClose( reason, connect_failed, false, network_failure );
+	protected void closeConnectionInternally( String reason, int reason_code, boolean connect_failed, boolean network_failure ) {
+		performClose( reason, reason_code, connect_failed, false, network_failure );
 	}
 
-	protected void closeConnectionInternally( String reason ) {
-		performClose( reason, false, false, false );
+	protected void closeConnectionInternally( String reason, int reason_code ) {
+		performClose( reason, reason_code, false, false, false );
 	}
 
 
 	/**
 	 * Close the peer connection from the PEPeerControl manager side.
 	 * NOTE: This method assumes PEPeerControl already knows about the close.
-	 * This method is inteded to be only invoked by select administrative methods.
+	 * This method is intended to be only invoked by select administrative methods.
 	 * You probably should not invoke this directly.
 	 */
 	@Override
-	public void closeConnection(String reason ) {
-		performClose( reason, false, true, false );
+	public void closeConnection(String reason, int reason_code ) {
+		performClose( reason, reason_code, false, true, false );
 	}
 
 
-	private void performClose( String reason, boolean connect_failed, boolean externally_closed, boolean network_failure )
+	private void performClose( String reason, int close_reason_out, boolean connect_failed, boolean externally_closed, boolean network_failure )
 	{
 		try{
 			closing_mon.enter();
@@ -1005,7 +1083,7 @@ implements PEPeerTransport
 				return;
 			closing = true;
 
-			// immediatly lose interest in peer
+			// immediately lose interest in peer
 			interested_in_other_peer =false;
 			lastNeededUndonePieceChange =Long.MAX_VALUE;
 
@@ -1041,10 +1119,46 @@ implements PEPeerTransport
 			outgoing_piece_message_handler.destroy();
 		}
 
-		if( connection != null ) {  //can be null if close is called within ::<init>::, like when the given port is invalid
+		int	close_reason_in = 0;
+		
+		if ( connection != null ) {  //can be null if close is called within ::<init>::, like when the given port is invalid
+			
+			Transport transport = connection.getTransport();
+			
+			if ( transport != null ){
+				
+				Integer close_reason = (Integer)transport.getUserData( Transport.KEY_CLOSE_REASON );
+				
+				if (  close_reason != null ){
+					
+					close_reason_in = close_reason;
+				}
+				
+				if ( close_reason_out != Transport.CR_NONE ){
+									
+					transport.setUserData( Transport.KEY_CLOSE_REASON, close_reason_out );
+				}
+			}
+			
 			connection.close( reason );
 		}
 
+		if ( close_reason_in != 0 ){
+			
+			manager.handleCloseReason( this, false, close_reason_in );
+			
+		}else if ( close_reason_out != 0 ){
+			
+			manager.handleCloseReason( this, true, close_reason_out );
+			
+		}else{
+			
+			if ( outbound_connection_progress == CP_CONNECT_FAILED ){
+				
+				manager.handleCloseReason( this, true, Transport.CR_INTERNAL_CONNECT_FAILED );
+			}
+		}
+				
 		if ( ip_resolver_request != null ){
 			ip_resolver_request.cancel();
 		}
@@ -1053,9 +1167,18 @@ implements PEPeerTransport
 
 		changePeerState( PEPeer.DISCONNECTED );
 
-		if (Logger.isEnabled())
-			Logger.log(new LogEvent(this, LOGID, "Peer connection closed: " + reason));
-
+		if (Logger.isEnabled()){
+			String str;
+			if ( close_reason_in != 0 ){
+				str = " (code_in " + close_reason_in + ")";
+			}else if ( close_reason_out != 0 ){
+				str = " (code_out " + close_reason_out + ")";
+			}else{
+				str = "";
+			}
+			Logger.log(new LogEvent(this, LOGID, "Peer connection closed: " + reason + str ));
+		}
+		
 		if( !externally_closed ) {  //if closed internally, notify manager, otherwise we assume it already knows
 			manager.peerConnectionClosed( this, connect_failed, network_failure );
 		}
@@ -1072,8 +1195,16 @@ implements PEPeerTransport
 		plugin_connection = null;
 
 		// only save stats if it's worth doing so; ignore rapid connect-disconnects
-		if (peer_stats.getTotalDataBytesReceived() > 0 || peer_stats.getTotalDataBytesSent() > 0 || SystemTime.getCurrentTime() - connection_established_time > 30 * 1000)
+		
+		if ( 	peer_stats.getTotalDataBytesReceived() > 0 || 
+				peer_stats.getTotalDataBytesSent() > 0 || 
+				getUploadRateLimitBytesPerSecond() != 0 ||
+				getDownloadRateLimitBytesPerSecond() != 0 ||
+				(	connection_established_time_mono >= 0 &&
+					SystemTime.getMonotonousTime() - connection_established_time_mono > 30*1000 )){
+			
 			recentlyDisconnected.put(mySessionID, this);
+		}
 	}
 
 	@Override
@@ -1084,7 +1215,12 @@ implements PEPeerTransport
 	}
 
 	@Override
-	public PEPeerTransport reconnect(boolean tryUDP, boolean tryIPv6) {
+	public PEPeerTransport 
+	reconnect(
+		boolean 	tryUDP, 
+		boolean 	tryIPv6,
+		Map			userData )
+	{
 
 		boolean use_tcp = isTCP() && !(tryUDP && getUDPListenPort() > 0);
 
@@ -1092,17 +1228,29 @@ implements PEPeerTransport
 		{
 			boolean use_crypto = getPeerItemIdentity().getHandshakeType() == PeerItemFactory.HANDSHAKE_TYPE_CRYPTO;
 
+			String peer_source = getPeerSource();
+			
+			if ( userData != null ){
+				
+				String ps = (String)userData.get( Peer.PR_PEER_SOURCE );
+				
+				if ( ps != null ){
+					
+					peer_source = ps;
+				}
+			}
+					
 			PEPeerTransport new_conn =
 				PEPeerTransportFactory.createTransport(
 						manager,
-						getPeerSource(),
+						peer_source,
 						tryIPv6 && alternativeAddress != null ? alternativeAddress.getHostAddress() : getIp(),
 						getTCPListenPort(),
 						getUDPListenPort(),
 						use_tcp,
 						use_crypto,
 						crypto_level,
-						null );
+						userData );
 
 			// log to both relations
 			Logger.log(new LogEvent(new Object[] {this, new_conn},LOGID,"attempting to reconnect, creating new connection"));
@@ -1132,6 +1280,10 @@ implements PEPeerTransport
 		return allowReconnect;
 	}
 
+	@Override
+	public boolean isReconnect(){
+		return( isReconnect );
+	}
 
 	private void checkForReconnect(HashWrapper oldID)
 	{
@@ -1140,12 +1292,21 @@ implements PEPeerTransport
 		if(oldTransport != null)
 		{
 			Logger.log(new LogEvent(this,LOGID,LogAlert.AT_INFORMATION,"reassociating stats from "+oldTransport+" with this connection"));
+			isReconnect = true;
 			peerSessionID = oldTransport.peerSessionID;
 			peer_stats = oldTransport.peer_stats;
 			peer_stats.setPeer(this);
 			setSnubbed(oldTransport.isSnubbed());
-			snubbed = oldTransport.snubbed;
-			last_good_data_time = oldTransport.last_good_data_time;
+			snubbed_time_mono = oldTransport.snubbed_time_mono;
+			last_good_data_time_mono = oldTransport.last_good_data_time_mono;
+			int old_up = getUploadRateLimitBytesPerSecond();
+			if ( old_up != 0 ){
+				setUploadRateLimitBytesPerSecond( old_up );
+			}
+			int old_down = getDownloadRateLimitBytesPerSecond();
+			if ( old_down != 0 ){
+				setDownloadRateLimitBytesPerSecond( old_down );
+			}
 		}
 	}
 
@@ -1245,7 +1406,7 @@ implements PEPeerTransport
 				manager.isSeeding() &&
 				!( ENABLE_LAZY_BITFIELD || manual_lazy_bitfield_control || manager.isSuperSeedMode());
 
-			// maintain this for any kinds of compatability
+			// maintain this for any kinds of compatibility
 
 		data_dict.put( "upload_only", new Long(upload_only? 1L : 0L));
 
@@ -1267,7 +1428,9 @@ implements PEPeerTransport
 
 		NetworkAdmin na = NetworkAdmin.getSingleton();
 
-		if ( peer_item_identity.getNetwork() == AENetworkClassifier.AT_PUBLIC && !na.isSocksActive()){
+		String network = peer_item_identity.getNetwork();
+		
+		if ( network == AENetworkClassifier.AT_PUBLIC && !na.isSocksActive()){
 				// don't send public address in handshake
 			InetAddress defaultV6 = na.hasIPV6Potential(true) ? na.getDefaultPublicAddressV6() : null;
 
@@ -1276,9 +1439,21 @@ implements PEPeerTransport
 			}
 		}
 
+		boolean utp_avail = ProtocolEndpointFactory.isHandlerRegistered( ProtocolEndpoint.PROTOCOL_UTP );
+		
+		boolean ps_enabled 	= manager.isPeerSourceEnabled( PEPeerSource.PS_HOLE_PUNCH );
+		
+		boolean socks_active = NetworkAdmin.getSingleton().isSocksActive();
+		
+		if ( network != AENetworkClassifier.AT_PUBLIC ){
+			
+			data_dict.put("p", 6881 );
+			data_dict.remove( "ipv6" );
+		}
+		
 		LTHandshake lt_handshake = new LTHandshake(data_dict, other_peer_bt_lt_ext_version );
 
-		lt_handshake.addDefaultExtensionMappings( true, is_metadata_download || metainfo_size > 0, true );
+		lt_handshake.addDefaultExtensionMappings( true, is_metadata_download || metainfo_size > 0, true, utp_avail && ps_enabled && !socks_active );
 
 		connection.getOutgoingMessageQueue().addMessage(lt_handshake, false);
 	}
@@ -1319,7 +1494,9 @@ implements PEPeerTransport
 
 		NetworkAdmin na = NetworkAdmin.getSingleton();
 
-		if ( peer_item_identity.getNetwork() == AENetworkClassifier.AT_PUBLIC && !na.isSocksActive()){
+		String network = peer_item_identity.getNetwork();
+		
+		if (  network == AENetworkClassifier.AT_PUBLIC && !na.isSocksActive()){
 				// don't send public address in handshake
 			defaultV6 = na.hasIPV6Potential(true) ? na.getDefaultPublicAddressV6() : null;
 		}
@@ -1350,6 +1527,35 @@ implements PEPeerTransport
 			peer_version = client_name.substring( pos+1 );
 		}
 		
+		if (  network != AENetworkClassifier.AT_PUBLIC ){
+			
+			local_tcp_port	= 6881;
+			local_udp_port	= 0;
+			local_udp2_port	= 0;
+			defaultV6		= null;
+		}
+		
+		String local_host = null;
+		
+		if ( network == AENetworkClassifier.AT_TOR ){
+		
+			try{
+				TransportStartpoint sp = connection.getTransport().getTransportStartpoint();
+				
+				InetSocketAddress address = sp.getProtocolStartpoint().getNotionalAddress();
+				
+				String host = AddressUtils.getHostAddress( address );
+				
+				if ( AENetworkClassifier.categoriseAddress( host ) == AENetworkClassifier.AT_TOR ){
+					
+					local_host		= host;
+					local_tcp_port	= address.getPort();
+				}
+			}catch( Throwable e ){
+		
+			}
+		}
+		
 		AZHandshake az_handshake = new AZHandshake(
 				AZPeerIdentityManager.getAZPeerIdentity(),
 				mySessionID,
@@ -1360,6 +1566,7 @@ implements PEPeerTransport
 				local_udp_port,
 				local_udp2_port,
 				defaultV6,
+				local_host,
 				manager.isPrivateTorrent()?0:( is_metadata_download?0:manager.getTorrentInfoDictSize()),
 				avail_ids,
 				avail_vers,
@@ -1419,15 +1626,17 @@ implements PEPeerTransport
 
 	/**
 	 * Checks if this peer is a seed or not by trivially checking if
-	 * thier Have bitflags exisits and shows a number of bits set equal
+	 * their Have bitflags exists and shows a number of bits set equal
 	 * to the torrent # of pieces (and the torrent # of pieces is >0)
 	 */
 	private void checkSeed()
 	{
 			// seed implicitly means *something* to send (right?)
 
-		if (peerHavePieces !=null && nbPieces >0){
-			setSeed((peerHavePieces.nbSet ==nbPieces));
+		BitFlags bitFlags = peerHavePieces;
+		
+		if (bitFlags !=null && nbPieces >0){
+			setSeed((bitFlags.nbSet ==nbPieces));
 		}else{
 			setSeed(false);
 		}
@@ -1438,7 +1647,7 @@ implements PEPeerTransport
 		}else if(manager.isSeeding() && (relativeSeeding & RELATIVE_SEEDING_UPLOAD_ONLY_INDICATED) != 0){
 			// peer indicated upload-only, we're seeding so he's a relative seed
 			relativeSeeding |= RELATIVE_SEEDING_UPLOAD_ONLY_SEED;
-		}else if(peerHavePieces !=null && nbPieces > 0){
+		}else if(bitFlags !=null && nbPieces > 0){
 
 			int piecesDone = manager.getPiecePicker().getNbPiecesDone();
 			DiskManagerPiece[] dmPieces = diskManager.getPieces();
@@ -1450,26 +1659,26 @@ implements PEPeerTransport
 				 * as relative seed. Useful to disconnect not-useful pseudo-seeds during downloading
 				 */
 
-				for (int i = peerHavePieces.start;i <= peerHavePieces.end;i++){
+				for (int i = bitFlags.start;i <= bitFlags.end;i++){
 
 						// relative seed if peer doesn't have the piece, we already have it or we don't need it
 
-					couldBeSeed &= !peerHavePieces.flags[i] || dmPieces[i].isDone() || !dmPieces[i].isNeeded();
+					couldBeSeed &= !bitFlags.flags[i] || dmPieces[i].isDone() || !dmPieces[i].isNeeded();
 
 					if (!couldBeSeed){
 
 						break;
 					}
 				}
-			}else if ( manager.isSeeding() && piecesDone <= peerHavePieces.nbSet ){
+			}else if ( manager.isSeeding() && piecesDone <= bitFlags.nbSet ){
 
 					// we're seeding, check if peer has all the data we have (and more), flag as relative seed if so
 
-				for (int i = peerHavePieces.start;i <= peerHavePieces.end;i++){
+				for (int i = bitFlags.start;i <= bitFlags.end;i++){
 
 						// relative seed if we don't have the piece or we have it and the peer has it too
 
-					couldBeSeed &= !(dmPieces[i].isDone()) || peerHavePieces.flags[i];
+					couldBeSeed &= !(dmPieces[i].isDone()) || bitFlags.flags[i];
 
 					if( !couldBeSeed ){
 
@@ -1510,8 +1719,7 @@ implements PEPeerTransport
 
 		boolean added =false;
 
-		try{
-			requested_mon.enter();
+		synchronized( requested ){
 
 			if (!requested.contains(request)){
 
@@ -1524,11 +1732,8 @@ implements PEPeerTransport
 
 				added = true;
 			}
-		}finally{
-
-			requested_mon.exit();
 		}
-
+		
 		if ( added ){
 
 			if ( is_metadata_download ){
@@ -1586,14 +1791,9 @@ implements PEPeerTransport
 	getRequestIndex(
 			DiskManagerReadRequest request )
 	{
-		try{
-			requested_mon.enter();
+		synchronized( requested ){
 
 			return( requested.indexOf( request ));
-
-		}finally{
-
-			requested_mon.exit();
 		}
 	}
 
@@ -1978,7 +2178,7 @@ implements PEPeerTransport
 	public String getClient() {  return client;  }
 
 	@Override
-	public boolean isIncoming() {  return incoming;  }
+	public boolean isIncoming() {  return incoming_effective;  }
 
 
 	@Override
@@ -2016,7 +2216,7 @@ implements PEPeerTransport
 	}
 
 	/**
-	 * @return null if no bitfield has been recieved yet
+	 * @return null if no bitfield has been received yet
 	 * else returns BitFlags indicating what pieces the peer has
 	 */
 	@Override
@@ -2071,35 +2271,39 @@ implements PEPeerTransport
 	}
 
 	@Override
-	public boolean isSnubbed() {  return snubbed !=0;  }
+	public boolean isSnubbed() {  return snubbed_time_mono >= 0;  }
 
 	@Override
 	public long getSnubbedTime()
 	{
-		if (snubbed ==0)
+		if (snubbed_time_mono < 0 ){
 			return 0;
-		final long now =SystemTime.getCurrentTime();
-		if (now <snubbed)
-			snubbed =now -26; // odds are ...
-		return now -snubbed;
+		}
+		
+		final long now_mono = SystemTime.getMonotonousTime();
+		
+		return( now_mono - snubbed_time_mono );
 	}
 
 	@Override
 	public void setSnubbed(boolean b)
 	{
-		if (!closing)
-		{
-			final long now =SystemTime.getCurrentTime();
-			if (!b)
-			{
-				if (snubbed !=0)
-				{
-					snubbed =0;
+		if ( !closing ){
+			
+			long now_mono = SystemTime.getMonotonousTime();
+			
+			if (!b){
+				
+				if ( snubbed_time_mono >= 0 ){
+					
+					snubbed_time_mono = -1;
+					
 					manager.decNbPeersSnubbed();
 				}
-			} else if (snubbed ==0)
-			{
-				snubbed =now;
+			}else if ( snubbed_time_mono < 0 ){
+				
+				snubbed_time_mono = now_mono;
+				
 				manager.incNbPeersSnubbed();
 			}
 		}
@@ -2203,8 +2407,7 @@ implements PEPeerTransport
 			connection.getOutgoingMessageQueue().removeMessagesOfType(type, false);
 		}
 		if (requested !=null &&requested.size() >0) {
-			try{
-				requested_mon.enter();
+			synchronized( requested ){
 
 				if (!closing)
 				{   // may have unchoked us, gotten a request, then choked without filling it - snub them
@@ -2215,9 +2418,6 @@ implements PEPeerTransport
 					final DiskManagerReadRequest request =(DiskManagerReadRequest) requested.remove(i);
 					manager.requestCanceled(request);
 				}
-			}finally{
-
-				requested_mon.exit();
 			}
 		}
 	}
@@ -2279,9 +2479,8 @@ implements PEPeerTransport
 		int		piece_offset,
 		int		length )
 	{
-		try{
-			requested_mon.enter();
-
+		synchronized( requested ){
+			
 			for ( DiskManagerReadRequest r: requested ){
 
 				if ( r.getPieceNumber() == piece_number &&
@@ -2293,54 +2492,47 @@ implements PEPeerTransport
 			}
 
 			return( null );
-
-		}finally{
-
-			requested_mon.exit();
 		}
 	}
 
-	private boolean	hasBeenRequested( DiskManagerReadRequest request ) {
-		try{  requested_mon.enter();
+	private boolean	
+	hasBeenRequested( 
+		DiskManagerReadRequest request ) 
+	{
+		synchronized( requested ){
 
-		return requested.contains( request );
+			return requested.contains( request );
 		}
-		finally{  requested_mon.exit();  }
 	}
 
 	protected void
 	removeRequest(
-			DiskManagerReadRequest	request )
+		DiskManagerReadRequest	request )
 	{
-		try{
-			requested_mon.enter();
+		synchronized( requested ){
 
 			requested.remove(request);
-		}finally{
-
-			requested_mon.exit();
 		}
-	    	final BTRequest msg = new BTRequest( request.getPieceNumber(), request.getOffset(), request.getLength(), other_peer_request_version );
+	    
+		final BTRequest msg = new BTRequest( request.getPieceNumber(), request.getOffset(), request.getLength(), other_peer_request_version );
+		
 		connection.getOutgoingMessageQueue().removeMessage( msg, false );
+		
 		msg.destroy();
 	}
 
 	private void
-	resetRequestsTime(final long now)
+	resetRequestsTimeMono(final long mono_now)
 	{
-		try{
-			requested_mon.enter();
-
+		synchronized( requested ){
+			
 			final int requestedSize =requested.size();
 			for (int i =0; i <requestedSize; i++)
 			{
 				final DiskManagerReadRequest request =(DiskManagerReadRequest) requested.get(i);
 				if (request != null)
-					request.resetTime(now);
+					request.resetTimeMono(mono_now);
 			}
-		}finally{
-
-			requested_mon.exit();
 		}
 	}
 
@@ -2362,17 +2554,22 @@ implements PEPeerTransport
 
 	@Override
 	public void doKeepAliveCheck() {
-		final long now =SystemTime.getCurrentTime();
-		final long wait_time =now -last_message_sent_time;
+		long mono_now 	= SystemTime.getMonotonousTime();
 
-		if( last_message_sent_time == 0 || wait_time < 0 ) {
-			last_message_sent_time =now; //don't send if brand new connection
+		if( last_message_sent_time_mono == -1 ) {
+			
+			last_message_sent_time_mono = mono_now; //don't send if brand new connection
+			
 			return;
 		}
 
-		if( wait_time > 2*60*1000 ) {  //2min keep-alive timer
+		long wait_time 	= mono_now -last_message_sent_time_mono;
+
+		if ( wait_time > 2*60*1000 ){  //2min keep-alive timer
+			
 			sendKeepAlive();
-			last_message_sent_time =now;  //not quite true, but we don't want to queue multiple keep-alives before the first is actually sent
+			
+			last_message_sent_time_mono = mono_now;  //not quite true, but we don't want to queue multiple keep-alives before the first is actually sent
 		}
 	}
 
@@ -2426,28 +2623,74 @@ implements PEPeerTransport
 			checkAllowedFast();
 		}
 
-		final long now =SystemTime.getCurrentTime();
-		//make sure we time out stalled connections
-		if( connection_state == PEPeerTransport.CONNECTION_FULLY_ESTABLISHED ) {
-			if (last_message_received_time >now)
-				last_message_received_time =now;
-			if (last_data_message_received_time >now)
-				last_data_message_received_time =now;
-			if (now -last_message_received_time >5*60*1000
-					&&now -last_data_message_received_time >5*60*1000) { //5min timeout
-				// assume this is due to a network failure
-				// e.g. something that didn't close the TCP socket properly
-				// will attempt reconnect
-				closeConnectionInternally( "timed out while waiting for messages", false, true );
+		final long mono_now = SystemTime.getMonotonousTime();
+		
+		if ( connection_state == PEPeerTransport.CONNECTION_CONNECTING ){
+
+			// had reports of connections stuck in this state forever, even though we're supposed to 
+			// run a timeout on them
+			
+			if ( outbound_connection_start > 0 && mono_now - outbound_connection_start > 2*60*1000 ){
+				
+				closeConnectionInternally( "timeout: waiting for connection", Transport.CR_TIMEOUT, false, true );
+				
 				return true;
 			}
-		}
-		//ensure we dont get stuck in the handshaking phases
-		else if( connection_state == PEPeerTransport.CONNECTION_WAITING_FOR_HANDSHAKE ) {
-			if (connection_established_time >now)
-				connection_established_time =now;
-			else if (now - connection_established_time > 3*60*1000 ) { //3min timeout
-				closeConnectionInternally( "timed out while waiting for handshake" );
+			
+			if ( connection != null ){
+				
+				Transport transport = connection.getTransport();
+				
+				if ( transport != null && transport.isClosed()){
+					
+					closeConnectionInternally( "connection seems to be closed", Transport.CR_TIMEOUT, false, true );
+				}
+			}
+		
+		}else if ( connection_state == PEPeerTransport.CONNECTION_FULLY_ESTABLISHED ){
+		
+				// we should always have received a message in order to be fully established so no need to check valid
+				
+			if ( 	mono_now - last_message_received_time_mono > 5*60*1000 &&
+					( 	last_data_message_received_time_mono < 0 ||
+						mono_now - last_data_message_received_time_mono > 5*60*1000 )){	// data could be dripping in I guess
+				
+					// assume this is due to a network failure
+					// e.g. something that didn't close the TCP socket properly
+					// will attempt reconnect
+				
+				closeConnectionInternally( "timeout: waiting for messages", Transport.CR_TIMEOUT, false, true );
+				
+				return true;
+			}
+			
+				// A peer connection is all about sending or receiving data - if we have one doing neither for a long time
+				// then it is useless. It will no doubt re-connect but in the meantime another peer may get the opportunity
+				// to take its place
+			
+			int NO_DATA_TIMEOUT = 30*60*1000;
+			
+			if ( connection_established_time_mono >= 0 && mono_now - connection_established_time_mono > NO_DATA_TIMEOUT ){
+			
+				long last_data_activity = Math.max( last_good_data_time_mono, last_data_message_sent_time_mono );
+				
+				if ( last_data_activity < 0 || mono_now - last_data_activity > NO_DATA_TIMEOUT ){
+					
+					closeConnectionInternally( "timeout: no recent data sent or received", Transport.CR_TIMEOUT_ACTIVITY, false, true );
+					
+					return true;
+				}
+			}
+			
+		}else if ( connection_state == PEPeerTransport.CONNECTION_WAITING_FOR_HANDSHAKE ) {
+			
+				//ensure we dont get stuck in the handshaking phases
+			
+			
+			if ( mono_now - connection_established_time_mono > ( network == AENetworkClassifier.AT_PUBLIC?60*1000:30*1000 )){
+				
+				closeConnectionInternally( "timeout: waiting for handshake", Transport.CR_TIMEOUT_HANDSHAKE );
+				
 				return true;
 			}
 		}
@@ -2520,53 +2763,53 @@ implements PEPeerTransport
 
 	@Override
 	public long getTimeSinceLastDataMessageReceived() {
-		if( last_data_message_received_time == -1 ) {  //never received
+		if( last_data_message_received_time_mono < 0 ) {  //never received
 			return -1;
 		}
 
-		final long now =SystemTime.getCurrentTime();
+		long mono_now = SystemTime.getMonotonousTime();
 
-		if (last_data_message_received_time >now)
-			last_data_message_received_time =now;   //time went backwards
-		return now -last_data_message_received_time;
+		return mono_now -last_data_message_received_time_mono;
 	}
 
 	@Override
 	public long getTimeSinceGoodDataReceived()
 	{
-		if (last_good_data_time ==-1)
-			return -1;	// never received
-		final long now =SystemTime.getCurrentTime();
-		if (last_good_data_time >now)
-			last_good_data_time =now;   //time went backwards
-		return now -last_good_data_time;
+		if ( last_good_data_time_mono < 0 ){
+		
+			return( -1 );	// never received
+		}
+		
+		long mono_now =SystemTime.getMonotonousTime();
+		
+		return( mono_now -last_good_data_time_mono );
 	}
 
 
 	@Override
-	public long getTimeSinceLastDataMessageSent() {
-		if( last_data_message_sent_time == -1 ) {  //never sent
-			return -1;
+	public long 
+	getTimeSinceLastDataMessageSent() 
+	{
+		if ( last_data_message_sent_time_mono < 0 ){  //never sent
+			
+			return( -1 );
 		}
-		final long now =SystemTime.getCurrentTime();
-		if (last_data_message_sent_time >now)
-			last_data_message_sent_time =now;   //time went backwards
-		return now -last_data_message_sent_time;
+		
+		long mono_now = SystemTime.getMonotonousTime();
+		
+		return( mono_now - last_data_message_sent_time_mono );
 	}
 
-
-
-
-
 	@Override
-	public long getTimeSinceConnectionEstablished() {
-		if( connection_established_time == 0 ) {  //fudge it while the transport is being connected
-			return 0;
+	public long 
+	getConnectionEstablishedMonoTime() 
+	{
+		if ( connection_established_time_mono < 0 ){
+			
+			return( -1 );
 		}
-		final long now =SystemTime.getCurrentTime();
-		if (connection_established_time >now)
-			connection_established_time =now;
-		return now -connection_established_time;
+		
+		return( connection_established_time_mono );
 	}
 
 	@Override
@@ -2590,17 +2833,17 @@ implements PEPeerTransport
 		    Logger.log(new LogEvent(this, LOGID,
 		    		"Received handshake with reserved bytes: " +
 		    			ByteFormatter.nicePrint(handshake.getReserved(), false)));
-
+		
 		PeerIdentityDataID  my_peer_data_id = manager.getPeerIdentityDataID();
 
 		if(getConnectionState() == CONNECTION_FULLY_ESTABLISHED)
 		{
 			handshake.destroy();
-			closeConnectionInternally("peer sent another handshake after the initial connect");
+			closeConnectionInternally("peer sent another handshake after the initial connect", Transport.CR_NONE);
 		}
 
 		if( !Arrays.equals( manager.getTargetHash(), handshake.getDataHash() ) ) {
-			closeConnectionInternally( "handshake has wrong infohash" );
+			closeConnectionInternally( "handshake has wrong infohash", Transport.CR_INVALID_INFO_HASH );
 			handshake.destroy();
 			return;
 		}
@@ -2612,7 +2855,7 @@ implements PEPeerTransport
 
 		//make sure the client type is not banned
 		if( !PeerClassifier.isClientTypeAllowed( client ) ) {
-			closeConnectionInternally( client+ " client type not allowed to connect, banned" );
+			closeConnectionInternally( client+ " client type not allowed to connect, banned", Transport.CR_IP_BLOCKED );
 			handshake.destroy();
 			return;
 		}
@@ -2620,7 +2863,7 @@ implements PEPeerTransport
 		//make sure we are not connected to ourselves
 		if( Arrays.equals( manager.getPeerId(), peer_id ) ) {
 			manager.peerVerifiedAsSelf( this );  //make sure we dont do it again
-			closeConnectionInternally( "given peer id matches myself" );
+			closeConnectionInternally( "given peer id matches myself", Transport.CR_SELF_CONNECTION );
 			handshake.destroy();
 			return;
 		}
@@ -2662,7 +2905,7 @@ implements PEPeerTransport
 								
 						Debug.outNoStack( msg );
 						
-						manager.removePeer( existing, msg );
+						manager.removePeer( existing, msg, Transport.CR_PEER_CHURN );
 						
 						close = false;
 					}
@@ -2689,7 +2932,7 @@ implements PEPeerTransport
 							
 							String msg = "Dropping existing peer connection [" +existing+ "] in favour of [" + this + "]";
 
-							manager.removePeer( existing, msg );
+							manager.removePeer( existing, msg, Transport.CR_PEER_CHURN );
 							
 							close = false;
 						}
@@ -2725,7 +2968,7 @@ implements PEPeerTransport
 					}
 				}
 				
-				closeConnectionInternally( "peer matches already-connected peer id" );
+				closeConnectionInternally( "peer matches already-connected peer id", Transport.CR_DUPLICATE_PEER_ID );
 				
 				handshake.destroy();
 				
@@ -2734,7 +2977,7 @@ implements PEPeerTransport
 		}
 
 		if( sameIP ) {
-			closeConnectionInternally( "peer matches already-connected IP address, duplicate connections not allowed" );
+			closeConnectionInternally( "peer matches already-connected IP address, duplicate connections not allowed", Transport.CR_NONE );
 			handshake.destroy();
 			return;
 		}
@@ -2753,7 +2996,7 @@ implements PEPeerTransport
 			+", pmx" +PeerUtils.MAX_CONNECTIONS_PER_TORRENT+ "/gmx"
 			+PeerUtils.MAX_CONNECTIONS_TOTAL+"/dmx" + con_max + "]";
 			//System.out.println( msg );
-			closeConnectionInternally( msg );
+			closeConnectionInternally( msg, Transport.CR_TOO_MANY_CONNECTIONS );
 			handshake.destroy();
 			return;
 		}
@@ -2765,7 +3008,7 @@ implements PEPeerTransport
 
 				final String msg = "connection already closing";
 
-				closeConnectionInternally( msg );
+				closeConnectionInternally( msg, Transport.CR_NONE );
 
 				handshake.destroy();
 
@@ -2774,7 +3017,7 @@ implements PEPeerTransport
 
 			if ( !PeerIdentityManager.addIdentity( my_peer_data_id, peer_id, getPort(), ip )){
 
-				closeConnectionInternally( "peer matches already-connected peer id" );
+				closeConnectionInternally( "peer matches already-connected peer id", Transport.CR_DUPLICATE_PEER_ID );
 
 				handshake.destroy();
 
@@ -2810,7 +3053,7 @@ implements PEPeerTransport
 
 			// disable fast if we have per-torrent upload limit as it is non-trivial to enforce for choked fast-start
 			// transfers as peer is in the multi-peer upload group (as choked) and in this mode the limit isn't
-			// enforced (see http://forum.vuze.com/thread.jspa?threadID=105262)
+			// enforced
 
 		fast_extension_enabled =
 			BTHandshake.FAST_EXTENSION_ENABLED &&
@@ -2929,7 +3172,7 @@ implements PEPeerTransport
 
 
 				if (Logger.isEnabled())
-					Logger.log(new LogEvent(this, LOGID, "Handshake mistakingly indicates"
+					Logger.log(new LogEvent(this, LOGID, "Handshake mistakenly indicates"
 							+ " extended AZ messaging support...ignoring."));
 
 				return MESSAGING_BT_ONLY;
@@ -3011,8 +3254,11 @@ implements PEPeerTransport
 
 	  LTMessageEncoder encoder = (LTMessageEncoder)connection.getOutgoingMessageQueue().getEncoder();
 	  encoder.updateSupportedExtensions(handshake.getExtensionMapping());
-	  this.ut_pex_enabled = encoder.supportsUTPEX();
-
+	  
+	  ut_pex_enabled = encoder.supportsUTPEX();
+	  
+	  ut_holepunch_enabled = encoder.supportsUTHolePunch();
+	  
 	  if ( is_metadata_download ){
 
 		  if ( encoder.supportsUTMetaData()){
@@ -3054,18 +3300,41 @@ implements PEPeerTransport
 	  if(getConnectionState() == CONNECTION_FULLY_ESTABLISHED)
 	  {
 		  handshake.destroy();
-		  closeConnectionInternally("peer sent another az-handshake after the intial connect");
+		  closeConnectionInternally("peer sent another az-handshake after the intial connect", Transport.CR_NONE);
 	  }
 
 		this.client_handshake = StringInterner.intern(handshake.getClient());
 		this.client_handshake_version = StringInterner.intern(handshake.getClientVersion());
 		this.client = StringInterner.intern(ClientIdentifier.identifyAZMP(this.client_peer_id, client_handshake, client_handshake_version, this.peer_id));
 
-		if (handshake.getTCPListenPort() > 0)
-		{ // use the ports given in handshake
+		String localHost = handshake.getLocalHost();
+		
+		boolean remakeID = false;
+		
+		if ( localHost != null ){
+			
+			if( ip_filter.isInRange(localHost, manager.getDisplayName(), manager.getHash())){
+			
+				handshake.destroy();
+				  
+				closeConnectionInternally("Host address blocked by filters", Transport.CR_IP_BLOCKED);
+			}
+			
+			ip = localHost;
+			ip_resolved = localHost;
+			remakeID = true;
+		}
+		
+		if (handshake.getTCPListenPort() > 0){ 
+			
+			// use the ports given in handshake
 			tcp_listen_port = handshake.getTCPListenPort();
 			udp_listen_port = handshake.getUDPListenPort();
 			udp_non_data_port = handshake.getUDPNonDataListenPort();
+			remakeID = true;
+		}
+		
+		if ( remakeID){
 			final byte type = handshake.getHandshakeType() == AZHandshake.HANDSHAKE_TYPE_CRYPTO ? PeerItemFactory.HANDSHAKE_TYPE_CRYPTO : PeerItemFactory.HANDSHAKE_TYPE_PLAIN;
 
 			// remake the id using the peer's remote listen port instead of
@@ -3567,7 +3836,7 @@ implements PEPeerTransport
 		}
 
 		if ((pieceNumber >=nbPieces) ||(pieceNumber <0)) {
-			closeConnectionInternally("invalid pieceNumber: " +pieceNumber);
+			closeConnectionInternally("invalid pieceNumber: " +pieceNumber, Transport.CR_NONE);
 			return;
 		}
 
@@ -3626,7 +3895,7 @@ implements PEPeerTransport
 
 	        if ((pieceNumber >= nbPieces) ||(pieceNumber <0)) {
 
-	            closeConnectionInternally("invalid pieceNumber: " +pieceNumber);
+	            closeConnectionInternally("invalid pieceNumber: " +pieceNumber, Transport.CR_NONE );
 
 	            return;
 	        }
@@ -3776,12 +4045,12 @@ implements PEPeerTransport
 		request.destroy();
 
 		if( !manager.validateReadRequest( this, number, offset, length ) ) {
-			closeConnectionInternally( "request for piece #" + number + ":" + offset + "->" + (offset + length -1) + " is an invalid request" );
+			closeConnectionInternally( "request for piece #" + number + ":" + offset + "->" + (offset + length -1) + " is an invalid request", Transport.CR_NONE );
 			return;
 		}
 
 		if ( manager.getHiddenPiece() == number ){
-			closeConnectionInternally( "request for piece #" + number + " is invalid as piece is hidden" );
+			closeConnectionInternally( "request for piece #" + number + " is invalid as piece is hidden", Transport.CR_NONE );
 			return;
 		}
 
@@ -3940,17 +4209,20 @@ implements PEPeerTransport
 				}
 			}
 			removeRequest( existing_request );
-			final long now =SystemTime.getCurrentTime();
-			resetRequestsTime(now);
+			
+			long mono_now = SystemTime.getMonotonousTime();
+			
+			resetRequestsTimeMono( mono_now );
 
 			if( manager.isWritten( pieceNumber, offset ) ) {  //oops, looks like this block has already been written
 				peer_stats.bytesDiscarded( length );
 				manager.discarded( this, length );
 
 				if( manager.isInEndGameMode() ) {  //we're probably in end-game mode then
-					if (last_good_data_time !=-1 &&now -last_good_data_time <= PEPeerControl.SNUB_MILLIS )
+					if (last_good_data_time_mono >=0 && mono_now -last_good_data_time_mono <= PEPeerControl.SNUB_MILLIS ){
 						setSnubbed(false);
-					last_good_data_time =now;
+					}
+					last_good_data_time_mono = mono_now;
 					requests_discarded_endgame++;
 					if (Logger.isEnabled())
 						Logger.log(new LogEvent(this, LogIDs.PIECES, LogEvent.LT_INFORMATION,
@@ -3961,8 +4233,10 @@ implements PEPeerTransport
 					// if they're not snubbed, then most likely this peer got a re-request after some other peer
 					// snubbed themselves, and the slow peer finially finished the piece, but before this peer did
 					// so give credit to this peer anyway for having delivered a block at this time
-					if (!isSnubbed())
-						last_good_data_time =now;
+					if (!isSnubbed()){
+						last_good_data_time_mono = mono_now;
+					}
+					
 					if (Logger.isEnabled())
 						Logger.log(new LogEvent(this, LogIDs.PIECES, LogEvent.LT_WARNING,
 								error_msg
@@ -3974,9 +4248,9 @@ implements PEPeerTransport
 			}
 			else {  //successfully received block!
 				manager.writeBlock( pieceNumber, offset, payload, this, false);
-				if (last_good_data_time !=-1 &&now -last_good_data_time <=60 *1000)
+				if (last_good_data_time_mono >= 0  && mono_now -last_good_data_time_mono <=60 *1000)
 					setSnubbed( false );
-				last_good_data_time =now;
+				last_good_data_time_mono = mono_now;
 				requests_completed++;
 				piece_error = false;  //dont destroy message, as we've passed the payload on to the disk manager for writing
 			}
@@ -3994,11 +4268,14 @@ implements PEPeerTransport
 
 				if( ever_requested ) { //security-measure: we dont want to be accepting any ol' random block
 					manager.writeBlock( pieceNumber, offset, payload, this, true);
-					final long now =SystemTime.getCurrentTime();
-					if (last_good_data_time !=-1 &&now -last_good_data_time <=60 *1000)
+					final long mono_now =SystemTime.getMonotonousTime();
+					if (last_good_data_time_mono >= 0 && mono_now -last_good_data_time_mono <= 60*1000 ){
 						setSnubbed(false);
-					resetRequestsTime(now);
-					last_good_data_time =now;
+					}
+					
+					resetRequestsTimeMono( mono_now );
+					
+					last_good_data_time_mono = mono_now;
 					requests_recovered++;
 					printRequestStats();
 					piece_error = false;  //dont destroy message, as we've passed the payload on to the disk manager for writing
@@ -4119,32 +4396,50 @@ implements PEPeerTransport
 	{
 		try{
 
-			manager.getHashHandler().receivedHashRequest( 
-				this,
-				( hashes )->{
-									
-					if ( hashes != null ){
-					
-						BTHashes	bt_hashes = new BTHashes( request.getPiecesRoot(), request.getBaseLayer(), request.getIndex(), request.getLength(), request.getProofLayers(), hashes, other_peer_hashes_version );
+			OutgoingMessageQueue omq = connection.getOutgoingMessageQueue();
+			
+				// although hash rates are limited in the PEPeerControlImpl::PeerStats code we have cases
+				// where a peer's queued protocol data grows at 1 MB every 2 seconds... Given that hash requests
+				// are the only significantly sized messages classified as "protocol" I'm going to cap this and
+				// see how that helps
+			
+			if ( omq.getProtocolQueuedBytes() > 4*1024*1024 ){
+							
+				BTHashReject	reject = new BTHashReject( request.getPiecesRoot(), request.getBaseLayer(), request.getIndex(), request.getLength(), request.getProofLayers(), other_peer_hash_reject_version );
 
-						//System.out.println( "Sending BT_HASHES: index=" + request.getIndex() + ", length=" + request.getLength());
+				//System.out.println( "Sending BT_HASH_REJECT: index=" + request.getIndex() + ", length=" + request.getLength());
+
+				omq.addMessage( reject, false );		
+
+			}else{
+				
+				manager.getHashHandler().receivedHashRequest( 
+					this,
+					( hashes )->{
+										
+						if ( hashes != null ){
 						
-						connection.getOutgoingMessageQueue().addMessage( bt_hashes, false );		
-
-					}else{
-						
-						BTHashReject	reject = new BTHashReject( request.getPiecesRoot(), request.getBaseLayer(), request.getIndex(), request.getLength(), request.getProofLayers(), other_peer_hash_reject_version );
-
-						//System.out.println( "Sending BT_HASH_REJECT: index=" + request.getIndex() + ", length=" + request.getLength());
-
-						connection.getOutgoingMessageQueue().addMessage( reject, false );		
-					}
-				},
-				request.getPiecesRoot(), 
-				request.getBaseLayer(), 
-				request.getIndex(), 
-				request.getLength(), 
-				request.getProofLayers());
+							BTHashes	bt_hashes = new BTHashes( request.getPiecesRoot(), request.getBaseLayer(), request.getIndex(), request.getLength(), request.getProofLayers(), hashes, other_peer_hashes_version );
+	
+							//System.out.println( "Sending BT_HASHES: index=" + request.getIndex() + ", length=" + request.getLength());
+							
+							omq.addMessage( bt_hashes, false );		
+	
+						}else{
+							
+							BTHashReject	reject = new BTHashReject( request.getPiecesRoot(), request.getBaseLayer(), request.getIndex(), request.getLength(), request.getProofLayers(), other_peer_hash_reject_version );
+	
+							//System.out.println( "Sending BT_HASH_REJECT: index=" + request.getIndex() + ", length=" + request.getLength());
+	
+							omq.addMessage( reject, false );		
+						}
+					},
+					request.getPiecesRoot(), 
+					request.getBaseLayer(), 
+					request.getIndex(), 
+					request.getLength(), 
+					request.getProofLayers());
+			}
 
 		}finally{
 			
@@ -4428,10 +4723,13 @@ implements PEPeerTransport
 								"Received [" + message.getDescription() + "] message"));
 					}
 					
-					final long now =SystemTime.getCurrentTime();
-					last_message_received_time =now;
-					if( message.getType() == Message.TYPE_DATA_PAYLOAD ) {
-						last_data_message_received_time =now;
+					final long mono_now =SystemTime.getMonotonousTime();
+					
+					last_message_received_time_mono = mono_now;
+					
+					if ( message.getType() == Message.TYPE_DATA_PAYLOAD ){
+						
+						last_data_message_received_time_mono = mono_now;
 					}
 
 					String 	featureID 	= message.getFeatureID();
@@ -4455,7 +4753,7 @@ implements PEPeerTransport
 								//make sure they're not spamming us
 								if( !message_limiter.countIncomingMessage( message.getID(), 6, 60*1000 ) ) {  //allow max 6 keep-alives per 60sec
 									System.out.println( manager.getDisplayName() + ": Incoming keep-alive message flood detected, dropping spamming peer connection." +PEPeerTransportProtocol.this );
-									closeConnectionInternally( "Incoming keep-alive message flood detected, dropping spamming peer connection." );
+									closeConnectionInternally( "Incoming keep-alive message flood detected, dropping spamming peer connection.", Transport.CR_NONE );
 								}
 	
 								return true;
@@ -4572,6 +4870,11 @@ implements PEPeerTransport
 							case LTMessage.SUBID_UT_UPLOAD_ONLY:{
 								decodeUploadOnly((UTUploadOnly)message);
 								return true;
+							}	
+							
+							case LTMessage.SUBID_UT_HOLEPUNCH:{
+								decodeHolePunch((UTHolePunch)message);
+								return true;
 							}						
 						}
 					}else if ( featureID == AZMessage.AZ_FEATURE_ID ){
@@ -4641,7 +4944,8 @@ implements PEPeerTransport
 				public final void dataBytesReceived(int byte_count ) {
 					// Observe that the peer is sending data so that if theyre so slow that the whole
 					// data block times out, we don't think theyre not sending anything at all
-					last_data_message_received_time =SystemTime.getCurrentTime();
+					
+					last_data_message_received_time_mono = SystemTime.getMonotonousTime();
 
 					//update stats
 					peer_stats.dataBytesReceived( byte_count );
@@ -4672,11 +4976,13 @@ implements PEPeerTransport
 			@Override
 			public final void messageSent(Message message ) {
 				//update keep-alive info
-				final long now =SystemTime.getCurrentTime();
-				last_message_sent_time =now;
+				long mono_now = SystemTime.getMonotonousTime();
+				
+				last_message_sent_time_mono = mono_now;
 
-				if( message.getType() == Message.TYPE_DATA_PAYLOAD ) {
-					last_data_message_sent_time =now;
+				if(  message.getType() == Message.TYPE_DATA_PAYLOAD  ){
+					
+					last_data_message_sent_time_mono = mono_now;
 				}
 
 				String message_id = message.getID();
@@ -5078,7 +5384,10 @@ implements PEPeerTransport
 	private void changePeerState( int new_state ) {
 		current_peer_state = new_state;
 
-		if( current_peer_state == PEPeer.TRANSFERING ) {   //YUCK!
+		if ( current_peer_state == PEPeer.TRANSFERING ){
+			
+			manager.informFullyConnected( this );
+			
 			doPostHandshakeProcessing();
 		}
 
@@ -5168,7 +5477,7 @@ implements PEPeerTransport
 	{
 		if ( client_peer_id != null ){
 
-				// disable the exchange of location targetted peers
+				// disable the exchange of location targeted peers
 
 			boolean ok = !client_peer_id.startsWith( PeerClassifier.CACHE_LOGIC );
 
@@ -5203,10 +5512,12 @@ implements PEPeerTransport
 
 		if( pex_item != null && manager.isPeerExchangeEnabled()) {
 
-			if ( peer_item_identity.getNetwork() == AENetworkClassifier.AT_PUBLIC ){
+			String net = peer_item_identity.getNetwork();
+			
+			if ( net == AENetworkClassifier.AT_PUBLIC ){
 
-				final PeerItem[] adds = pex_item.getNewlyAddedPeerConnections( AENetworkClassifier.AT_PUBLIC );
-				final PeerItem[] drops = pex_item.getNewlyDroppedPeerConnections( AENetworkClassifier.AT_PUBLIC );
+				PeerItem[] adds = pex_item.getNewlyAddedPeerConnections( AENetworkClassifier.AT_PUBLIC );
+				PeerItem[] drops = pex_item.getNewlyDroppedPeerConnections( AENetworkClassifier.AT_PUBLIC );
 
 				if( (adds != null && adds.length > 0) || (drops != null && drops.length > 0) ) {
 					if (ut_pex_enabled) {
@@ -5223,6 +5534,16 @@ implements PEPeerTransport
 				if ( encoder instanceof LTMessageEncoder ){
 
 					((LTMessageEncoder)encoder).handleCustomExtension( LTMessageEncoder.CET_PEX, new Object[]{ pex_item });
+					
+				}else if ( !ut_pex_enabled ){
+					
+					PeerItem[] adds = pex_item.getNewlyAddedPeerConnections( net );
+					PeerItem[] drops = pex_item.getNewlyDroppedPeerConnections( net );
+
+					if ((adds != null && adds.length > 0) || (drops != null && drops.length > 0)){
+						
+						connection.getOutgoingMessageQueue().addMessage( new AZPeerExchange( manager.getTargetHash(), adds, drops, other_peer_pex_version ), false );
+					}
 				}
 			}
 		}
@@ -5246,7 +5567,7 @@ implements PEPeerTransport
 
 		if( !message_limiter.countIncomingMessage( exchange.getID(), 7, 120*1000 ) ) {  //allow max 7 PEX per 2min  //TODO reduce max after 2308 release?
 			System.out.println( manager.getDisplayName() + ": Incoming PEX message flood detected, dropping spamming peer connection." +PEPeerTransportProtocol.this );
-			closeConnectionInternally( "Incoming PEX message flood detected, dropping spamming peer connection." );
+			closeConnectionInternally( "Incoming PEX message flood detected, dropping spamming peer connection.", Transport.CR_NONE );
 			return;
 		}
 
@@ -5274,14 +5595,19 @@ implements PEPeerTransport
 			if( added != null ) {
 				for( int i=0; i < added.length; i++ ) {
 					PeerItem pi = added[i];
-					manager.peerDiscovered( this, pi );
-					pex_item.addConnectedPeer( pi );
+					if ( network == pi.getNetwork()){
+						manager.peerDiscovered( this, pi );
+						pex_item.addConnectedPeer( pi );
+					}
 				}
 			}
 
 			if( dropped != null ) {
 				for( int i=0; i < dropped.length; i++ ) {
-					pex_item.dropConnectedPeer( dropped[i] );
+					PeerItem pi = dropped[i];
+					if ( network == pi.getNetwork()){
+						pex_item.dropConnectedPeer( pi );
+					}
 				}
 			}
 		}else{
@@ -5373,18 +5699,18 @@ implements PEPeerTransport
 
 							removeRequest( request );
 
-							long now = SystemTime.getCurrentTime();
+							long mono_now = SystemTime.getMonotonousTime();
 
-							resetRequestsTime( now );
+							resetRequestsTimeMono( mono_now );
 
 							manager.writeBlock( piece_number, 0, data, this, false);
 
-							if ( last_good_data_time !=-1 && now -last_good_data_time <= PEPeerControl.SNUB_MILLIS ){
+							if ( last_good_data_time_mono >= 0 && mono_now -last_good_data_time_mono <= PEPeerControl.SNUB_MILLIS ){
 
 								setSnubbed( false );
 							}
 
-							last_good_data_time = now;
+							last_good_data_time_mono = mono_now;
 
 							requests_completed++;
 						}
@@ -5446,6 +5772,216 @@ implements PEPeerTransport
 		}
 	}
 
+	private boolean
+	isHolePunchSupported()
+	{
+		return( ut_holepunch_enabled && network == AENetworkClassifier.AT_PUBLIC );
+	}
+
+	@Override
+	public boolean
+	canSendHolePunch()
+	{
+		if ( 	isHolePunchSupported() &&
+				connection_state == PEPeerTransport.CONNECTION_FULLY_ESTABLISHED ){
+			
+			long now = SystemTime.getMonotonousTime();
+			
+			if ( hp_last_send == -1 || now - hp_last_send > 20*1000 ){
+				
+				return( true );
+			}
+		}
+		
+		return( false );
+	}
+
+	@Override
+	public void
+	sendHolePunch(
+		InetAddress		address,
+		int				port )
+	{
+		if ( !canSendHolePunch()){
+			
+			return;
+		}
+		
+		if ( NetworkAdmin.getSingleton().isSocksActive()){
+		
+				// test here, rather than in canSendHolePunch, as called much less frequently
+			
+			return;
+		}
+		
+		hp_last_send 	= SystemTime.getMonotonousTime();
+		hp_last_address	= address;
+				
+		if (Logger.isEnabled()){
+			Logger.log(
+				new LogEvent(PEPeerTransportProtocol.this, LOGID,
+						"HP: Rendezvous send for " + address + "/" + port ));
+		}
+
+		UTHolePunch rendezvous = 
+				new UTHolePunch( UTHolePunch.MT_RENDEZVOUS, address, port, 0, other_peer_bt_lt_ext_version );					
+			
+		connection.getOutgoingMessageQueue().addMessage( rendezvous, false );
+
+	}
+	
+	protected void
+	decodeHolePunch(
+		UTHolePunch message )
+	{
+		try{
+		
+			if ( !isHolePunchSupported()){
+				
+				return;
+			}
+			
+			boolean ps_enabled 		= manager.isPeerSourceEnabled( PEPeerSource.PS_HOLE_PUNCH );
+			
+			boolean socks_active	= NetworkAdmin.getSingleton().isSocksActive();
+						
+			if ( socks_active || !ps_enabled || !ProtocolEndpointFactory.isHandlerRegistered( ProtocolEndpoint.PROTOCOL_UTP )){
+								
+				UTHolePunch error = new UTHolePunch( message, UTHolePunch.ERR_NO_SUPPORT, other_peer_bt_lt_ext_version );
+				
+				connection.getOutgoingMessageQueue().addMessage( error, false );
+				
+				return;
+			}
+			
+			int type = message.getMessageType();
+			
+			if ( type == UTHolePunch.MT_RENDEZVOUS ){
+				
+				int port = message.getPort();
+				
+				InetAddress address = message.getAddress();
+				
+				List<PEPeer> targets = manager.getPeers( address.getHostAddress());
+				
+				PEPeerTransportProtocol selected = null;
+				
+				for ( PEPeer target: targets ){
+					
+					if ( target instanceof PEPeerTransportProtocol ){
+						
+						PEPeerTransportProtocol tp = (PEPeerTransportProtocol)target;
+						
+						if ( tp.isHolePunchSupported() && tp.getTCPListenPort() == port ){
+							
+							selected = tp;
+							
+							break;
+						}
+					}
+				}
+				
+				if ( selected == null ){
+										
+					if (Logger.isEnabled()){
+						Logger.log(
+							new LogEvent(PEPeerTransportProtocol.this, LOGID,
+									"HP: Rendezvous failed for " + address + ":" + port + ", not connected"));
+					}
+					
+					UTHolePunch error = new UTHolePunch( message, UTHolePunch.ERR_NOT_CONNECTED, other_peer_bt_lt_ext_version );
+					
+					connection.getOutgoingMessageQueue().addMessage( error, false );
+					
+					return;
+				}
+				
+				if ( !manager.isHolePunchOperationOK( this, false )){
+					
+						// silently ignore
+				
+					if (Logger.isEnabled()){
+						Logger.log(
+							new LogEvent(PEPeerTransportProtocol.this, LOGID,
+									"HP: Rendezvous failed for " + address + ":" + port + " rejected"));
+					}	
+					
+					return;
+				}
+				
+				if (Logger.isEnabled()){
+					Logger.log(
+						new LogEvent(PEPeerTransportProtocol.this, LOGID,
+								"HP: Rendezvous accepted for " + address + ":" + port ));
+				}					
+
+				UTHolePunch initiator_connect = 
+					new UTHolePunch( UTHolePunch.MT_CONNECT, address, port, 0, other_peer_bt_lt_ext_version );					
+				
+				UTHolePunch target_connect = 
+					new UTHolePunch( UTHolePunch.MT_CONNECT, InetAddress.getByName( ip ), tcp_listen_port, 0, selected.other_peer_bt_lt_ext_version );
+
+				connection.getOutgoingMessageQueue().addMessage( initiator_connect, false );
+				
+				selected.getNetworkConnection().getOutgoingMessageQueue().addMessage( target_connect, false );
+
+			}else if ( type == UTHolePunch.MT_CONNECT ){
+				
+				int port = message.getPort();
+					
+				InetAddress address = message.getAddress();
+				
+				if ( hp_last_address == null || !hp_last_address.equals( address )){
+					
+					if ( !manager.isHolePunchOperationOK( this, true )){
+				
+							// silently ignore
+						
+						if (Logger.isEnabled()){
+							Logger.log(
+								new LogEvent(PEPeerTransportProtocol.this, LOGID,
+										"HP: Connect to " + address + ":" + port + " rejected"));
+						}	
+						
+						return;
+					}
+				}
+				
+				Map	user_data = new LightHashMap();
+
+				user_data.put( Peer.PR_PEER_SOURCE, PEPeerSource.PS_HOLE_PUNCH );
+				user_data.put( Peer.PR_PREFER_UTP, Boolean.TRUE);
+				user_data.put( Peer.PR_PRIORITY_CONNECTION, Boolean.TRUE);
+
+				if (Logger.isEnabled()){
+					Logger.log(
+						new LogEvent(PEPeerTransportProtocol.this, LOGID,
+								"HP: Connect to " + address + ":" + port + " accepted"));
+				}	
+				
+				try{
+					manager.addPeer( address.getHostAddress(), port, port, true, user_data );
+				
+				}catch( Throwable e ){
+				}
+			}else{
+			
+				if (Logger.isEnabled()){
+					Logger.log(
+						new LogEvent(PEPeerTransportProtocol.this, LOGID,
+								"HP: Error " + message.getErrorCode() + " for " + message.getAddress() + ":" + message.getPort()));
+				}	
+			}
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+			
+		}finally{
+
+			message.destroy();
+		}
+	}
+	
 	@Override
 	public boolean
 	sendRequestHint(
@@ -5655,7 +6191,9 @@ implements PEPeerTransport
 	}
 	
 	@Override
-	public DiskManagerReadRequest[] getRecentPiecesSent(){
+	public DiskManagerReadRequest[] 
+	getRecentPiecesSent()
+	{
 		if ( outgoing_piece_message_handler == null ){
 
 			return( new DiskManagerReadRequest[0] );
@@ -5665,9 +6203,10 @@ implements PEPeerTransport
 	}
 	
 	@Override
-	public int[] getOutgoingRequestedPieceNumbers() {
-		try{
-			requested_mon.enter();
+	public int[] 
+	getOutgoingRequestedPieceNumbers() 
+	{
+		synchronized( requested ){
 
 			/** Cheap hack to reduce (but not remove all) the # of duplicate entries */
 			int iLastNumber = -1;
@@ -5694,31 +6233,28 @@ implements PEPeerTransport
 			System.arraycopy(pieceNumbers, 0, trimmed, 0, pos);
 
 			return trimmed;
-
-		}finally{
-			requested_mon.exit();
 		}
 	}
 
 	@Override
-	public int
-	getPercentDoneOfCurrentIncomingRequest()
+	public int[]
+	getCurrentIncomingRequestProgress()
 	{
-		return( connection.getIncomingMessageQueue().getPercentDoneOfCurrentMessage());
+		return( connection.getIncomingMessageQueue().getCurrentMessageProgress());
 	}
 
 	@Override
-	public int
-	getPercentDoneOfCurrentOutgoingRequest()
+	public int[]
+	getCurrentOutgoingRequestProgress()
 	{
-		return( connection.getOutgoingMessageQueue().getPercentDoneOfCurrentMessage());
+		return( connection.getOutgoingMessageQueue().getCurrentMessageProgress());
 	}
 
 	@Override
 	public long
-	getLastMessageSentTime()
+	getLastMessageSentTimeMono()
 	{
-		return( last_message_sent_time );
+		return( last_message_sent_time_mono );
 	}
 
 	/* (non-Javadoc)
@@ -5832,6 +6368,11 @@ implements PEPeerTransport
 			}
 		}
 
+		if ( connection == null ){
+			
+			return( 0 );
+		}
+		
 		return connection.getUploadLimit();
 	}
 
@@ -5874,6 +6415,11 @@ implements PEPeerTransport
 			}
 		}
 
+		if ( connection == null ){
+			
+			return( 0 );
+		}
+	
 		return connection.getDownloadLimit();
 	}
 
@@ -6001,6 +6547,13 @@ implements PEPeerTransport
 	}
 
 	@Override
+	public PeerDescriptor 
+	getDescriptor()
+	{
+		return( PeerItemFactory.getDescriptor( this ));
+	}
+	
+	@Override
 	public void
 	generateEvidence(
 			IndentWriter	writer )
@@ -6009,12 +6562,12 @@ implements PEPeerTransport
 				"ip=" + getIp() + ",in=" + isIncoming() + ",port=" + getPort() + ",cli=" + client + ",tcp=" + getTCPListenPort() + ",udp=" + getUDPListenPort() +
 				",oudp=" + getUDPNonDataListenPort() + ",prot=" + getProtocol() + ",p_state=" + getPeerState() + ",c_state=" + getConnectionState() + ",seed=" + isSeed() + ",partialSeed=" + isRelativeSeed() + ",pex=" + peer_exchange_supported + ",closing=" + closing );
 		writer.println( "    choked=" + effectively_choked_by_other_peer + "/" + really_choked_by_other_peer + ",choking=" + choking_other_peer + ",is_opt=" + is_optimistic_unchoke );
-		writer.println( "    interested=" + interested_in_other_peer + ",interesting=" + other_peer_interested_in_me + ",snubbed=" + snubbed );
+		writer.println( "    interested=" + interested_in_other_peer + ",interesting=" + other_peer_interested_in_me + ",snubbed=" + snubbed_time_mono );
 		writer.println( "    lp=" + _lastPiece + ",up=" + uniquePiece + ",rp=" + reserved_pieces );
 		writer.println(
-				"    last_sent=" + last_message_sent_time + "/" + last_data_message_sent_time +
-				",last_recv=" + last_message_received_time + "/" + last_data_message_received_time + "/" + last_good_data_time );
-		writer.println( "    conn_at=" + connection_established_time + ",cons_no_reqs=" + consecutive_no_request_count +
+				"    last_sent=" + last_message_sent_time_mono + "/" + last_data_message_sent_time_mono +
+				",last_recv=" + last_message_received_time_mono + "/" + last_data_message_received_time_mono + "/" + last_good_data_time_mono );
+		writer.println( "    conn_at=" + connection_established_time_mono + ",cons_no_reqs=" + consecutive_no_request_count +
 				",discard=" + requests_discarded + "/" + requests_discarded_endgame + ",recov=" + requests_recovered + ",comp=" + requests_completed + ",curr=" + requested.size());
 
 	}

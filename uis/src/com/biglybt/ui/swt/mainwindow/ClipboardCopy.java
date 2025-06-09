@@ -30,11 +30,13 @@ import org.eclipse.swt.events.*;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.AERunnableObject;
+import com.biglybt.core.util.UrlUtils;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.ui.swt.Utils;
 
@@ -166,9 +168,25 @@ public class ClipboardCopy {
 
 				  final String	text = provider.getText();
 
-				  if ( control.getMenu() != null || text == null || text.length() == 0 ){
-
+				  if ( text == null || text.length() == 0 ){
+					  
 					  return;
+				  }
+				  
+				  Menu temp = control.getMenu();
+
+				  if ( temp != null ){
+					  
+					  MenuItem[] items = temp.getItems();
+					  
+					  if ( items.length == 0 ){
+						  
+						  temp.dispose();
+						  
+					  }else{
+						  
+						  return;
+					  }
 				  }
 
 				  if (!(e.button == 3 || (e.button == 1 && e.stateMask == SWT.CONTROL))){
@@ -272,6 +290,15 @@ public class ClipboardCopy {
 	final Menu					menu,
 	final copyToClipProvider	provider )
   {
+	  addCopyToClipMenu( menu, "label.copy.to.clipboard", provider );
+  }
+
+  public static void
+  addCopyToClipMenu(
+	Menu				menu,
+	String				resource_key, 
+	copyToClipProvider	provider )
+  {
 	  for ( MenuItem e: menu.getItems()){
 		  
 		  if ( e.getData( MENU_ITEM_KEY ) != null ){
@@ -284,9 +311,7 @@ public class ClipboardCopy {
 
 	  item.setData( MENU_ITEM_KEY, "" );
 	  
-	  String	msg_text_id= "label.copy.to.clipboard";
-
-	  item.setText( MessageText.getString( msg_text_id ));
+	  item.setText( MessageText.getString( resource_key ));
 
 	  item.addSelectionListener(
 		  new SelectionAdapter()
@@ -300,7 +325,7 @@ public class ClipboardCopy {
 			  }
 		  });
   }
-
+  
   public static void
   removeCopyToClipMenu(
 	final Menu					menu )
@@ -347,7 +372,17 @@ public class ClipboardCopy {
 
 				  }else if (control instanceof Label) {
 					  return ((Label) control).getText();
-
+				  }else if (control instanceof Link) {
+					  String text =  ((Link) control).getText();
+					  
+					  String url = UrlUtils.parseTextForURL( text,  false );
+					  
+					  if ( url != null && !url.isEmpty()){
+						  
+						  return( url );
+					  }
+					  
+					  return( text );
 				  }else{
 					  
 					  return( String.valueOf( o ));

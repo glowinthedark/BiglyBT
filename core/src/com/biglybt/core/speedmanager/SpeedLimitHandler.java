@@ -20,9 +20,11 @@
 
 package com.biglybt.core.speedmanager;
 
+import java.io.File;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 import com.biglybt.core.Core;
@@ -30,11 +32,15 @@ import com.biglybt.core.category.Category;
 import com.biglybt.core.category.CategoryManager;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.impl.TransferSpeedValidator;
+import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.global.GlobalManager;
 import com.biglybt.core.global.GlobalManagerStats;
 import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.ipfilter.IpFilter;
+import com.biglybt.core.ipfilter.IpFilterManagerFactory;
 import com.biglybt.core.networkmanager.LimitedRateGroup;
+import com.biglybt.core.networkmanager.Transport;
 import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.peer.util.PeerUtils;
@@ -83,6 +89,8 @@ SpeedLimitHandler
 	private static final Object PEER_LT_WAIT_START_KEY	= new Object();
 	private static final Object PEER_ASN_WAIT_START_KEY	= new Object();
 	
+	private static final IpFilter	ip_filter	= IpFilterManagerFactory.getSingleton().getIPFilter();
+
 	public static SpeedLimitHandler
 	getSingleton(
 		Core core )
@@ -109,6 +117,7 @@ SpeedLimitHandler
 	private static final int NETLIMIT_TAG_LOG_TICKS		= NETLIMIT_TAG_LOG_PERIOD/SCHEDULER_PERIOD;
 
 	private static final int PRIORITISER_CHECK_PERIOD_BASE	= 5*1000;
+	private static final int STORAGE_CHECK_PERIOD			= 15*1000;
 
 	private static final String	NET_IPV4		= "IPv4";
 	private static final String	NET_IPV6		= "IPv6";
@@ -132,10 +141,14 @@ SpeedLimitHandler
 	private ScheduleRule			active_rule;
 
 	private boolean					preserve_inactive_limits;
+	private boolean					pause_forced_downloads	= true;
 	
 	private boolean					prioritiser_enabled = true;
 	private TimerEventPeriodic		prioritiser_event;
 	private List<Prioritiser>		current_prioritisers = new ArrayList<>();
+
+	private TimerEventPeriodic		storage_event;
+	private List<StorageDetails>	current_storage_details = new ArrayList<>();
 
 	private Map<String,PeerSet>		current_ip_sets 			= new HashMap<>();
 	private final Map<String,RateLimiter>	ip_set_rate_limiters_up 	= new HashMap<>();
@@ -144,7 +157,8 @@ SpeedLimitHandler
 
 	private boolean					net_limit_listener_added;
 
-	private Map<Integer,List<NetLimit>>		net_limits	= new HashMap<>();
+	private Map<Integer,List<NetLimit>>		net_limits_by_type	= new HashMap<>();
+	private List<NetLimit>					net_limits_all		= new ArrayList<>();
 
 	private final static String INACTIVE_PROFILE_NAME	= "preserved_limits (auto)";
 	
@@ -168,6 +182,9 @@ SpeedLimitHandler
 	
 	private volatile	BuddyPlugin buddy_plugin;
 	
+	private final AsyncDispatcher gm_dispatcher = new AsyncDispatcher();
+
+	
 	private
 	SpeedLimitHandler(
 		Core _core )
@@ -178,7 +195,7 @@ SpeedLimitHandler
 
 		category_attribute	= plugin_interface.getTorrentManager().getAttribute( TorrentAttribute.TA_CATEGORY );
 
-		logger = plugin_interface.getLogger().getTimeStampedChannel( "Speed Limit Handler" );
+		logger = plugin_interface.getLogger().getTimeStampedChannel( "Speed Limit Scheduler" );
 
 		if ( Constants.isCVSVersion()){
 
@@ -188,7 +205,7 @@ SpeedLimitHandler
 		UIManager	ui_manager = plugin_interface.getUIManager();
 
 		final BasicPluginViewModel model =
-			ui_manager.createBasicPluginViewModel( "Speed Limit Handler" );
+			ui_manager.createBasicPluginViewModel( "Speed Limit Scheduler" );
 
 		model.getActivity().setVisible( false );
 		model.getProgress().setVisible( false );
@@ -322,7 +339,7 @@ SpeedLimitHandler
 						"Pausing all downloads due to pause_all rule" );
 			}
 
-			gm.pauseDownloads();
+			gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads ));
 
 			rule_pause_all_active = true;
 
@@ -339,7 +356,7 @@ SpeedLimitHandler
 								"Resuming all downloads as pause_all rule no longer applies" );
 					}
 
-					gm.resumeDownloads( true );
+					gm_dispatcher.dispatch(()->gm.resumeDownloads( true ));
 				}
 			}
 
@@ -364,7 +381,7 @@ SpeedLimitHandler
 					"Pausing all downloads as network limit exceeded" );
 			}
 
-			gm.pauseDownloads();
+			gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads ));
 
 			net_limit_pause_all_active = true;
 
@@ -440,7 +457,7 @@ SpeedLimitHandler
 
 		List<Object[]> tag_nls = new ArrayList<>();
 
-		for ( Map.Entry<Integer, List<NetLimit>> entry: net_limits.entrySet()){
+		for ( Map.Entry<Integer, List<NetLimit>> entry: net_limits_by_type.entrySet()){
 
 			for ( NetLimit nl: entry.getValue()){
 
@@ -536,12 +553,21 @@ SpeedLimitHandler
 
 		}else{
 
-			lines.add( "    Today:\t\t" + getString( lt_stats, LongTermStats.PT_CURRENT_DAY, net_limits.get( LongTermStats.PT_CURRENT_DAY )));
-			lines.add( "    This week:\t" + getString( lt_stats, LongTermStats.PT_CURRENT_WEEK, net_limits.get( LongTermStats.PT_CURRENT_WEEK )));
-			lines.add( "    This month:\t" + getString( lt_stats, LongTermStats.PT_CURRENT_MONTH, net_limits.get( LongTermStats.PT_CURRENT_MONTH )));
+			lines.add( "    Today:\t\t" + getString( lt_stats, LongTermStats.PT_CURRENT_DAY, net_limits_by_type.get( LongTermStats.PT_CURRENT_DAY )));
+			lines.add( "    This week:\t" + getString( lt_stats, LongTermStats.PT_CURRENT_WEEK, net_limits_by_type.get( LongTermStats.PT_CURRENT_WEEK )));
+			lines.add( "    This month:\t" + getString( lt_stats, LongTermStats.PT_CURRENT_MONTH, net_limits_by_type.get( LongTermStats.PT_CURRENT_MONTH )));
 			lines.add( "" );
 			lines.add( "    Rate (3 minute average):\t\t" + getString( lt_stats.getCurrentRateBytesPerSecond(), null, true));
 		}
+
+		lines.add( "" );
+		lines.add( "Storage" );
+
+		for ( StorageDetails s: current_storage_details ){
+			
+			lines.add( "    " + s.getString());
+		}
+		
 
 		return( lines );
 	}
@@ -555,12 +581,18 @@ SpeedLimitHandler
 		if ( net_limits == null ){
 
 			net_limits = new ArrayList<>();
-
-			net_limits.add( null );
+			
+		}else{
+			
+			net_limits = new ArrayList<>( net_limits );
 		}
+		
+		net_limits.add( 0, null );		// for overall
 
 		String result = "";
 
+		int lines = 0;
+		
 		for ( NetLimit net_limit: net_limits ){
 
 			long[]	stats = getLongTermUsage( lts, type, net_limit );
@@ -605,8 +637,14 @@ SpeedLimitHandler
 				}
 			}
 
-			if ( net_limits.size() > 1 ){
+			lines++;
 
+			if ( lines > 1 ){
+
+				if ( lines == 2 ){
+					result = "\r\n        " + result;
+				}
+				
 				result += "\r\n        ";
 			}
 
@@ -622,16 +660,16 @@ SpeedLimitHandler
 	getLongTermUsage(
 		LongTermStats	lts,
 		int				type,
-		NetLimit		net_limit )
+		NetLimit		net_limit_maybe_null )
 	{
-		double multiplier=net_limit==null?1:net_limit.getMultiplier();
+		double multiplier=net_limit_maybe_null==null?1:net_limit_maybe_null.getMultiplier();
 
-		if ( net_limit == null || net_limit.getProfile() == null ){
+		if ( net_limit_maybe_null == null || net_limit_maybe_null.getProfile() == null ){
 
 			return( lts.getTotalUsageInPeriod( type, multiplier ));
 		}
 
-		final String profile = net_limit.getProfile();
+		final String profile = net_limit_maybe_null.getProfile();
 
 		return(
 			lts.getTotalUsageInPeriod(
@@ -1006,14 +1044,16 @@ SpeedLimitHandler
 		List<ScheduleRule>	rules 	= new ArrayList<>();
 		Map<String,PeerSet>	ip_sets	= new HashMap<>();
 
-		Map<Integer,List<NetLimit>> new_net_limits	= new HashMap<>();
-		List<NetLimit>				net_limits_list = new ArrayList<>();
+		Map<Integer,List<NetLimit>> new_net_limits_by_type	= new HashMap<>();
+		List<NetLimit>				new_net_limits_all		= new ArrayList<>();
 
-		List<Prioritiser>	new_prioritisers = new ArrayList<>();
-
-		boolean checked_lts_enabled = false;
-		boolean	lts_enabled	= false;
-		boolean preserve_limits = false;
+		List<Prioritiser>		new_prioritisers	= new ArrayList<>();
+		List<StorageDetails>	new_storage_details	= new ArrayList<>();
+		
+		boolean checked_lts_enabled	= false;
+		boolean	lts_enabled			= false;
+		boolean preserve_limits		= false;
+		boolean pause_forced		= true;
 		
 		for ( String line: schedule_lines ){
 
@@ -1078,6 +1118,33 @@ SpeedLimitHandler
 
 					result.add( "'" +line + "' is invalid: use preserve_inactive_limits=(yes|no)" );
 				}
+			}else if ( lc_line.startsWith( "pause_force_downloads" )){
+
+				String[]	bits = lc_line.split( "=" );
+
+				boolean	ok = false;
+
+				if ( bits.length == 2 ){
+
+					String arg = bits[1].trim();
+
+					if ( arg.equals( "yes" )){
+
+						pause_forced = true;
+						ok		= true;
+
+					}else if ( arg.equals( "no" )){
+
+						pause_forced = false;
+						ok		= true;
+					}
+				}
+
+				if ( !ok ){
+
+					result.add( "'" +line + "' is invalid: use pause_force_downloads=(yes|no)" );
+				}
+
 			}else if ( lc_line.startsWith( "ip_set" ) || lc_line.startsWith( "peer_set" ) ){
 
 				try{
@@ -1459,20 +1526,20 @@ SpeedLimitHandler
 
 				if ( type != -1 ){
 
-					List<NetLimit>	limits = new_net_limits.get( type );
+					List<NetLimit>	limits = new_net_limits_by_type.get( type );
 
 					if ( limits == null ){
 
 						limits = new ArrayList<>();
 
-						new_net_limits.put( type, limits );
+						new_net_limits_by_type.put( type, limits );
 					}
 
-					NetLimit limit = new NetLimit( name, mult, profile, tag_type, tag_name, total_lim, up_lim, down_lim );
+					NetLimit limit = new NetLimit( type, name, mult, profile, tag_type, tag_name, total_lim, up_lim, down_lim );
 
 					limits.add( limit );
 
-					net_limits_list.add( limit );
+					new_net_limits_all.add( limit );
 				}
 			}else if ( lc_line.startsWith( "priority_down " ) || lc_line.startsWith( "priority_up " )){
 
@@ -1588,6 +1655,79 @@ SpeedLimitHandler
 					if ( pri_ok ){
 
 						new_prioritisers.add( pri );
+					}
+				}
+			}else if ( lc_line.startsWith( "storage " )){
+
+				line = line.replaceAll("\\\\", "\\\\\\\\" );
+				
+				String[]	bits = GeneralUtils.decomposeArgs( line );
+
+				if ( bits.length != 3 ){
+					
+					result.add( "'" + line + "': invalid storage specification" );
+					
+				}else{
+					
+					String root_name = bits[1];
+					
+					File[] roots = FileUtil.listRootsWithTimeout();
+					
+					File root_hit		= null;
+					
+					String valid_roots = "";
+					
+					for ( File root: roots ){
+						
+						String this_name = root.getAbsolutePath();
+						
+						valid_roots += (valid_roots.isEmpty()?"":", ") + this_name;
+
+						if ( root_name.equals("*") ||  this_name.equals( root_name )){
+							
+							root_hit 		= root;
+							
+							String[] args = bits[2].split(",");
+							
+							for ( String arg: args ){
+								
+								try{
+									String[] x = arg.split( "=" );
+									
+									if ( x.length != 2 ){
+										
+										throw( new Exception( "expected <name=value> argument, got '" + arg + "'" ));
+									}
+									
+									String lhs = x[0].toLowerCase();
+									
+									if ( lhs.equals( "min_space" )){
+										
+										try{
+											long amount = parseRate( x[1]);
+											
+											new_storage_details.add( new StorageDetails( root_hit, FileUtil.getFileStoreNames( root_hit)[0], amount ));
+											
+										}catch( Throwable e ){
+											
+											throw( new Exception( "invalid amount in '" + arg + "'" ));
+										}
+									}else{
+										
+										throw( new Exception( "invalid argument: '" + arg + "'" ));
+									}
+								}catch( Throwable e ){
+									
+									result.add( "'" + line + "': invalid storage specification, " + e.getMessage());
+
+								}
+							}
+						}						
+					}
+					
+					if ( root_hit == null ){
+						
+						result.add( "'" + line + "': invalid storage specification, root '" + root_name + "' not found. Valid roots are " + valid_roots );	
 					}
 				}
 			}else{
@@ -1799,7 +1939,7 @@ SpeedLimitHandler
 
 									boolean found = false;
 
-									for ( NetLimit x: net_limits_list ){
+									for ( NetLimit x: net_limits_all ){
 
 										if ( x.getName().equals( nl )){
 
@@ -1882,14 +2022,15 @@ SpeedLimitHandler
 
 		if ( enabled ){
 
-			preserve_inactive_limits = preserve_limits;
+			preserve_inactive_limits	= preserve_limits;
+			pause_forced_downloads		= pause_forced;
 			
 			if ( start_of_day && rules.isEmpty()){
 				
 				setActiveState( AS_INACTIVE );
 			}
 			
-			if ( new_net_limits.size() > 0 ){
+			if ( new_net_limits_all.size() > 0 ){
 
 				schedule_has_net_limits = true;
 			}
@@ -1947,19 +2088,19 @@ SpeedLimitHandler
 
 			if ( !lts_enabled ){
 
-				new_net_limits.clear();
+				new_net_limits_by_type.clear();
+				
+				new_net_limits_all.clear();
 			}
 
-			net_limits = new_net_limits;
+			net_limits_by_type	= new_net_limits_by_type;
+			net_limits_all		= new_net_limits_all;
 
-			if ( net_limits.size() > 0 ){
+			if ( net_limits_all.size() > 0 ){
 
-				for ( List<NetLimit> l: new_net_limits.values()){
+				for ( NetLimit n: net_limits_all ){
 
-					for ( NetLimit n: l ){
-
-						n.initialise();
-					}
+					n.initialise();
 				}
 
 				if ( !net_limit_listener_added ){
@@ -2019,9 +2160,42 @@ SpeedLimitHandler
 				}
 			}
 
+				// storage details
+	
+			current_storage_details = new_storage_details;
+	
+			if ( current_storage_details.size() == 0 ){
+	
+				if ( storage_event != null ){
+	
+					storage_event.cancel();
+	
+					storage_event = null;
+				}
+			}else{
+	
+				if ( storage_event == null ){
+	
+					storage_event =
+						SimpleTimer.addPeriodicEvent(
+								"speed handler storage checker",
+								STORAGE_CHECK_PERIOD,
+								new TimerEventPerformer()
+								{
+									@Override
+									public void
+									perform(
+										TimerEvent event)
+									{
+										checkStorage();
+									}
+								});
+				}
+			}
+		
 				// setup scheduler if needed
 
-			if ( schedule_event == null && ( rules.size() > 0 || net_limits.size() > 0 )){
+			if ( schedule_event == null && ( rules.size() > 0 || net_limits_all.size() > 0 )){
 
 				schedule_event =
 					SimpleTimer.addPeriodicEvent(
@@ -2043,7 +2217,7 @@ SpeedLimitHandler
 						});
 			}
 
-			if ( active_rule != null || rules.size() > 0 || net_limits.size() > 0 ){
+			if ( active_rule != null || rules.size() > 0 || net_limits_all.size() > 0 ){
 
 				checkSchedule( start_of_day, 0 );
 			}
@@ -2080,7 +2254,9 @@ SpeedLimitHandler
 				setNetLimitPauseAllActive( false );
 			}
 
-			net_limits.clear();
+			net_limits_by_type.clear();
+			
+			net_limits_all.clear();
 
 			if ( net_limit_listener_added ){
 
@@ -2138,7 +2314,15 @@ SpeedLimitHandler
 
 				}else if ( c == 'g' ){
 
-					mult = 1024*1024*1024L;
+					mult = 1024L*1024*1024;
+					
+				}else if ( c == 't' ){
+
+					mult = 1024L*1024*1024*1024;
+					
+				}else if ( c == 'e' ){
+
+					mult = 1024L*1024*1024*1024*1024;
 				}
 
 				break;
@@ -2283,7 +2467,7 @@ SpeedLimitHandler
 										set = new PeerSet( set_name );
 										
 										try{
-											Pattern pattern = Pattern.compile( "^\\Q" + name + "\\E.*", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE  );
+											Pattern pattern = Pattern.compile( "^" + Pattern.quote(name) + ".*", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE  );
 											
 											set.setParameters( false, -1, -1, 0, 0, new HashSet<String>(), pattern, false, null, false, null, false, null );
 											
@@ -2316,7 +2500,7 @@ SpeedLimitHandler
 										set = new PeerSet( set_name );
 										
 										try{
-											Pattern pattern = Pattern.compile( "^\\Q" + name + "\\E.*", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE  );
+											Pattern pattern = Pattern.compile( "^" + Pattern.quote(name) + ".*", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE  );
 											
 											set.setParameters( false, -1, -1, 0, 0, new HashSet<String>(), null, false, pattern, false, null, false, null );
 											
@@ -2450,6 +2634,11 @@ SpeedLimitHandler
 
 		for ( Download dm: downloads ){
 
+			if ( dm.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
+
+				continue;
+			}
+			
 			PeerManager pm = dm.getPeerManager();
 
 			if ( pm != null ){
@@ -2599,7 +2788,7 @@ SpeedLimitHandler
 		private final com.biglybt.pif.download.DownloadManager		download_manager;
 		private final Set<String>									has_cats_or_tags;
 
-		final List<Runnable>	listener_removers = new ArrayList<>();
+		final Map<Download,List<Runnable>>	listener_removers = new IdentityHashMap<>();
 
 		private volatile boolean	destroyed;
 
@@ -2623,14 +2812,17 @@ SpeedLimitHandler
 
 				download_manager.removeListener( this );
 
-				for ( Runnable r: listener_removers ){
+				for ( List<Runnable> dl_listeners: listener_removers.values()){
 
-					try{
-						r.run();
-
-					}catch( Throwable e ){
-
-						Debug.out( e );
+					for ( Runnable r: dl_listeners ){
+						
+						try{
+							r.run();
+	
+						}catch( Throwable e ){
+	
+							Debug.out( e );
+						}
 					}
 				}
 
@@ -2643,6 +2835,11 @@ SpeedLimitHandler
 		downloadAdded(
 			final Download	download )
 		{
+			if ( download.getFlag( Download.FLAG_METADATA_DOWNLOAD )){
+				
+				return;
+			}
+			
 			synchronized( lock ){
 
 				if ( destroyed ){
@@ -2650,6 +2847,21 @@ SpeedLimitHandler
 					return;
 				}
 
+				List<Runnable> _dl_listeners = listener_removers.get( download );
+				
+				if ( _dl_listeners == null ){
+					
+					_dl_listeners = new ArrayList<>();
+					
+					listener_removers.put( download, _dl_listeners );
+					
+				}else{
+					
+					Debug.out( "already present" );
+				}
+				
+				List<Runnable> dl_listeners = _dl_listeners;
+				
 				if ( !has_cats_or_tags.isEmpty()){
 
 						// attribute listener
@@ -2723,7 +2935,7 @@ SpeedLimitHandler
 
 						tt.addTagListener( core_download, tag_listener );
 
-						listener_removers.add(
+						dl_listeners.add(
 							new Runnable(){
 								@Override
 								public void run()
@@ -2797,7 +3009,7 @@ SpeedLimitHandler
 											peer_manager.removeListener( listener );
 										}};
 
-								listener_removers.add( pm_listener_remover );
+								dl_listeners.add( pm_listener_remover );
 							}
 
 							Peer[] peers = peer_manager.getPeers();
@@ -2820,7 +3032,7 @@ SpeedLimitHandler
 								
 								current_pm = null;
 								
-								if ( listener_removers.remove( pm_listener_remover  )){
+								if ( dl_listeners.remove( pm_listener_remover  )){
 
 									pm_listener_remover.run();
 									
@@ -2832,7 +3044,7 @@ SpeedLimitHandler
 
 				download.addPeerListener( peer_listener );
 
-				listener_removers.add(
+				dl_listeners.add(
 					new Runnable(){
 						@Override
 						public void run()
@@ -2849,6 +3061,24 @@ SpeedLimitHandler
 		downloadRemoved(
 			Download	download )
 		{
+			synchronized( lock ){
+				
+				List<Runnable> dl_listeners = listener_removers.remove( download );
+				
+				if ( dl_listeners != null ){
+					
+					for ( Runnable r: dl_listeners ){
+
+						try{
+							r.run();
+
+						}catch( Throwable e ){
+
+							Debug.out( e );
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -3313,6 +3543,22 @@ SpeedLimitHandler
 			}
 		}
 	}
+	
+	private void
+	checkStorage()
+	{
+		List<StorageDetails>	storage;
+
+		synchronized( this ){
+
+			storage = new ArrayList<>(current_storage_details);
+		}
+
+		for ( StorageDetails details: storage ){
+			
+			details.check();
+		}
+	}
 
 	private ScheduleRule
 	getActiveRule(
@@ -3507,9 +3753,9 @@ SpeedLimitHandler
 
 					}else{
 
-						if ( gm.canPauseDownloads()){
+						if ( gm.canPauseDownloads( pause_forced_downloads )){
 
-							gm.pauseDownloads();
+							gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads ));
 						}
 					}
 				}
@@ -3522,12 +3768,9 @@ SpeedLimitHandler
 
 			prioritiser_enabled = true;
 
-			for ( List<NetLimit> l: net_limits.values()){
+			for ( NetLimit n: net_limits_all ){
 
-				for ( NetLimit n: l ){
-
-					n.setEnabled( true );
-				}
+				n.setEnabled( true );
 			}
 
 			if ( active_rule != null ){
@@ -3535,13 +3778,15 @@ SpeedLimitHandler
 				active_rule.checkExtensions();
 			}
 		}
+		
+			// net_limit_pause_all_active overrides any tag based limits
 
-		if ( net_limits.size() > 0 ){
+		if ( !net_limit_pause_all_active && net_limits_all.size() > 0 ){
 
 			checkTagNetLimits( tick_count );
 		}
 
-		if ( 	( current_rule != active_rule && net_limits.size() > 0 ) ||
+		if ( 	( current_rule != active_rule && net_limits_all.size() > 0 ) ||
 				net_limit_pause_all_active ){
 
 				// net_limits can depend on the active rule, recalc
@@ -3554,9 +3799,9 @@ SpeedLimitHandler
 
 		if ( net_limit_pause_all_active ){
 
-			if ( gm.canPauseDownloads()){
+			if ( gm.canPauseDownloads( pause_forced_downloads )){
 
-				gm.pauseDownloads();
+				gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads ));
 			}
 		}
 	}
@@ -3569,7 +3814,8 @@ SpeedLimitHandler
 		result.add( "# Enter rules on separate lines below this section - see " + Wiki.SPEED_LIMIT_SCHEDULER + " for more details" );
 		result.add( "# Rules are of the following types:" );
 		result.add( "#    enable=(yes|no)   - controls whether the entire schedule is enabled or not (default=yes)" );
-		result.add( "#    preserve_inactive_limts=(yes|no) - save existing limits when activating and reinstate on deactivation (default=no)" );
+		result.add( "#    preserve_inactive_limits=(yes|no) - save existing limits when activating and reinstate on deactivation (default=no)" );
+		result.add( "#    pause_force_downloads=(yes|no) - when pausing downloads also pause force-start ones (default=yes)" );
 		result.add( "#    <frequency> <profile_name> from <time> to <time> [extension]*" );
 		result.add( "#        frequency: daily|weekdays|weekends|<day_of_week>" );
 		result.add( "#            day_of_week: mon|tue|wed|thu|fri|sat|sun" );
@@ -3578,6 +3824,7 @@ SpeedLimitHandler
 		result.add( "#    peer_set <set_name>=[<CIDR_specs...>|CC list|Network List|<prior_set_name>] [,inverse=[yes|no]] [,up=<limit>] [,down=<limit>] [peer_up=<limit>] [peer_down=<limit>] [,cat=<cat names>] [,tag=<tag names>] [,client=<regular expression>|auto] [,intf=<regular expression>|auto] [,asn=<regular expression>]" );
 		result.add( "#    net_limit (hourly|daily|weekly|monthly)[(:<profile>|$<tag>)] [total=<limit>] [up=<limit>] [down=<limit>]");
 		result.add( "#    priority_(up|down) <id>=<tag_name> [,<id>=<tag_name>]+ [,freq=<secs>] [,max=<limit>] [,probe=<cycles>]" );
+		result.add( "#    storage (<root>|*) min_space=<space>" );
 		result.add( "#" );
 		result.add( "# For example - assuming there are profiles called 'no_limits' and 'limited_upload' defined:" );
 		result.add( "#" );
@@ -3585,7 +3832,7 @@ SpeedLimitHandler
 		result.add( "#     daily limited_upload from 06:00 to 22:00 stop_tag:bigstuff" );
 		result.add( "#     daily pause_all from 08:00 to 17:00" );
 		result.add( "#" );
-		result.add( "#     net_limit monthly total=250G          // flat montly limit" );
+		result.add( "#     net_limit monthly total=250G          // flat monthly limit" );
 		result.add( "#" );
 		result.add( "#     net_limit monthly:no_limits                  // no monthly limit when no_limits active" );
 		result.add( "#     net_limit monthly:limited_upload total=100G  // 100G a month limit when limited_upload active" );
@@ -3703,53 +3950,43 @@ SpeedLimitHandler
 	{
 		boolean exceeded = false;
 
-		for (Map.Entry<Integer,List<NetLimit>> entry: net_limits.entrySet()){
+		for ( NetLimit limit: net_limits_all ){
 
-			int	type = entry.getKey();
+			LongTermStats net_lts = limit.getLongTermStats();
 
-			for ( NetLimit limit: entry.getValue()){
+			if ( net_lts != null ){
 
-				LongTermStats net_lts = limit.getLongTermStats();
+				continue;
+			}
 
-				if ( net_lts != null ){
+			String profile = limit.getProfile();
 
-					continue;
-				}
+			if ( 	profile != null &&
+					( active_rule == null || !active_rule.profile_name.equals( profile ))){
 
-				String profile = limit.getProfile();
+				continue;
+			}
 
-				if ( 	profile != null &&
-						( active_rule == null || !active_rule.profile_name.equals( profile ))){
+			long[] usage = getLongTermUsage( stats, limit.getType(), limit );
 
-					continue;
-				}
+			long total_up = usage[LongTermStats.ST_PROTOCOL_UPLOAD] + usage[LongTermStats.ST_DATA_UPLOAD] + usage[LongTermStats.ST_DHT_UPLOAD];
+			long total_do = usage[LongTermStats.ST_PROTOCOL_DOWNLOAD] + usage[LongTermStats.ST_DATA_DOWNLOAD] + usage[LongTermStats.ST_DHT_DOWNLOAD];
 
-				long[] usage = getLongTermUsage( stats, type, limit );
+			long[]	limits = limit.getLimits();
 
-				long total_up = usage[LongTermStats.ST_PROTOCOL_UPLOAD] + usage[LongTermStats.ST_DATA_UPLOAD] + usage[LongTermStats.ST_DHT_UPLOAD];
-				long total_do = usage[LongTermStats.ST_PROTOCOL_DOWNLOAD] + usage[LongTermStats.ST_DATA_DOWNLOAD] + usage[LongTermStats.ST_DHT_DOWNLOAD];
+			if ( limits[0] > 0 ){
 
-				long[]	limits = limit.getLimits();
+				exceeded = total_up + total_do >= limits[0];
+			}
 
-				if ( limits[0] > 0 ){
+			if ( limits[1] > 0 && !exceeded){
 
-					exceeded = total_up + total_do >= limits[0];
-				}
+				exceeded = total_up >= limits[1];
+			}
 
-				if ( limits[1] > 0 && !exceeded){
+			if ( limits[2] > 0 && !exceeded){
 
-					exceeded = total_up >= limits[1];
-				}
-
-				if ( limits[2] > 0 && !exceeded){
-
-					exceeded = total_do >= limits[2];
-				}
-
-				if ( exceeded ){
-
-					break;
-				}
+				exceeded = total_do >= limits[2];
 			}
 
 			if ( exceeded ){
@@ -3760,10 +3997,62 @@ SpeedLimitHandler
 
 		if ( net_limit_pause_all_active != exceeded ){
 
-			setNetLimitPauseAllActive( exceeded );
+			if ( exceeded ){
+				
+					// defer the pause until in a good state to do so
+				
+				if ( canPauseAll()){
+			
+					setNetLimitPauseAllActive( true );
+				}
+			}else{
+				
+				setNetLimitPauseAllActive( false );
+			}
 		}
 	}
 
+	private boolean 
+	canPauseAll()
+	{
+		GlobalManager gm = core.getGlobalManager();
+		
+		for ( DownloadManager dm: gm.getDownloadManagers()){
+			
+			int state = dm.getState();
+
+			if ( state == DownloadManager.STATE_STOPPED ){
+				
+				continue;
+			}
+			
+			if ( dm.getMoveProgress() != null || FileUtil.hasTask( dm )){
+				
+				return( false );
+			}
+			
+
+			if ( state == DownloadManager.STATE_CHECKING ){
+
+				return( false );
+
+			}else if ( state == DownloadManager.STATE_SEEDING ){
+
+				DiskManager disk_manager = dm.getDiskManager();
+
+				if ( disk_manager != null ){
+
+					if ( disk_manager.getCompleteRecheckStatus() != -1 ){
+						
+						return( false );
+					}
+				}
+			}
+		}
+		
+		return( true );
+	}
+	
 	private void
 	checkTagNetLimits(
 		int	tick_count )
@@ -3772,156 +4061,195 @@ SpeedLimitHandler
 
 		String log_str = "";
 
-		Map <TagFeatureRunState,List<Object[]>>		rs_ops = new HashMap<>();
-		Map <TagFeatureRateLimit,List<Object[]>>	rl_ops = new HashMap<>();
+		Map<TagFeatureRunState,List<Object[]>>	rs_ops = new LinkedHashMap<>();
+		Map<TagFeatureRateLimit,List<Object[]>>	rl_ops = new LinkedHashMap<>();
 
-		for (Map.Entry<Integer,List<NetLimit>> entry: net_limits.entrySet()){
+		Set<Taggable>	handled_dms = new IdentityHashSet<>();
+		
+		if ( !pause_forced_downloads ){
+			
+			for ( DownloadManager dm: core.getGlobalManager().getDownloadManagers()){
+				
+				if ( dm.isForceStart()){
+					
+					handled_dms.add( dm );
+				}
+			}
+		}
+		
+		for ( NetLimit limit: net_limits_all ){
 
-			int	type = entry.getKey();
+			String name_str = "net_limit";
 
-			for ( NetLimit limit: entry.getValue()){
+			String name = limit.getName();
 
-				String name_str = "net_limit";
+			if ( name.length() > 0 ){
 
-				String name = limit.getName();
+				name_str += " " + name;
+			}
 
-				if ( name.length() > 0 ){
+			LongTermStats stats = limit.getLongTermStats();
 
-					name_str += " " + name;
+			if ( stats == null ){
+
+				continue;
+			}
+
+			TagFeatureRateLimit tag_rl = limit.getTag();
+
+			Tag tag = tag_rl.getTag();
+
+			long[] usage = getLongTermUsage( stats, limit.getType(), limit );
+
+			long total_up = usage[LongTermStats.ST_PROTOCOL_UPLOAD] + usage[LongTermStats.ST_DATA_UPLOAD];
+			long total_do = usage[LongTermStats.ST_PROTOCOL_DOWNLOAD] + usage[LongTermStats.ST_DATA_DOWNLOAD];
+
+			boolean	enabled = limit.isEnabled();
+
+			log_str += (log_str.length()==0?"":"; ") + (name.length()==0?"":(name + " " )) +
+					tag.getTagName( true ) + ": up=" + DisplayFormatters.formatByteCountToKiBEtc( total_up ) +
+					", down=" + DisplayFormatters.formatByteCountToKiBEtc( total_do ) + ", enabled=" + enabled;
+
+			long[]	limits = limit.getLimits();
+
+			boolean exceeded_up 	= false;
+			boolean exceeded_down 	= false;
+
+			boolean	handled = false;
+
+			if ( enabled ){
+
+				if ( limits[0] > 0 ){
+
+					exceeded_up = exceeded_down = total_up + total_do >= limits[0];
 				}
 
-				LongTermStats stats = limit.getLongTermStats();
+				if ( limits[1] > 0 && !exceeded_up){
 
-				if ( stats == null ){
-
-					continue;
+					exceeded_up = total_up >= limits[1];
 				}
 
-				TagFeatureRateLimit tag_rl = limit.getTag();
+				if ( limits[2] > 0 && !exceeded_down){
 
-				Tag tag = tag_rl.getTag();
+					exceeded_down = total_do >= limits[2];
+				}
 
-				long[] usage = getLongTermUsage( stats, type, limit );
+				if ( tag instanceof TagFeatureRunState ){
 
-				long total_up = usage[LongTermStats.ST_PROTOCOL_UPLOAD] + usage[LongTermStats.ST_DATA_UPLOAD];
-				long total_do = usage[LongTermStats.ST_PROTOCOL_DOWNLOAD] + usage[LongTermStats.ST_DATA_DOWNLOAD];
+					TagFeatureRunState rs = (TagFeatureRunState)tag;
 
-				boolean	enabled = limit.isEnabled();
+					if ( rs.hasRunStateCapability( TagFeatureRunState.RSC_PAUSE )){
 
-				log_str += (log_str.length()==0?"":"; ") + (name.length()==0?"":(name + " " )) +
-						tag.getTagName( true ) + ": up=" + DisplayFormatters.formatByteCountToKiBEtc( total_up ) +
-						", down=" + DisplayFormatters.formatByteCountToKiBEtc( total_do ) + ", enabled=" + enabled;
+							// if both are exceeded then we pause the downloads
+							// otherwise we set the up/down limit to disabled in the code below
+						
+						boolean pause = exceeded_up && exceeded_down;
 
-				long[]	limits = limit.getLimits();
+						int op = pause?TagFeatureRunState.RSC_PAUSE:TagFeatureRunState.RSC_RESUME;
 
-				boolean exceeded_up 	= false;
-				boolean exceeded_down 	= false;
+						List<Object[]> list = rs_ops.get( rs );
 
-				boolean	handled = false;
+						if ( list == null ){
 
-				if ( enabled ){
+							list = new ArrayList<>();
 
-					if ( limits[0] > 0 ){
+							rs_ops.put( rs, list );
+						}
 
-						exceeded_up = exceeded_down = total_up + total_do >= limits[0];
+						list.add(
+							new Object[]{
+									name_str + " : " + (pause?"pausing":"resuming") + " tag " + tag.getTagName( true ),
+									op });
+
+						handled = pause;
 					}
+				}
+			}
 
-					if ( limits[1] > 0 && !exceeded_up){
+			if ( !handled ){
 
-						exceeded_up = total_up >= limits[1];
+				int target_up 	= exceeded_up?-1:0;
+				int target_down = exceeded_down?-1:0;
+
+				List<Object[]> list = rl_ops.get( tag_rl );
+
+				if ( list == null ){
+
+					list = new ArrayList<>();
+
+					rl_ops.put( tag_rl, list );
+				}
+
+				list.add(
+					new Object[]{
+							name_str + ": setting rates to " + format( target_up ) + "/" + format( target_down ) + " on tag " + tag.getTagName( true ),
+							target_up, target_down });
+			}
+		}
+
+		Predicate<Taggable> filter = taggable->!handled_dms.contains( taggable );
+		
+			// we want to process all pause ops before resume as pause overrides resume
+		
+		for ( int op_to_do: new int[]{ TagFeatureRunState.RSC_PAUSE, TagFeatureRunState.RSC_RESUME }){
+			
+			for ( Map.Entry<TagFeatureRunState,List<Object[]>> entry: rs_ops.entrySet()){
+	
+				TagFeatureRunState 	tag_rs 	= entry.getKey();
+				List<Object[]>		details	= entry.getValue();
+	
+				int	selected_op = TagFeatureRunState.RSC_RESUME;
+	
+				String all_str = "";
+	
+				for ( Object[] detail: details ){
+	
+					String	str = (String)detail[0];
+	
+					all_str += (all_str.length()==0?"":";") + str;
+	
+					int		op	= (Integer)detail[1];
+	
+					if  ( op == TagFeatureRunState.RSC_PAUSE ){
+	
+						selected_op = TagFeatureRunState.RSC_PAUSE;
 					}
-
-					if ( limits[2] > 0 && !exceeded_down){
-
-						exceeded_down = total_do >= limits[2];
-					}
-
-					if ( tag instanceof TagFeatureRunState ){
-
-						TagFeatureRunState rs = (TagFeatureRunState)tag;
-
-						if ( rs.hasRunStateCapability( TagFeatureRunState.RSC_PAUSE )){
-
-							boolean pause = exceeded_up&&exceeded_down;
-
-							int op = pause?TagFeatureRunState.RSC_PAUSE:TagFeatureRunState.RSC_RESUME;
-
-							List<Object[]> list = rs_ops.get( rs );
-
-							if ( list == null ){
-
-								list = new ArrayList<>();
-
-								rs_ops.put( rs, list );
+				}
+	
+				if ( op_to_do == selected_op ){
+					
+					if ( selected_op == TagFeatureRunState.RSC_PAUSE ){
+						
+						Set<Taggable> dms = tag_rs.getTag().getTagged();
+						
+						for ( Taggable t: dms ){
+							
+							if (((DownloadManager)t).isPaused()){
+								
+								handled_dms.add( t );
 							}
-
-							list.add(
-								new Object[]{
-										name_str + " : " + (pause?"pausing":"resuming") + " tag " + tag.getTagName( true ),
-										op });
-
-							handled = pause;
+						}
+					}
+					
+					boolean[] result = tag_rs.getPerformableOperations( new int[]{ selected_op }, filter );
+		
+					if ( result[0] ){
+		
+						logger.log( all_str );
+		
+						do_log = true;
+		
+						List<Taggable>	affected = tag_rs.performOperation( selected_op, filter );
+						
+						if ( selected_op == TagFeatureRunState.RSC_PAUSE ){
+							
+							handled_dms.addAll( affected );
 						}
 					}
 				}
-
-				if ( !handled ){
-
-					int target_up 	= exceeded_up?-1:0;
-					int target_down = exceeded_down?-1:0;
-
-					List<Object[]> list = rl_ops.get( tag_rl );
-
-					if ( list == null ){
-
-						list = new ArrayList<>();
-
-						rl_ops.put( tag_rl, list );
-					}
-
-					list.add(
-						new Object[]{
-								name_str + ": setting rates to " + format( target_up ) + "/" + format( target_down ) + " on tag " + tag.getTagName( true ),
-								target_up, target_down });
-				}
 			}
 		}
-
-		for ( Map.Entry<TagFeatureRunState,List<Object[]>> entry: rs_ops.entrySet()){
-
-			TagFeatureRunState 	tag_rs 	= entry.getKey();
-			List<Object[]>		details	= entry.getValue();
-
-			int	selected_op = TagFeatureRunState.RSC_RESUME;
-
-			String all_str = "";
-
-			for ( Object[] detail: details ){
-
-				String	str = (String)detail[0];
-
-				all_str += (all_str.length()==0?"":";") + str;
-
-				int		op	= (Integer)detail[1];
-
-				if  ( op == TagFeatureRunState.RSC_PAUSE ){
-
-					selected_op =TagFeatureRunState.RSC_PAUSE;
-				}
-			}
-
-			boolean[] result = tag_rs.getPerformableOperations( new int[]{ selected_op });
-
-			if ( result[0] ){
-
-				logger.log( all_str );
-
-				do_log = true;
-
-				tag_rs.performOperation( selected_op );
-			}
-		}
-
+		
 		for ( Map.Entry<TagFeatureRateLimit,List<Object[]>> entry: rl_ops.entrySet()){
 
 			TagFeatureRateLimit 	tag_rl 	= entry.getKey();
@@ -5322,13 +5650,15 @@ SpeedLimitHandler
 
 						if ( extension_type == ET_PAUSE_TAG ){
 
-							if ( !download.isPaused()){
-
-								download.pause( true );
+							if ( pause_forced_downloads || !download.isForceStart()){
+								
+								if ( !download.isPaused()){
+	
+									download.pause( true );
+								}
+								
+								download.setStopReason( "Speed Limit Scheduler: Tag " + tag.getTagName( true ));
 							}
-							
-							download.setStopReason( "Speed Limit Handler: Tag " + tag.getTagName( true ));
-							
 						}else if ( extension_type == ET_STOP_TAG ){
 
 							if ( 	state != Download.ST_ERROR &&
@@ -5337,7 +5667,7 @@ SpeedLimitHandler
 
 								download.stopIt( DownloadManager.STATE_STOPPED, false, false );
 								
-								download.setStopReason( "Speed Limit Handler: Tag " + tag.getTagName( true ));
+								download.setStopReason( "Speed Limit Scheduler: Tag " + tag.getTagName( true ));
 							}
 						}
 					}
@@ -5410,6 +5740,7 @@ SpeedLimitHandler
 	class
 	NetLimit
 	{
+		final private int				type;
 		final private String			name;
 		final private double			multiplier;
 		final private String			profile;
@@ -5424,6 +5755,7 @@ SpeedLimitHandler
 
 		private
 		NetLimit(
+			int						_type,
 			String					_name,
 			double					_mult,
 			String					_profile,
@@ -5433,6 +5765,7 @@ SpeedLimitHandler
 			long					_up_lim,
 			long					_down_lim )
 		{
+			type		= _type;
 			name		= _name;
 			multiplier	= _mult;
 			profile		= _profile;
@@ -5467,6 +5800,12 @@ SpeedLimitHandler
 			}
 		}
 
+		private int
+		getType()
+		{
+			return( type );
+		}
+		
 		private String
 		getName()
 		{
@@ -6124,9 +6463,15 @@ SpeedLimitHandler
 				
 				int actions = COConfigurationManager.getIntParameter( "speed.limit.handler.ipset_n." + tag_id + ".eos", -1 );
 				
-				if ( actions == TagFeatureExecOnAssign.ACTION_DESTROY ){
+				if ( actions != -1 ){
 					
-					super.setActionEnabled( actions, true );
+					for ( int action: new int[]{TagFeatureExecOnAssign.ACTION_DESTROY, TagFeatureExecOnAssign.ACTION_BAN }){
+						
+						if (( actions & action ) != 0 ){
+							
+							super.setActionEnabled( action, true );
+						}
+					}
 				}
 				
 				int[] colour = COConfigurationManager.getRGBParameter( "speed.limit.handler.ipset_n." + getTagID() + ".color" );
@@ -6148,7 +6493,7 @@ SpeedLimitHandler
 			public int
 			getSupportedActions()
 			{
-				return( TagFeatureExecOnAssign.ACTION_DESTROY );
+				return( TagFeatureExecOnAssign.ACTION_DESTROY | TagFeatureExecOnAssign.ACTION_BAN );
 			}
 
 			@Override
@@ -6159,9 +6504,36 @@ SpeedLimitHandler
 			{
 				super.setActionEnabled( action, enabled );
 				
-				if ( action == TagFeatureExecOnAssign.ACTION_DESTROY  ){
+				if ( action == TagFeatureExecOnAssign.ACTION_DESTROY || action == TagFeatureExecOnAssign.ACTION_BAN ){
 				
-					COConfigurationManager.setParameter( "speed.limit.handler.ipset_n." + getTagID() + ".eos", enabled?TagFeatureExecOnAssign.ACTION_DESTROY:-1);
+					int tag_id = getTagID();
+					
+					int actions = COConfigurationManager.getIntParameter( "speed.limit.handler.ipset_n." + tag_id + ".eos", -1 );
+					
+					if ( enabled ){
+						
+						if ( actions == -1 ){
+							
+							actions = action;
+							
+						}else{
+							
+							actions |= action;
+						}
+					}else{
+						
+						if ( actions != -1 ){
+					
+							actions &= ~action;
+						}
+						
+						if ( actions == 0 ){
+							
+							actions = -1;	// bad default, keep it I guess
+						}
+					}
+					
+					COConfigurationManager.setParameter( "speed.limit.handler.ipset_n." + tag_id + ".eos", actions );
 				}
 			}
 			
@@ -6282,13 +6654,24 @@ SpeedLimitHandler
 				
 				if ( to_delete != null ){
 					
+					boolean do_ban = isActionEnabled( TagFeatureExecOnAssign.ACTION_BAN );
+					
 					for ( PEPeer peer: to_delete ){
 						
-						PEPeerManager pm = peer.getManager();
+						PEPeerManager peer_manager = peer.getManager();
 						
-						if ( pm != null ){
+						if ( peer_manager != null ){
 						
-							pm.removePeer( peer );
+							if ( do_ban ){
+								
+								ip_filter.ban( peer.getIp(), MessageText.getString( "tag.type.ipset" ) + ": " + getTagName( true ), false );
+								
+								peer_manager.removePeer( peer, "PeerSet ban action", Transport.CR_IP_BLOCKED );
+								
+							}else{
+							
+								peer_manager.removePeer( peer, "PeerSet removal action", Transport.CR_IP_BLOCKED );
+							}
 						}
 					}
 				}
@@ -6473,7 +6856,7 @@ SpeedLimitHandler
 				
 				if ( result ){
 					
-					if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_DESTROY )){
+					if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_DESTROY ) || isActionEnabled( TagFeatureExecOnAssign.ACTION_BAN )){
 
 						return( 3 );
 					}
@@ -6530,7 +6913,7 @@ SpeedLimitHandler
 				
 				if ( result ){
 					
-					if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_DESTROY )){
+					if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_DESTROY ) || isActionEnabled( TagFeatureExecOnAssign.ACTION_BAN )){
 
 						return( 3 );
 					}
@@ -6546,20 +6929,36 @@ SpeedLimitHandler
 			{
 				boolean	result = false;
 				
-				String as_name	= PeerUtils.getASN( peer );
+				String[] as_details	= PeerUtils.getASandASN( peer );
 				
-				if ( as_name != null ){
+				if ( as_details != null ){
 					
-					if ( !as_name.isEmpty()){
+					String as 	= as_details[0];
+					String asn 	= as_details[1];
+					
+					boolean matched = false;
+					
+					if ( !as.isEmpty()){
 						
-						if ( asn_pattern.matcher( as_name ).find()){
+						if ( asn_pattern.matcher( as ).find()){
+							
+							result = true;
+							
+							matched = true;
+						}
+					}
+					
+					if ( !matched && !asn.isEmpty()){
+						
+						if ( asn_pattern.matcher( asn ).find()){
 						
 							result = true;
 						}
+					}
+					
+					if ( asn_pattern_inverse ){
 						
-						if ( asn_pattern_inverse ){
-							result = !result;
-						}
+						result = !result;
 					}
 				}else{
 						// we want to give a bit more time for asn lookup
@@ -6582,7 +6981,7 @@ SpeedLimitHandler
 				
 				if ( result ){
 					
-					if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_DESTROY )){
+					if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_DESTROY ) || isActionEnabled( TagFeatureExecOnAssign.ACTION_BAN )){
 
 						return( 3 );
 					}
@@ -6598,11 +6997,23 @@ SpeedLimitHandler
 			{
 				PEPeer peer = PluginCoreUtils.unwrap( _peer );
 
-				if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_DESTROY ) && !deferEOS()){
+				if ( !deferEOS()){
+					
+					if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_BAN )){
+					
+						ip_filter.ban( peer.getIp(), MessageText.getString( "tag.type.ipset" ) + ": " + getTagName( true ), false );
+						
+						peer_manager.removePeer( _peer, "PeerSet ban action", Transport.CR_IP_BLOCKED );
+						
+						return;
+					}
+					
+					if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_DESTROY )){
 
-					peer_manager.removePeer( _peer );
-
-					return;
+						peer_manager.removePeer( _peer, "PeerSet removal action", Transport.CR_IP_BLOCKED );
+						
+						return;
+					}
 				}
 
 				synchronized( this ){
@@ -6628,7 +7039,16 @@ SpeedLimitHandler
 							
 								// immediate remove
 							
-							peer_manager.removePeer( _peer );
+							if ( isActionEnabled( TagFeatureExecOnAssign.ACTION_BAN )){
+								
+								ip_filter.ban( peer.getIp(), MessageText.getString( "tag.type.ipset" ) + ": " + getTagName( true ), false );
+								
+								peer_manager.removePeer( _peer, "PeerSet ban action", Transport.CR_IP_BLOCKED );
+								
+							}else{
+								
+								peer_manager.removePeer( _peer, "PeerSet removal action", Transport.CR_IP_BLOCKED );
+							}
 							
 							return;
 							
@@ -7775,7 +8195,7 @@ SpeedLimitHandler
 												if ( probe_rate <= 0 || rate < 110*probe_rate/100 ){
 
 														// weak one went down but previous probe rate doesn't
-														// let it off teh hook
+														// let it off the hook
 
 													stick_with_decision = true;
 
@@ -7850,7 +8270,7 @@ SpeedLimitHandler
 
 										tag_state.setLimit( my_target, PrioritiserTagState.CT_MAJOR, "1: adjusting after limit hit (diffs=" + formatRate( hp_diff, false ) + "/" + formatRate( my_diff, false ) + ", consec=" + consec_limits_hit + ")" );
 
-											// decrease lower priority limits agressively as any bandwidth they are consuming
+											// decrease lower priority limits aggressively as any bandwidth they are consuming
 											// needs to be pushed our way
 
 										int	low_pri_rates = 0;
@@ -8863,6 +9283,68 @@ SpeedLimitHandler
 
 				return( str );
 			}
+		}
+	}
+	
+	private class
+	StorageDetails
+	{
+		private final File		root;
+		private final String	name;
+		private final long		min_space;
+		
+		private
+		StorageDetails(
+			File		_root,
+			String		_name,
+			long		_min_space )
+		{
+			root		= _root;
+			name		= _name;
+			min_space	= _min_space;
+		}
+		
+		private void
+		check()
+		{
+			try{
+				long space = root.getFreeSpace();
+				
+				if ( space < min_space ){
+					
+					List<DownloadManager> dms = core.getGlobalManager().getDownloadManagers();
+					
+					for ( DownloadManager dm: dms ){
+						
+						if ( dm.getState() == DownloadManager.STATE_DOWNLOADING ){
+							
+							String fs = FileUtil.getFileStoreNames(dm.getAbsoluteSaveLocation())[0];
+							
+							if ( fs.equals( name )){
+								
+								if ( pause_forced_downloads || !dm.isForceStart()){
+											
+									logger.log( "Pausing '" + dm.getDisplayName() + "', insufficient space on '" + root.getAbsolutePath() + "'" );
+										
+									dm.pause( true );
+									
+									dm.setStopReason( "Speed Limit Scheduler: Insufficient space on '" + root.getAbsolutePath() + "'" );
+								}
+							}
+						}
+					}
+					
+				}
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
+		
+		private String
+		getString()
+		{
+			return( name + ", root=" + root.getAbsolutePath() + ", min_space=" + DisplayFormatters.formatByteCountToKiBEtc( min_space) + ", free=" + DisplayFormatters.formatByteCountToKiBEtc( root.getFreeSpace()));
 		}
 	}
 }

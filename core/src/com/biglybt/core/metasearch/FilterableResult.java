@@ -27,12 +27,18 @@ FilterableResult
 	public String
 	getCategory();
 	
+	public String[]
+	getTags();
+	
 	public long
 	getSize();
 	
 	public int
 	getNbSeeds();
 	
+	public int
+	getNbPeers();
+
 	public long
 	getTime();
 }

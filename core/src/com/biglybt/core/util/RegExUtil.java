@@ -35,7 +35,9 @@ RegExUtil
 	public static final Pattern PAT_SPLIT_DOT = Pattern.compile("\\.");
 	public static final Pattern PAT_SPLIT_SPACE = Pattern.compile(" ");
 	public static final Pattern PAT_SPLIT_SLASH_N = Pattern.compile("\n");
-
+	
+	public static final String PAT_WHITE_SPACE = "(?:\\s|\\p{Z})+";	// includes non-breaking space char
+			
 	private static final ThreadLocal<Map<String,Object[]>>		tls	=
 		new ThreadLocal<Map<String,Object[]>>()
 		{
@@ -79,6 +81,49 @@ RegExUtil
 		}
 	}
 
+	public static String
+	convertAndOrToExpr(
+		String		str )
+	{
+		str = str.replaceAll("\\s*[|;]\\s*", "|" );
+		
+		if ( str.contains( " " )){
+			
+			String[] bits = str.split( " " );
+			
+			String s = "";
+			
+				// implement 'and' for spaces - (?=.*xxx)(?=.*yyy)
+			
+			for ( String bit: bits ){
+				
+				bit = bit.trim();
+				
+				if ( !bit.isEmpty()){
+				
+					bit = splitAndQuote(bit, "[|]");
+					
+					s += "(?=.*" + bit + ")";
+				}
+			}
+			
+			return( s );
+			
+		}else{
+		
+			return( splitAndQuote(str, "[|]") );
+		}
+	}
+	
+	public static String
+	splitAndQuote(String s, String splitterRegex) {
+		String[] bits = s.split(splitterRegex);
+		for (int i = 0; i < bits.length; i++) {
+			bits[i] = Pattern.quote(bits[i]);
+		}
+		return String.join("|", bits);
+	}
+	
 	public static boolean
 	mightBeEvil(
 		String	str )

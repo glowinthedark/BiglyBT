@@ -26,10 +26,13 @@ import java.util.*;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ConfigKeys;
+import com.biglybt.core.disk.DiskManager;
+import com.biglybt.core.disk.DiskManagerReadRequest;
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
 import com.biglybt.core.networkmanager.ConnectionEndpoint;
+import com.biglybt.core.networkmanager.LimitedRateGroup;
 import com.biglybt.core.networkmanager.NetworkConnection;
 import com.biglybt.core.networkmanager.NetworkManager;
 import com.biglybt.core.networkmanager.ProtocolEndpoint;
@@ -38,10 +41,18 @@ import com.biglybt.core.networkmanager.impl.IncomingConnectionManager;
 import com.biglybt.core.networkmanager.impl.TransportHelper;
 import com.biglybt.core.peer.PEPeer;
 import com.biglybt.core.peer.PEPeerListener;
+import com.biglybt.core.peer.PEPeerManagerAdapter;
+import com.biglybt.core.peer.PEPeerManagerListener;
+import com.biglybt.core.peer.PEPeerManagerStats;
 import com.biglybt.core.peer.PEPeerSource;
+import com.biglybt.core.peer.PEPeerStats;
+import com.biglybt.core.peer.PEPiece;
 import com.biglybt.core.peer.impl.PEPeerControl;
+import com.biglybt.core.peer.impl.PEPeerControlHashHandler;
+import com.biglybt.core.peer.impl.PEPeerStatsImpl;
 import com.biglybt.core.peer.impl.PEPeerTransport;
 import com.biglybt.core.peer.impl.PEPeerTransportFactory;
+import com.biglybt.core.peer.util.PeerIdentityDataID;
 import com.biglybt.core.peer.util.PeerIdentityManager;
 import com.biglybt.core.peermanager.messaging.MessageManager;
 import com.biglybt.core.peermanager.messaging.MessageStreamDecoder;
@@ -50,13 +61,19 @@ import com.biglybt.core.peermanager.messaging.MessageStreamFactory;
 import com.biglybt.core.peermanager.messaging.bittorrent.BTHandshake;
 import com.biglybt.core.peermanager.messaging.bittorrent.BTMessageDecoder;
 import com.biglybt.core.peermanager.messaging.bittorrent.BTMessageEncoder;
+import com.biglybt.core.peermanager.peerdb.PeerExchangerItem;
+import com.biglybt.core.peermanager.peerdb.PeerItem;
+import com.biglybt.core.peermanager.piecepicker.PiecePicker;
 import com.biglybt.core.peermanager.piecepicker.util.BitFlags;
 import com.biglybt.core.stats.CoreStats;
 import com.biglybt.core.stats.CoreStatsProvider;
 import com.biglybt.core.torrent.TOTorrentFile;
+import com.biglybt.core.tracker.TrackerPeerSource;
+import com.biglybt.core.tracker.client.TRTrackerAnnouncerResponse;
 import com.biglybt.core.util.*;
 import com.biglybt.core.util.bloom.BloomFilter;
 import com.biglybt.core.util.bloom.BloomFilterFactory;
+import com.biglybt.pif.peers.PeerDescriptor;
 
 /**
  *
@@ -64,6 +81,8 @@ import com.biglybt.core.util.bloom.BloomFilterFactory;
 public class PeerManager implements CoreStatsProvider {
 	private static final LogIDs LOGID = LogIDs.PEER;
 
+	private static final Object	KEY_TRANSPORT_PROBE	= new Object();
+	
 	private static final PeerManager instance = new PeerManager();
 
 	private static final int	PENDING_TIMEOUT	= 10*1000;
@@ -115,7 +134,7 @@ public class PeerManager implements CoreStatsProvider {
 						while( true ){
 
 							try{
-								Thread.sleep( PENDING_TIMEOUT / 2 );
+								Thread.sleep( 1000 );
 
 							}catch( Throwable e ){
 							}
@@ -125,7 +144,7 @@ public class PeerManager implements CoreStatsProvider {
 
 								if ( timer_targets.size() == 0 ){
 
-									idle_time += PENDING_TIMEOUT / 2;
+									idle_time += 1000;
 
 									if ( idle_time >= 30*1000 ){
 
@@ -234,7 +253,7 @@ public class PeerManager implements CoreStatsProvider {
 
 						if ( control != null ){
 
-							total_peers 				+= control.getNbPeers();
+							total_peers 				+= control.getNbPeers() + control.getNbSeeds();
 							total_snubbed_peers			+= control.getNbPeersSnubbed();
 							total_stalled_pending_load	+= control.getNbPeersStalledPendingLoad();
 						}
@@ -288,7 +307,10 @@ public class PeerManager implements CoreStatsProvider {
 
 				PeerManagerRegistrationImpl	routing_data = null;
 
-				if( to_compare.equals( legacy_handshake_header ) ) {  //compare header
+				PeerManagerRegistrationRoutingFailed routing_failed = null;
+				
+				if ( to_compare.equals( legacy_handshake_header )){  //compare header
+					
 					to_compare.limit( old_position + 48 );
 					to_compare.position( old_position + 28 );
 
@@ -296,11 +318,13 @@ public class PeerManager implements CoreStatsProvider {
 
 					to_compare.get( hash );
 
+					HashWrapper hash_wrapper = new HashWrapper( hash );
+					
 					CopyOnWriteList<PeerManagerRegistrationImpl>	registrations;
 					
 					synchronized( registered_legacy_managers ){
 						
-						registrations = registered_legacy_managers.get( new HashWrapper( hash ));
+						registrations = registered_legacy_managers.get( hash_wrapper );
 					}
 					
 					if ( registrations != null ){
@@ -315,7 +339,7 @@ public class PeerManager implements CoreStatsProvider {
 								
 								if ( adapter.getHashOverride() != null ){
 									
-									if ( local_port == adapter.getLocalPort( true )){	// only if allocated as if it is't it is an out-of-date connection
+									if ( local_port == adapter.getHashOverrideLocalPort( true )){	// only if allocated as if it is't it is an out-of-date connection
 										
 										routing_data = r;
 										
@@ -328,12 +352,27 @@ public class PeerManager implements CoreStatsProvider {
 							}
 						}
 					}
+					
+					if ( routing_data == null ){
+						
+							// Header matched but no matching hash, use dummy routing data to
+							// ensure failure. If we don't then it appears as if we don't have
+							// sufficient information to decide if it is routable or not
+						
+						routing_failed = new PeerManagerRegistrationRoutingFailed( hash_wrapper );
+					}
 				}
 
-				//restore buffer structure
+					//restore buffer structure
+				
 				to_compare.limit( old_limit );
 				to_compare.position( old_position );
 
+				if ( routing_failed != null ){
+					
+					return( routing_failed );
+				}
+				
 				if ( routing_data != null ){
 
 					if ( !routing_data.isActive()){
@@ -352,7 +391,9 @@ public class PeerManager implements CoreStatsProvider {
 
 						}else{
 
-							if ( !routing_data.getAdapter().activateRequest( address )){
+							int at = routing_data.getAdapter().activateRequest( address );
+							
+							if ( at == PeerManagerRegistrationAdapter.AT_DECLINED ){
 
 								String reason = "Activation request from " + address + " denied by rules";
 
@@ -363,6 +404,10 @@ public class PeerManager implements CoreStatsProvider {
 								transport.close( reason );
 
 								routing_data = null;
+								
+							}else if ( at == PeerManagerRegistrationAdapter.AT_ACCEPTED_PROBE ){
+								
+								transport.setUserData( KEY_TRANSPORT_PROBE, "" );
 							}
 						}
 					}
@@ -399,7 +444,7 @@ public class PeerManager implements CoreStatsProvider {
 
 			@Override
 			public byte[][]
-			              getSharedSecrets()
+			getSharedSecrets()
 			{
 				return( null );	// registered manually above
 			}
@@ -409,6 +454,15 @@ public class PeerManager implements CoreStatsProvider {
 			getSpecificPort()
 			{
 				return( -1 );
+			}
+			
+			@Override
+			public String 
+			getDescription()
+			{
+					// shared secrets registered earlier with suitable description
+				
+				return( "PeerManager" );
 			}
 		};
 
@@ -420,10 +474,10 @@ public class PeerManager implements CoreStatsProvider {
 					@Override
 					public void
 					connectionRouted(
-							NetworkConnection 	connection,
-							Object 				routing_data )
+						NetworkConnection 	connection,
+						Object 				routing_data )
 					{
-						PeerManagerRegistrationImpl	registration = (PeerManagerRegistrationImpl)routing_data;
+						PeerManagerRegistration	registration = (PeerManagerRegistration)routing_data;
 
 						registration.route( connection, null );
 					}
@@ -445,8 +499,8 @@ public class PeerManager implements CoreStatsProvider {
 
 	public PeerManagerRegistration
 	manualMatchHash(
-			InetSocketAddress	address,
-			byte[]				hash )
+		InetSocketAddress	address,
+		byte[]				hash )
 	{
 		PeerManagerRegistrationImpl	routing_data = null;
 
@@ -474,7 +528,7 @@ public class PeerManager implements CoreStatsProvider {
 
 				}else{
 
-					if ( !routing_data.getAdapter().activateRequest( address )){
+					if ( routing_data.getAdapter().activateRequest( address ) == PeerManagerRegistrationAdapter.AT_DECLINED ){
 
 						if (Logger.isEnabled()){
 							Logger.log(new LogEvent(LOGID, "Activation request from " + address + " denied by rules" ));
@@ -517,9 +571,7 @@ public class PeerManager implements CoreStatsProvider {
 		NetworkConnection			_connection,
 		PeerManagerRoutingListener	_listener )
 	{
-		PeerManagerRegistrationImpl	registration = (PeerManagerRegistrationImpl)_registration;
-
-		registration.route( _connection, _listener );
+		_registration.route( _connection, _listener );
 	}
 
 	public PeerManagerRegistration
@@ -539,7 +591,7 @@ public class PeerManager implements CoreStatsProvider {
 
 				registered_legacy_managers.put( hash, registrations );
 
-				IncomingConnectionManager.getSingleton().addSharedSecrets( secrets );
+				IncomingConnectionManager.getSingleton().addSharedSecrets( adapter.getDescription(), secrets );
 			}
 
 			PeerManagerRegistrationImpl	registration = new PeerManagerRegistrationImpl( hash, adapter );
@@ -569,7 +621,94 @@ public class PeerManager implements CoreStatsProvider {
 	}
 
 
+	private class
+	PeerManagerRegistrationRoutingFailed
+		implements PeerManagerRegistration
+	{
+		private final HashWrapper	hash;
+		
+		PeerManagerRegistrationRoutingFailed(
+			HashWrapper		_hash )
+		{
+			hash	= _hash;
+		}
+		
+		public TOTorrentFile
+		getLink(
+			String			link )
+		{
+			return( null );
+		}
 
+	    public void
+		removeLink(
+			String			link )
+		{
+		}
+
+	    public void
+		addLink(
+			String			link,
+			TOTorrentFile	target )
+
+			throws Exception
+		{
+		}
+
+		public void
+		route(
+			NetworkConnection 			connection,
+			PeerManagerRoutingListener	listener )
+		{
+			String hash_str = ByteFormatter.nicePrint( hash.getHash(), true );
+			
+			if (Logger.isEnabled()){
+				
+				Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING,
+						"Incoming connection from [" + connection
+						+ "] refused, hash " + hash_str + " unknown/inactive" ));
+			}
+			
+			connection.close( "hash " + hash_str + " unknown/inactive" );
+		}
+		
+		public void
+		activate(
+			PEPeerControl	peer_control )
+		{
+			Debug.out( "eh" );
+		}
+
+		public void
+		deactivate()
+		{
+			Debug.out( "eh" );
+		}
+
+		public void
+		unregister()
+		{	
+			Debug.out( "eh" );
+		}
+	    
+	    public List<PeerManagerRegistration>
+	    getOtherRegistrationsForHash()
+	    {
+	    	Debug.out( "eh" );
+	    	
+	    	return( Collections.emptyList());
+	    }
+	    
+	    public int 
+	    getHashOverrideLocalPort(
+	    	boolean	only_if_allocated )
+	    {
+	    	Debug.out( "eh" );
+	    	
+	    	return( 0 );
+	    }
+	}
+	
 	private class
 	PeerManagerRegistrationImpl
 		implements PeerManagerRegistration
@@ -577,6 +716,8 @@ public class PeerManager implements CoreStatsProvider {
 		private final HashWrapper 						hash;
 		private final PeerManagerRegistrationAdapter	adapter;
 
+		private final ProbeControl						probe_control;
+		
 		private PEPeerControl					download;
 
 		private volatile PEPeerControl			active_control;
@@ -594,6 +735,8 @@ public class PeerManager implements CoreStatsProvider {
 		{
 			hash	= _hash;
 			adapter	= _adapter;
+			
+			probe_control		= new ProbeControl();
 		}
 
 		protected PeerManagerRegistrationAdapter
@@ -609,10 +752,10 @@ public class PeerManager implements CoreStatsProvider {
 		}
 		
 		public int
-		getLocalPort(
+		getHashOverrideLocalPort(
 			boolean	only_if_allocated )
 		{
-			return( adapter.getLocalPort( only_if_allocated ));
+			return( adapter.getHashOverrideLocalPort( only_if_allocated ));
 		}
 
 	    public List<PeerManagerRegistration>
@@ -912,7 +1055,8 @@ public class PeerManager implements CoreStatsProvider {
 			return( active_control );
 		}
 
-		protected void
+		@Override
+		public void
 		route(
 			NetworkConnection 			connection,
 			PeerManagerRoutingListener	listener )
@@ -964,7 +1108,7 @@ public class PeerManager implements CoreStatsProvider {
 							pending_connections = new ArrayList<>();
 						}
 
-						pending_connections.add( new Object[]{ connection, new Long( SystemTime.getCurrentTime()), listener });
+						pending_connections.add( new Object[]{ connection, new Long( SystemTime.getMonotonousTime()), listener });
 
 						if ( pending_connections.size() == 1 ){
 
@@ -1000,7 +1144,7 @@ public class PeerManager implements CoreStatsProvider {
 
 				Iterator<Object[]> it = pending_connections.iterator();
 
-				long	now = SystemTime.getCurrentTime();
+				long	now = SystemTime.getMonotonousTime();
 
 				while( it.hasNext()){
 
@@ -1008,11 +1152,7 @@ public class PeerManager implements CoreStatsProvider {
 
 					long	start_time = ((Long)entry[1]).longValue();
 
-					if ( now < start_time ){
-
-						entry[1] = new Long( now );
-
-					}else if ( now - start_time > PENDING_TIMEOUT ){
+					if ( now - start_time > PENDING_TIMEOUT ){
 
 						it.remove();
 
@@ -1024,6 +1164,21 @@ public class PeerManager implements CoreStatsProvider {
 									+ "] to " + adapter.getDescription() + " closed due to activation timeout" ));
 
 						connection.close( "activation timeout" );
+						
+					}else{
+						
+						NetworkConnection	connection = (NetworkConnection)entry[0];
+
+						Object obj = connection.getTransport().getUserData( KEY_TRANSPORT_PROBE );
+						
+						if ( obj != null ){
+						
+							connection.getTransport().setUserData( KEY_TRANSPORT_PROBE, null );
+							
+							PEPeerTransport	pt = PEPeerTransportFactory.createTransport( probe_control, PEPeerSource.PS_INCOMING, connection, null );
+
+							pt.start();
+						}
 					}
 				}
 
@@ -1226,14 +1381,590 @@ public class PeerManager implements CoreStatsProvider {
 
 			control.addPeerTransport( pt );
 		}
-
-		@Override
-		public String
-		getDescription()
+	
+		private class
+		ProbeControl
+			implements PEPeerControl
 		{
-			PEPeerControl	control = active_control;
+			// the purpose of this controller is to provide just enough functionality to allow
+			// an incoming NAT check probe connection from a tracker to work as expected
+			
+			private final LimitedRateGroup upload_limited_rate_group = new LimitedRateGroup(){
+				@Override
+				public String getName(){
+					return("per_dl_up: " + getDisplayName());
+				}
 
-			return( ByteFormatter.encodeString( hash.getBytes()) + ", control=" + (control==null?null:control.getDisplayName()) + ": " + adapter.getDescription());
+				@Override
+				public int getRateLimitBytesPerSecond(){
+					return(-1);
+				}
+
+				@Override
+				public boolean isDisabled(){
+					return( false );
+				}
+
+				@Override
+				public void updateBytesUsed(int used){
+				}
+			};
+
+			private final LimitedRateGroup download_limited_rate_group = new LimitedRateGroup(){
+				@Override
+				public String getName(){
+					return("per_dl_down: " + getDisplayName());
+				}
+
+				@Override
+				public int getRateLimitBytesPerSecond(){
+					return(0);
+				}
+
+				@Override
+				public boolean isDisabled(){
+					return( false );
+				}
+
+				@Override
+				public void updateBytesUsed(int used){
+				}
+			};
+			
+			public int
+			getUID()
+			{
+				log(); return(0);
+			}
+			
+			public DiskManager 
+			getDiskManager()
+			{ 
+				return( null ); 
+			}
+			
+			public PiecePicker 
+			getPiecePicker()
+			{
+				return( null ); 
+			}
+
+			public PEPeerManagerAdapter	getAdapter(){ log(); return( null ); }
+
+			@Override
+			public void 
+			informFullyConnected(PEPeer peer)
+			{
+			}
+			
+			@Override
+			public String 
+			getConnectHealth( boolean verbose )
+			{
+				log();return( "" );
+			}
+			
+			public void
+			start()
+			{log(); 
+			}
+
+			public void
+			stopAll()
+			{log(); 
+			}
+
+			public byte[]
+			getHash()
+			{
+				return( hash.getBytes());
+			}
+
+			public String
+			getDisplayName()
+			{ 
+				log(); return( "probe" ); 
+			}
+
+			public PeerIdentityDataID
+			getPeerIdentityDataID()
+			{ 
+				log(); return( null ); 
+			}
+
+			public byte[]
+			getPeerId()
+			{
+				return( adapter.getPeerID());
+			}
+
+			public int[] 
+			getAvailability()
+			{ 
+				log(); return( null );
+			}
+
+			public int 
+			getAvailability(
+				int pieceNumber)
+			{ 
+				log(); return( 0 );
+			}
+
+			public float 
+			getAvgAvail()
+			{
+				log(); return( 0 );
+			}
+
+			public float 
+			getMinAvailability()
+			{
+				log(); return( 0 );
+			}
+
+			public float 
+			getMinAvailability( 
+				int file_index )
+			{
+				log(); return( 0 );
+			}
+
+			public long 
+			getAvailWentBadTime()
+			{
+				log(); return( 0 );
+			}
+
+			public long 
+			getBytesUnavailable()
+			{
+				log(); return( 0 );
+			}
+
+			public boolean hasDownloadablePiece(){ log(); return( false ); }
+
+			public int	getBytesQueuedForUpload(){ log(); return( 0 ); }
+			public int	getNbPeersWithUploadQueued(){ log(); return( 0 ); }
+			public int	getNbPeersWithUploadBlocked(){ log(); return( 0 ); }
+			public int	getNbPeersUnchoked(){ log(); return( 0 ); }
+			public int	getNbPeersUnchoking(){ log(); return( 0 ); }
+			
+			public int getNbPieces(){ return( adapter.getNbPieces());}
+			
+			public PEPiece[]	getPieces(){ log(); return( null ); }
+
+			public PEPiece		getPiece(int pieceNumber){ log(); return( null ); }
+
+			public PEPeerManagerStats getStats(){ log(); return( null ); }
+
+			public void
+			processTrackerResponse(
+					TRTrackerAnnouncerResponse	response ){log(); }
+
+			public int getNbPeers(){ log(); return( 0 ); }
+
+			public int getNbSeeds(){ log(); return( 0 ); }
+
+			public int getPieceLength(int pieceNumber){ log(); return( 0 ); }
+
+			public long getRemaining(){ log(); return( 0 ); }
+
+			public long getHiddenBytes(){ log(); return( 0 ); }
+
+			public long getETA( boolean smoothed ){ log(); return( 0 ); }
+
+			public String getElapsedTime(){ log(); return( "" ); }
+
+			public long getTimeStarted( boolean mono_time ){ log(); return( 0 ); }
+
+			public long getTimeStartedSeeding( boolean mono_time ){ log(); return( 0 ); }
+
+			public void
+			addListener(
+					PEPeerManagerListener	l ){log(); }
+
+			public void
+			removeListener(
+					PEPeerManagerListener	l ){log(); }
+
+			public void addPiece(PEPiece piece, int pieceNumber, PEPeer for_peer ){log(); }
+
+			public boolean needsMD5CheckOnCompletion(int pieceNumber){ log(); return( false ); }
+
+			public boolean
+			isSeeding(){ log(); return( false ); }
+
+			public boolean
+			isMetadataDownload(){ return( false ); }
+
+			public int
+			getTorrentInfoDictSize(){ log(); return( 0 ); }
+
+			public void
+			setTorrentInfoDictSize(
+					int	size ){log(); }
+
+			public boolean
+			isSuperSeedMode(){ log(); return( false ); }
+
+			public boolean
+			canToggleSuperSeedMode(){ log(); return( false ); }
+
+			public void
+			setSuperSeedMode( boolean on ){log(); }
+
+			public boolean
+			seedPieceRecheck(){ log(); return( false ); }
+
+			public int getNbRemoteTCPConnections(){ log(); return( 0 ); }
+			public int getNbRemoteUDPConnections(){ log(); return( 0 ); }
+			public int getNbRemoteUTPConnections(){ log(); return( 0 ); }
+
+			public long getLastRemoteConnectionTime(){ log(); return( 0 ); }
+			
+			public int
+			getMaxNewConnectionsAllowed( String network ){ log(); return( 0 ); }
+
+			public boolean
+			hasPotentialConnections(){ log(); return( false ); }
+
+			public void	dataBytesReceived( PEPeer peer, int	l ){log(); }
+
+			public void	dataBytesSent( PEPeer peer, int	l ){log(); }
+
+			public void 
+			protocolBytesSent( 
+				PEPeer peer, int length )
+			{
+				
+			}
+
+			public void protocolBytesReceived( PEPeer peer, int length ){}
+
+			public void
+			discarded(
+					PEPeer peer,
+					int		l ){log(); }
+
+			public PEPeerStats 
+			createPeerStats(
+				PEPeer owner)
+			{
+				return(new PEPeerStatsImpl(owner));
+			}
+
+			public PEPeer
+			getMyPeer(){ log(); return( null ); }
+
+			public List<PEPeer>
+			getPeers(){ log(); return( null ); }
+
+			public List<PEPeer>
+			getPeers(
+					String	address ){ log(); return( null ); }
+
+			public int
+			getPendingPeerCount(){ log(); return( 0 ); }
+
+			public PeerDescriptor[]
+			getPendingPeers(){ log(); return( null ); }
+
+			public PeerDescriptor[]
+			getPendingPeers(
+					String	address ){log();  return( null ); }
+
+			public void
+			addPeer(
+					PEPeer	peer ){log(); }
+
+			public void
+			addPeer(
+					String 		ip_address,
+					int 		tcp_port,
+					int			udp_port,
+					boolean 	use_crypto,
+					Map			user_data ){log(); }
+
+			public void
+			peerDiscovered(
+					String		peer_source,
+					String 		ip_address,
+					int			tcp_port,
+					int			udp_port,
+					boolean 	use_crypto ){log(); }
+
+			public void
+			removePeer(
+					PEPeer	peer ){log(); }
+
+			public void
+			removePeer(
+				PEPeer	peer,
+				String	reason,
+				int	reason_code ){log(); }
+
+			public void
+			peerAdded(PEPeer pc){log(); }
+
+			public void
+			peerRemoved(PEPeer pc){log(); }
+
+			public DiskManagerReadRequest
+			createDiskManagerRequest(
+					int pieceNumber,
+					int offset,
+					int length ){ log(); return( null ); }
+
+			public void
+			requestCanceled(
+					DiskManagerReadRequest	item ){log(); }
+			
+			public void
+			requestAdded(
+					PEPiece piece, PEPeerTransport peer, DiskManagerReadRequest request ){log(); }
+
+			public boolean
+			requestExists(
+					String			peer_ip,
+					int				piece_number,
+					int				offset,
+					int				length ){ log(); return( false ); }
+
+			public boolean
+			validatePieceReply(
+					PEPeerTransport		originator,
+					int 				pieceNumber,
+					int 				offset,
+					DirectByteBuffer 	data ){ log(); return( true ); }
+
+			public void
+			writeBlock(
+					int 				pieceNumber,
+					int 				offset,
+					DirectByteBuffer 	data,
+					Object 				sender,
+					boolean     		cancel){log(); }
+
+			public boolean isWritten( int piece_number, int offset ){ log(); return( false ); }
+
+			public boolean isInEndGameMode(){ log(); return( false ); }
+
+			public void 
+			peerConnectionClosed( 
+					PEPeerTransport peer, 
+					boolean connect_failed, 
+					boolean network_failed )
+			{
+			}
+
+			public PeerExchangerItem createPeerExchangeConnection( PEPeerTransport base_peer ){ log(); return( null ); }
+
+			public void peerVerifiedAsSelf( PEPeerTransport self ){log(); }
+
+			public LimitedRateGroup getUploadLimitedRateGroup(){ return( upload_limited_rate_group ); }
+
+			public LimitedRateGroup getDownloadLimitedRateGroup(){ return( download_limited_rate_group ); }
+
+			public int getEffectiveUploadRateLimitBytesPerSecond(){ log(); return( 0 ); }
+
+			public int getUploadRateLimitBytesPerSecond(){ log(); return( 0 ); }
+
+			public int getDownloadRateLimitBytesPerSecond(){ log(); return( 0 ); }
+
+			public Object getData (String key){ log(); return( null ); }
+			public void setData (String key, Object value){log(); }
+
+			public int getAverageCompletionInThousandNotation(){ log(); return( 0 ); }
+
+			public int getMaxCompletionInThousandNotation( boolean never_include_seeds ){ log(); return( 0 ); }
+
+			public PEPeerTransport getTransportFromIdentity( byte[] peer_id ){ log(); return( null ); }
+
+			public PEPeerTransport getTransportFromAddress(String peer){ log(); return( null ); }
+
+			public boolean
+			getPreferUDP(){ log(); return( false ); }
+
+			public void
+			setPreferUDP(
+					boolean	prefer ){log(); }
+
+			public void
+			addRateLimiter(
+					LimitedRateGroup	group,
+					boolean				upload ){log(); }
+
+			public void
+			removeRateLimiter(
+					LimitedRateGroup	group,
+					boolean				upload ){log(); }
+
+			public TrackerPeerSource
+			getTrackerPeerSource(){ log(); return( null ); }
+
+			public boolean
+			isPeerSourceEnabled(
+					String	peer_source ){ log(); return( true ); }
+
+			public boolean
+			isNetworkEnabled(
+					String	network ){ log(); return( true ); }
+
+			public int
+			getPartitionID(){ log(); return( 0 ); }
+
+			public void
+			setMaskDownloadCompletion(
+				Boolean	mask ){ log(); }
+			
+			public void
+			removeAllPeers(
+				String		reason,
+				int			reason_code ){log(); }
+
+			public boolean
+			isDestroyed(){ log(); return( false ); }
+
+			public void
+			generateEvidence(
+					IndentWriter		writer ){log(); }
+
+			public void
+			setStatsReceiver(
+					StatsReceiver	receiver ){log(); }
+
+
+			public boolean
+			validateReadRequest(
+					PEPeerTransport	originator,
+					int 			pieceNumber,
+					int 			offset,
+					int 			length ){ log(); return( false ); }
+
+			public boolean
+			validateHintRequest(
+					PEPeerTransport	originator,
+					int 			pieceNumber,
+					int 			offset,
+					int 			length ){ log(); return( false ); }
+
+			public void
+			havePiece(
+					int pieceNumber,
+					int pieceLength,
+					PEPeer pcOrigin ){log(); }
+
+			public void
+			updateSuperSeedPiece(
+					PEPeer peer,
+					int pieceNumber){log(); }
+
+			public int
+			getTCPListeningPortNumber(){ log(); return( 0 ); }
+
+			public byte[]
+			getTargetHash(){ return( getHash()); }
+
+			public boolean
+			isPrivateTorrent(){ log(); return( false ); }
+
+			public int
+			getExtendedMessagingMode(){return( adapter.getExtendedMessagingMode()); }
+
+			public boolean
+			isPeerExchangeEnabled(){ log(); return( false ); }
+
+			public byte[][]
+			getSecrets(
+				int	crypto_level ){ log(); return( null ); }
+
+			public int
+			getUploadPriority(){ log(); return( 0 ); }
+
+			public int
+			getHiddenPiece(){ log(); return( 0 ); }
+
+			public void addPeerTransport( PEPeerTransport transport ){log(); }
+
+			public int
+			getConnectTimeout(
+				int		ct_def ){ log(); return( 0 ); }
+
+			public int[]
+			getMaxConnections(){ log(); return( null ); }
+
+			public boolean
+			doOptimisticDisconnect(
+					boolean pending_lan_local_peer,
+					boolean	force,
+					String	network ){ log(); return( false ); }
+
+			public int getNbActivePieces(){ log(); return( 0 ); }
+
+			public int getNbPeersStalledPendingLoad(){ log(); return( 0 ); }
+
+			public void incNbPeersSnubbed(){log(); }
+			public void decNbPeersSnubbed(){log(); }
+			public void setNbPeersSnubbed(int n){log(); }
+			public int getNbPeersSnubbed(){ log(); return( 0 ); }
+
+			public void 
+			checkSnubbing(
+					PEPeerTransport	peer ){log(); }
+
+			public void
+			badPieceReported(
+					PEPeerTransport		originator,
+					int					piece_number ){log(); }
+
+			public boolean
+			isFastExtensionPermitted(
+					PEPeerTransport		originator ){ log(); return( false ); }
+
+			public void
+			reportBadFastExtensionUse(
+					PEPeerTransport		originator ){log(); }
+
+			public void
+			statsRequest(
+					PEPeerTransport		originator,
+					Map					request ){log(); }
+
+			public void
+			statsReply(
+					PEPeerTransport		originator,
+					Map					reply ){log(); }
+
+			public boolean isRTA(){ log(); return( false ); }
+
+			public void
+			peerDiscovered(
+					PEPeerTransport		finder,
+					PeerItem			pi ){log(); }
+
+			public PEPeerControlHashHandler
+			getHashHandler(){ log(); return( null ); }
+			
+			@Override
+			public boolean isHolePunchOperationOK(PEPeerTransport peer, boolean is_connect){
+				log(); return false;
+			}
+			
+			@Override
+			public void
+			handleCloseReason(
+				PEPeerTransport		peer,
+				boolean				reason_out,
+				int					reason )
+			{	
+			}
+			
+			private void 
+			log()
+			{
+				Debug.out( "eh" );
+			}
 		}
 	}
 }

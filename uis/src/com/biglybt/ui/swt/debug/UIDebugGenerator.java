@@ -140,7 +140,7 @@ public class UIDebugGenerator
 
 				shell.moveAbove( null );
 				
-				Utils.ensureDisplayUpdated( display );
+				Utils.ensureDisplayUpdated();
 
 				if (shell.getData("class") instanceof ObfuscateShell) {
 					ObfuscateShell shellClass = (ObfuscateShell) shell.getData("class");
@@ -332,7 +332,10 @@ public class UIDebugGenerator
 							}
 							
 							@Override
-							public void run(CoreOperation operation) {
+							public boolean 
+							runOperation(
+								CoreOperation operation) 
+							{
 								try {
 
 									File fEvidence = new File(path, "evidence.log");
@@ -346,6 +349,8 @@ public class UIDebugGenerator
 
 									Debug.printStackTrace(e);
 								}
+								
+								return( true );
 							}
 
 							@Override
@@ -574,11 +579,8 @@ public class UIDebugGenerator
 		Utils.centreWindow(shell);
 		shell.open();
 
-		while (!shell.isDisposed()) {
-			if (!shell.getDisplay().readAndDispatch()) {
-				shell.getDisplay().sleep();
-			}
-		}
+		Utils.readAndDispatchLoop( shell );
+
 		if (sendMode[0] != -1) {
 			gr.message = text[0];
 			gr.email = text[1];

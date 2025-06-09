@@ -18,6 +18,9 @@
 package com.biglybt.ui.swt.views.table;
 
 import com.biglybt.ui.common.table.TableRowCore;
+import com.biglybt.ui.common.table.TableView;
+import com.biglybt.ui.swt.views.table.TableViewSWT.ColorRequester;
+
 import org.eclipse.swt.graphics.*;
 
 /**
@@ -32,17 +35,7 @@ public interface TableRowSWT extends TableRowCore
 
 	public boolean setIconSize(Point pt);
 
-	/** Retreive the color of the row
-	 *
-	 * @return color of the row
-	 */
 	public Color getForeground();
-
-	/** Set the color of the row
-	 *
-	 * @param c new color
-	 */
-	public boolean setForeground(Color c);
 
 	public Color getBackground();
 
@@ -116,10 +109,5 @@ public interface TableRowSWT extends TableRowCore
 
 	boolean isShown();
 	
-	interface
-	ColorRequester
-	{
-		public int
-		getPriority();
-	}
+	TableViewSWT<?> getView();
 }

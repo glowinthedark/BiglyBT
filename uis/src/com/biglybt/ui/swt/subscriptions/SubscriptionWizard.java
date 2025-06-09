@@ -28,6 +28,8 @@ import com.biglybt.core.Core;
 import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.mainwindow.Colors;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.CTabFolder;
+import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
@@ -41,6 +43,7 @@ import org.eclipse.swt.layout.FormLayout;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Label;
@@ -59,6 +62,7 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.AENetworkClassifier;
 import com.biglybt.core.util.AERunnable;
 import com.biglybt.core.util.ByteFormatter;
+import com.biglybt.core.util.Debug;
 import com.biglybt.pif.ui.UIManager;
 import com.biglybt.pif.ui.tables.TableCell;
 import com.biglybt.pif.ui.tables.TableCellAddedListener;
@@ -96,17 +100,21 @@ import com.biglybt.ui.swt.utils.FontUtils;
 public class SubscriptionWizard {
 
 	private static final int MODE_OPT_IN = 1;
-	private static final int MODE_SUBSCRIBE = 2;
-	private static final int MODE_CREATE_SEARCH = 3;
-	private static final int MODE_CREATE_RSS = 4;
+	public static final int MODE_SUBSCRIBE = 2;
+	public static final int MODE_CREATE_SEARCH = 3;
+	public static final int MODE_CREATE_RSS = 4;
+	public static final int MODE_CREATE_TEMPLATE = 5;
 
 	private static final int RANK_COLUMN_WIDTH = 85;
 	private static final String TABLE_SUB_WIZ = "SubscriptionWizard";
 
 	private final String TITLE_OPT_IN = MessageText.getString("Wizard.Subscription.optin.title");
 	private final String TITLE_SUBSCRIBE = MessageText.getString("Wizard.Subscription.subscribe.title");
-	private final String TITLE_CREATE = MessageText.getString("Wizard.Subscription.create.title");
+	private final String TITLE_CREATE_RSS = MessageText.getString("Wizard.Subscription.create.title");
+	private final String TITLE_CREATE_TEMPLATE = MessageText.getString("Wizard.Subscription.template.title");
 
+	int defaultMode = MODE_SUBSCRIBE;
+	
 	Display display;
 	Shell shell;
 
@@ -131,21 +139,24 @@ public class SubscriptionWizard {
 	StackLayout mainLayout;
 	Composite optinComposite;
 	Composite createComposite;
-	TabFolder createTabFolder;
-	TabItem   createRSSTabItem;
-	TabItem   createSearchTabItem;
+	CTabFolder createTabFolder;
+	CTabItem   createRSSTabItem;
+	CTabItem   createSearchTabItem;
+	CTabItem   createTemplateTabItem;
 	Composite availableSubscriptionComposite;
 
 	Table libraryTable;
-	Listener rssSaveListener;
+	Listener saveListener;
 	Listener searchListener;
 
 	Text searchInput;
 	Text feedUrl;
 	Text subsName;
+	Text templateName;
 	Button anonCheck;
 
-	String subs_name_default;
+	int		mode;
+	String 	subs_name_default;
 
 	SubscriptionDownloadDetails[] availableSubscriptions;
 	Subscription[] subscriptions;
@@ -160,6 +171,14 @@ public class SubscriptionWizard {
 	private static boolean columnsAdded = false;
 
 	public SubscriptionWizard() {
+		init();
+	}
+
+	public SubscriptionWizard( int mode) {
+		defaultMode = mode;
+		if ( defaultMode != MODE_OPT_IN ){
+			COConfigurationManager.setParameter( "subscriptions.opted_in", true );
+		}
 		init();
 	}
 
@@ -197,6 +216,8 @@ public class SubscriptionWizard {
 	protected void
 	init()
 	{
+		COConfigurationManager.setParameter( "subscriptions.wizard.shown", true );
+
 		CoreFactory.addCoreRunningListener(new CoreRunningListener() {
 			@Override
 			public void coreRunning(Core core) {
@@ -276,9 +297,9 @@ public class SubscriptionWizard {
 
 		Composite header = new Composite(shell, SWT.NONE);
 		header.setBackgroundImage(imageLoader.getImage("wizard_header_bg"));
-		Label topSeparator = new Label(shell,SWT.SEPARATOR |SWT.HORIZONTAL);
+		Control topSeparator =Utils.createSkinnedLabelSeparator(shell,SWT.HORIZONTAL);
 		main = new Composite(shell, SWT.NONE);
-		Label bottomSeparator = new Label(shell,SWT.SEPARATOR |SWT.HORIZONTAL);
+		Control bottomSeparator = Utils.createSkinnedLabelSeparator(shell,SWT.HORIZONTAL);
 		Composite footer = new Composite(shell, SWT.NONE);
 
 		FormLayout layout = new FormLayout();
@@ -448,34 +469,41 @@ public class SubscriptionWizard {
 		Composite composite = new Composite(parent,SWT.NONE);
 
 		FillLayout layout = new FillLayout();
-		layout.marginHeight = 8;
-		layout.marginWidth  = 8;
+		layout.marginHeight = 4;
+		layout.marginWidth  = 4;
 
 		composite.setLayout(layout);
 
-		createTabFolder = new TabFolder(composite,SWT.NONE);
+		createTabFolder = new CTabFolder(composite,SWT.BORDER);
 		createTabFolder.setFont(subTitleFont);
 
-		createSearchTabItem = new TabItem(createTabFolder,SWT.NONE);
+		createSearchTabItem = new CTabItem(createTabFolder,SWT.NONE);
 		createSearchTabItem.setText(MessageText.getString("Wizard.Subscription.create.search"));
 		createSearchTabItem.setControl(createCreateSearchComposite(createTabFolder));
 
-		createRSSTabItem = new TabItem(createTabFolder,SWT.NONE);
+		createRSSTabItem = new CTabItem(createTabFolder,SWT.NONE);
 		createRSSTabItem.setText("  " + MessageText.getString("Wizard.Subscription.create.rss"));
 		createRSSTabItem.setControl(createCreateRSSComposite(createTabFolder));
 
+		createTemplateTabItem = new CTabItem(createTabFolder,SWT.NONE);
+		createTemplateTabItem.setText("  " + MessageText.getString("Wizard.Subscription.create.template"));
+		createTemplateTabItem.setControl(createCreateTemplateComposite(createTabFolder));
+
+		createTabFolder.setSelection( 0 );
+		
 		createTabFolder.addListener(SWT.Selection, new Listener() {
 			@Override
 			public void handleEvent(Event event) {
-				TabItem[] selectedItems = createTabFolder.getSelection();
-				if(selectedItems.length != 1) {
+				CTabItem selected = createTabFolder.getSelection();
+				if ( selected == null ){
 					return;
 				}
-				TabItem selectedItem = selectedItems[0];
-				if(selectedItem == createRSSTabItem) {
+				if(selected == createRSSTabItem) {
 					setMode(MODE_CREATE_RSS);
-				} else {
+				} else if ( selected == createSearchTabItem ){
 					setMode(MODE_CREATE_SEARCH);
+				}else{
+					setMode(MODE_CREATE_TEMPLATE);
 				}
 			}
 		});
@@ -509,7 +537,7 @@ public class SubscriptionWizard {
 //			}
 //		});
 
-		feedUrl.addListener (SWT.DefaultSelection, rssSaveListener);
+		feedUrl.addListener (SWT.DefaultSelection, saveListener);
 
 		feedUrl.addListener(SWT.Modify, new Listener() {
 			@Override
@@ -518,7 +546,11 @@ public class SubscriptionWizard {
 				try {
 					URL url = new URL(feedUrl.getText());
 					String protocol = url.getProtocol().toLowerCase();
-					valid_url = protocol.equals( "tor" ) || protocol.equals( "azplug" ) || protocol.equals( "file") || url.getHost().trim().length() > 0;
+					valid_url = protocol.equals( "tor" ) || 
+								protocol.equals( "i2p" ) ||
+								protocol.equals( "azplug" ) || 
+								protocol.equals( "file") || 
+								url.getHost().trim().length() > 0;
 				} catch (Exception e) {}
 
 				saveButton.setEnabled(valid_url);
@@ -620,6 +652,58 @@ public class SubscriptionWizard {
 		return composite;
 	}
 
+	private Composite createCreateTemplateComposite(Composite parent) {
+		Composite composite = new Composite(parent,SWT.NONE);
+
+
+		Label subTitle = new Label(composite,SWT.WRAP);
+		
+		subTitle.setText(MessageText.getString("Wizard.Subscription.template.subtitle"));
+		
+		Label templateNameText = new Label(composite,SWT.WRAP);
+		templateNameText.setText( MessageText.getString( "TableColumn.header.name" ));
+
+		templateName = new Text(composite, SWT.BORDER);
+
+		templateName.addListener(SWT.Modify, new Listener() {
+			@Override
+			public void handleEvent(Event event) {
+				
+				saveButton.setEnabled(!templateName.getText().isEmpty());
+			}
+		});
+		
+		FormLayout layout = new FormLayout();
+		layout.marginWidth = 50;
+		layout.marginTop = 25;
+		composite.setLayout(layout);
+
+		FormData data;
+		
+			// subtitle
+
+		data = new FormData();
+		data.top = new FormAttachment(0,0);
+		data.left = new FormAttachment(0,0);
+		data.right = new FormAttachment(100,0);
+		subTitle.setLayoutData(data);
+
+			// name
+
+		data = new FormData();
+		data.top = new FormAttachment(subTitle,10);
+		data.left = new FormAttachment(0,0);
+		templateNameText.setLayoutData(data);
+
+		data = new FormData();
+		data.top = new FormAttachment(templateNameText,0, SWT.CENTER );
+		data.left	= new FormAttachment(templateNameText, 5, SWT.RIGHT );
+		data.right 	= new FormAttachment(50);
+		templateName.setLayoutData(data);
+
+		return composite;
+	}
+	
 	private Composite createCreateSearchComposite(Composite parent) {
 		Composite composite = new Composite(parent,SWT.NONE);
 
@@ -733,10 +817,10 @@ public class SubscriptionWizard {
 	private Composite createAvailableSubscriptionComposite(Composite parent) {
 		Composite composite = new Composite(parent, SWT.NONE);
 
-		Label hsep1 = new Label(composite, SWT.SEPARATOR | SWT.HORIZONTAL);
-		Label hsep2 = new Label(composite, SWT.SEPARATOR | SWT.HORIZONTAL);
+		Control hsep1 = Utils.createSkinnedLabelSeparator(composite, SWT.HORIZONTAL);
+		Control hsep2 = Utils.createSkinnedLabelSeparator(composite, SWT.HORIZONTAL);
 
-		Label vsep = new Label(composite, SWT.SEPARATOR | SWT.VERTICAL);
+		Control vsep = Utils.createSkinnedLabelSeparator(composite, SWT.VERTICAL);
 
 		Label subtitle1 = new Label(composite, SWT.NONE);
 		Label subtitle2 = new Label(composite, SWT.NONE);
@@ -751,7 +835,9 @@ public class SubscriptionWizard {
 		torrentColumn.setWidth(50);
 
 		final Composite compEmpty = new Composite(composite,SWT.NONE);
-		compEmpty.setBackground(Colors.getSystemColor(display, SWT.COLOR_WHITE));
+		if ( !Utils.isDarkAppearanceNative()){
+			compEmpty.setBackground(Colors.getSystemColor(display, SWT.COLOR_WHITE));
+		}
 		FillLayout fl = new FillLayout();
 		fl.marginHeight = 15;
 		fl.marginWidth = 15;
@@ -1266,53 +1352,71 @@ public class SubscriptionWizard {
 		});
 
 
-		rssSaveListener = new Listener() {
+		saveListener = new Listener() {
 			@Override
 			public void handleEvent(Event event) {
 				try {
-					String url_str = feedUrl.getText();
-					URL	url = new URL(url_str);
-
-					Map user_data = new HashMap();
-
-					user_data.put( SubscriptionManagerUI.SUB_EDIT_MODE_KEY, Boolean.TRUE);
-
-					boolean	anonymous = anonCheck.getSelection();
-
-					String	subs_name = subsName.getText().trim();
-
-					if ( subs_name.length() == 0 ){
-
-						subs_name = url_str;
-					}
-
-					Subscription subRSS = SubscriptionManagerFactory.getSingleton().createRSS( subs_name, url, SubscriptionHistory.DEFAULT_CHECK_INTERVAL_MINS, anonymous, user_data );
-
-					if ( anonymous ){
-
-						subRSS.getHistory().setDownloadNetworks( new String[]{ AENetworkClassifier.AT_I2P });
-					}
-					
-					if ( frequency != 0 ){
+					if ( mode == MODE_CREATE_RSS ){
+						String url_str = feedUrl.getText();
+						URL	url = new URL(url_str);
+	
+						Map user_data = new HashMap();
+	
+						user_data.put( SubscriptionManagerUI.SUB_EDIT_MODE_KEY, Boolean.TRUE);
+	
+						boolean	anonymous = anonCheck.getSelection();
+	
+						String	subs_name = subsName.getText().trim();
+	
+						if ( subs_name.length() == 0 ){
+	
+							subs_name = url_str;
+						}
+	
+						Subscription subRSS = SubscriptionManagerFactory.getSingleton().createRSS( subs_name, url, SubscriptionHistory.DEFAULT_CHECK_INTERVAL_MINS, anonymous, user_data );
+	
+						if ( anonymous ){
+	
+							subRSS.getHistory().setDownloadNetworks( new String[]{ AENetworkClassifier.AT_I2P });
+						}
 						
-						subRSS.getHistory().setCheckFrequencyMins( frequency );
+						if ( frequency != 0 ){
+							
+							subRSS.getHistory().setCheckFrequencyMins( frequency );
+						}
+	
+						shell.close();
+	
+						final String key = "Subscription_" + ByteFormatter.encodeString(subRSS.getPublicKey());
+	
+						MultipleDocumentInterface mdi = UIFunctionsManager.getUIFunctions().getMDI();
+						mdi.showEntryByID(key);
+						
+					}else{
+						
+						String	template_name = templateName.getText().trim();
+						
+						Subscription subTemplate = 
+								SubscriptionManagerFactory.getSingleton().createSubscriptionTemplate( template_name );
+
+						shell.close();
+						
+						final String key = "Subscription_" + ByteFormatter.encodeString(subTemplate.getPublicKey());
+	
+						MultipleDocumentInterface mdi = UIFunctionsManager.getUIFunctions().getMDI();
+						mdi.showEntryByID(key);
 					}
-
-					shell.close();
-
-					final String key = "Subscription_" + ByteFormatter.encodeString(subRSS.getPublicKey());
-
-					MultipleDocumentInterface mdi = UIFunctionsManager.getUIFunctions().getMDI();
-					mdi.showEntryByID(key);
 
 				} catch (Throwable e) {
 
+					Debug.out( e );
+					
 					Utils.reportError( e );
 				}
 			}
 		};
 
-		saveButton.addListener(SWT.Selection, rssSaveListener);
+		saveButton.addListener(SWT.Selection, saveListener);
 
 		addButton.addListener(SWT.Selection, new Listener() {
 			@Override
@@ -1343,11 +1447,11 @@ public class SubscriptionWizard {
 		if(!opted_in) {
 			setMode(MODE_OPT_IN);
 		} else {
-			setMode(MODE_SUBSCRIBE);
+			setMode(defaultMode);
 		}
 	}
 
-	private void setMode(int mode) {
+	private void setMode(int _mode) {
 		addButton.setVisible(false);
 		searchButton.setVisible(false);
 		saveButton.setVisible(false);
@@ -1358,13 +1462,15 @@ public class SubscriptionWizard {
 
 		String titleText = TITLE_OPT_IN;
 
-		if ( mode != MODE_OPT_IN ){
+		if ( _mode != MODE_OPT_IN ){
 			if ( rss_feed_url != null ){
-				mode = MODE_CREATE_RSS;
+				_mode = MODE_CREATE_RSS;
 				feedUrl.setText( rss_feed_url.toExternalForm());
 				rss_feed_url = null;
 			}
 		}
+		mode = _mode;
+		
 		switch (mode) {
 		case MODE_SUBSCRIBE :
 			mainLayout.topControl = availableSubscriptionComposite;
@@ -1377,7 +1483,7 @@ public class SubscriptionWizard {
 		case MODE_CREATE_RSS :
 			mainLayout.topControl = createComposite;
 			createTabFolder.setSelection(createRSSTabItem);
-			titleText = TITLE_CREATE;
+			titleText = TITLE_CREATE_RSS;
 			availableButton.setVisible(true);
 			saveButton.setVisible(true);
 			shell.setDefaultButton(saveButton);
@@ -1386,10 +1492,18 @@ public class SubscriptionWizard {
 		case MODE_CREATE_SEARCH :
 			mainLayout.topControl = createComposite;
 			createTabFolder.setSelection(createSearchTabItem);
-			titleText = TITLE_CREATE;
+			titleText = TITLE_CREATE_RSS;
 			availableButton.setVisible(true);
 			searchButton.setVisible(true);
 			shell.setDefaultButton(searchButton);
+			break;
+
+		case MODE_CREATE_TEMPLATE :
+			mainLayout.topControl = createComposite;
+			createTabFolder.setSelection(createTemplateTabItem);
+			titleText = TITLE_CREATE_TEMPLATE;
+			saveButton.setVisible(true);
+			shell.setDefaultButton(saveButton);
 			break;
 
 		case MODE_OPT_IN:

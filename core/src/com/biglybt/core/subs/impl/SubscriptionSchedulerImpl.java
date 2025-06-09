@@ -66,7 +66,7 @@ SubscriptionSchedulerImpl
 
 	private Set<String>	active_result_downloaders		= new HashSet<>();
 
-	private ThreadPool	result_downloader = new ThreadPool( "SubscriptionDownloader", 5, true );
+	private ThreadPool<AERunnable>	result_downloader = new ThreadPool<>( "SubscriptionDownloader", 5, true );
 
 	private boolean		schedulng_permitted;
 
@@ -96,7 +96,7 @@ SubscriptionSchedulerImpl
 						schedulng_permitted	= true;
 					}
 
-					calculateSchedule();
+					calculateScheduleDispatcher.dispatch();
 				}
 			});
 
@@ -172,6 +172,11 @@ SubscriptionSchedulerImpl
 
 		throws SubscriptionException
 	{
+		if ( manager.isClosing()){
+			
+			throw( new SubscriptionException( "Not downloading, application is closing" ));
+		}
+		
 		SubscriptionDownloader 	downloader;
 		AESemaphore				sem;
 
@@ -399,8 +404,32 @@ SubscriptionSchedulerImpl
 
 												throw( new Exception( "No Tor plugin proxy available for '" + dl + "'" ));
 											}
-										}
+										}else if ( dl.startsWith( "i2p:" )){
 
+											String target_resource = dl.substring( 4 );
+
+											original_url = new URL( target_resource );
+
+											Map<String,Object>	options = new HashMap<>();
+
+											options.put( AEProxyFactory.PO_PEER_NETWORKS, new String[]{ AENetworkClassifier.AT_I2P });
+
+											options.put( AEProxyFactory.PO_PREFERRED_PROXY_TYPE, "HTTP" );
+											options.put( AEProxyFactory.PO_FORCE_PROXY, true );
+											
+											plugin_proxy =
+												AEProxyFactory.getPluginProxy(
+													"Subscription result download of '" + target_resource + "'",
+													original_url,
+													options,
+													true );
+
+											if ( plugin_proxy == null ){
+
+												throw( new Exception( "No I2P plugin proxy available for '" + dl + "'" ));
+											}
+										}
+									
 										URL			current_url 	= plugin_proxy==null?original_url:plugin_proxy.getURL();
 
 										Torrent torrent = null;
@@ -452,7 +481,11 @@ SubscriptionSchedulerImpl
 
 													if ( plugin_proxy == null ){
 
-														plugin_proxy = AEProxyFactory.getPluginProxy( "Subscription result download", original_url );
+														Map<String,Object>	options = new HashMap<>();
+														
+														options.put( AEProxyFactory.PO_PREFERRED_PROXY_TYPE, "HTTP" );
+
+														plugin_proxy = AEProxyFactory.getPluginProxy( "Subscription result download", original_url, options );
 
 														if ( plugin_proxy != null ){
 
@@ -606,7 +639,7 @@ SubscriptionSchedulerImpl
 
 											long	time_found = result.getTimeFound();
 
-											// log( "found=" + new SimpleDateFormat().format(new Date( time_found)) + ", ago=" + ((SystemTime.getCurrentTime()-time_found )) + ", rad=" + rad_millis );
+											// log( "found=" + DisplayFormatters.formatDateYMDHM( time_found)) + ", ago=" + ((SystemTime.getCurrentTime()-time_found )) + ", rad=" + rad_millis );
 
 											if ( time_found > 0 && time_found + rad_millis < SystemTime.getCurrentTime()){
 
@@ -628,7 +661,7 @@ SubscriptionSchedulerImpl
 									active_result_downloaders.remove( key );
 								}
 	
-								calculateSchedule();
+								calculateScheduleDispatcher.dispatch();
 							}
 						}
 					}
@@ -639,6 +672,19 @@ SubscriptionSchedulerImpl
 	protected void
 	calculateSchedule()
 	{
+		synchronized( this ){
+
+			if ( !schedulng_permitted ){
+
+				return;
+			}
+
+			if ( schedule_in_progress ){
+
+				return;
+			}
+		}
+		
 		Subscription[]	subs = manager.getSubscriptions( true );
 
 		synchronized( this ){
@@ -672,6 +718,8 @@ SubscriptionSchedulerImpl
 
 				sub.setUserData( SCHEDULER_NEXT_SCAN_KEY, new Long( next_scan ));
 
+				sub.getHistory().setNextScheduledUpdate( next_scan );
+				
 				if ( next_scan < next_ready_time ){
 
 					next_ready_time = next_scan;
@@ -711,8 +759,8 @@ SubscriptionSchedulerImpl
 
 				String sched_str =
 						"Calculate : " +
-						"old_time=" + new SimpleDateFormat().format(new Date(old_when)) +
-						", new_time=" + new SimpleDateFormat().format(new Date(next_ready_time)) +
+						"old_time=" + (old_when==0?"none":DisplayFormatters.formatDateYMDHM(old_when)) +
+						", new_time=" + DisplayFormatters.formatDateYMDHM(next_ready_time) +
 						", next_sub=" + next_ready_subs.getName();
 
 				if ( last_sched_str == null || !sched_str.equals( last_sched_str )){
@@ -762,7 +810,7 @@ SubscriptionSchedulerImpl
 											schedule_in_progress = false;
 										}
 
-										calculateSchedule();
+										calculateScheduleDispatcher.dispatch();;
 									}
 								}
 							}.start();
@@ -831,6 +879,11 @@ SubscriptionSchedulerImpl
 
 		for (int i=0;i<subs.length;i++){
 
+			if ( manager.isClosing()){
+				
+				return;
+			}
+			
 			Subscription sub = subs[i];
 
 			SubscriptionHistory history = sub.getHistory();
@@ -921,6 +974,26 @@ SubscriptionSchedulerImpl
 		return( history.getNextScanTime() );
 	}
 
+	@Override
+	public long 
+	getNextUpdateTime(
+		Subscription subs)
+	{
+		if ( subs.isSubscriptionTemplate() || subs.isSearchTemplate()){
+			
+			return( 0 );
+		}
+		
+		Long next = (Long)subs.getUserData( SCHEDULER_NEXT_SCAN_KEY );
+		
+		if ( next != null ){
+			
+			return( next );
+		}
+	
+		return( getNextScan( subs ));
+	}
+	
 	protected void
 	scanSuccess(
 		Subscription		sub )
@@ -963,20 +1036,28 @@ SubscriptionSchedulerImpl
 		manager.log( "Scheduler: " + str, e );
 	}
 
+	private FrequencyLimitedDispatcher calculateScheduleDispatcher = 
+			new FrequencyLimitedDispatcher(
+				AERunnable.create(()->{
+					calculateSchedule();
+				}),
+			1000 );
+	
 	@Override
 	public void
 	subscriptionAdded(
 		Subscription		subscription )
 	{
-		calculateSchedule();
+		calculateScheduleDispatcher.dispatch();
 	}
 
 	@Override
 	public void
 	subscriptionChanged(
-		Subscription		subscription )
+		Subscription		subscription,
+		int					reason )
 	{
-		calculateSchedule();
+		calculateScheduleDispatcher.dispatch();
 	}
 
 	@Override
@@ -991,7 +1072,7 @@ SubscriptionSchedulerImpl
 	subscriptionRemoved(
 		Subscription		subscription )
 	{
-		calculateSchedule();
+		calculateScheduleDispatcher.dispatch();
 	}
 
 	@Override

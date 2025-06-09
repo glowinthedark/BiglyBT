@@ -33,6 +33,7 @@ import com.biglybt.core.disk.impl.access.DMChecker;
 import com.biglybt.core.disk.impl.piecemapper.DMPieceList;
 import com.biglybt.core.disk.impl.piecemapper.DMPieceMapEntry;
 import com.biglybt.core.diskmanager.cache.CacheFile;
+import com.biglybt.core.global.GlobalManagerEvent;
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
@@ -134,7 +135,8 @@ DMCheckerImpl
 
 	volatile boolean	complete_recheck_in_progress;
 	volatile int		complete_recheck_progress;
-
+	volatile boolean	check_cancelled;
+	
 	private boolean				checking_enabled		= true;
 
 	protected final AEMonitor	this_mon	= new AEMonitor( "DMChecker" );
@@ -271,6 +273,13 @@ DMCheckerImpl
 	}
 
 	@Override
+	public boolean
+	getRecheckCancelled()
+	{
+		return( check_cancelled );
+	}
+	
+	@Override
 	public void
 	setCheckingEnabled(
 		boolean		enabled )
@@ -303,14 +312,17 @@ DMCheckerImpl
 		complete_recheck_progress		= 0;
 		complete_recheck_in_progress	= true;
 
+			// register the instance here rather than in the thread so that the operation is guaranteed to 
+			// exist when we return so the caller can rely on it
+		
+		DiskManagerRecheckInstance	recheck_inst = disk_manager.getRecheckScheduler().register( disk_manager, true );
+
 	 	new AEThread2("DMChecker::completeRecheck", true )
 			{
 		  		@Override
 				public void
 				run()
 		  		{
-		  			DiskManagerRecheckInstance	recheck_inst = disk_manager.getRecheckScheduler().register( disk_manager, true );
-
 		  			try{
 		  				final AESemaphore	sem = new AESemaphore( "DMChecker::completeRecheck" );
 
@@ -407,6 +419,13 @@ DMCheckerImpl
 					  	       					complete();
 					  	       				}			  	       			}
 
+					  	       			@Override
+					  	       			public boolean 
+					  	       			isFailureInteresting()
+					  	       			{	
+					  	       				return( listener.isFailureInteresting());
+					  	       			}
+					  	       			
 					  	       			protected void
 					  	       			complete()
 					  	       			{
@@ -429,9 +448,18 @@ DMCheckerImpl
 		  				}
 		  	       }finally{
 
-		  	       		complete_recheck_in_progress	= false;
+		  	       		check_cancelled = recheck_inst.isCancelled();
 
+		  	       		complete_recheck_in_progress	= false;
+		  	       		
 		  	       		recheck_inst.unregister();
+		  	       		
+		  	       		if ( !stopped ){
+		  	       			
+		  	       			disk_manager.getDownload().fireGlobalManagerEvent(
+		  	       				GlobalManagerEvent.ET_RECHECK_COMPLETE,
+		  	       				new Object[]{ request.isExplicit(), check_cancelled });
+		  	       		}
 		  	       }
 		        }
 		 	}.start();
@@ -555,8 +583,12 @@ DMCheckerImpl
 									Logger.log(new LogEvent(disk_manager, LOGID, LogEvent.LT_INFORMATION,
 												"Piece " + request.getPieceNumber() + " passed hash check."));
 								}else{
-									Logger.log(new LogEvent(disk_manager, LOGID, LogEvent.LT_WARNING,
-												"Piece " + request.getPieceNumber() + " failed hash check."));
+									Logger.log(
+										new LogEvent(
+											disk_manager, 
+											LOGID, 
+											listener.isFailureInteresting()?LogEvent.LT_WARNING:LogEvent.LT_INFORMATION,
+											"Piece " + request.getPieceNumber() + " failed hash check."));
 								}
 							}
 						}
@@ -603,6 +635,13 @@ DMCheckerImpl
 												"Piece " + request.getPieceNumber() + " failed hash check - " + Debug.getNestedExceptionMessage( cause )));
 							}
 						}
+					}
+					
+					@Override
+					public boolean 
+					isFailureInteresting()
+					{
+						return( listener.isFailureInteresting());
 					}
 					
 					@Override
@@ -767,6 +806,8 @@ DMCheckerImpl
 
 		   	read_request.setUseCache( !request.isAdHoc());
 
+		   	read_request.setErrorIsFatal( request.getErrorIsFatal());
+		   	
 			disk_manager.enqueueReadRequest(
 				read_request,
 				new DiskManagerReadRequestListener()
@@ -1028,7 +1069,7 @@ DMCheckerImpl
 
 		}catch( Throwable e ){
 
-			disk_manager.setFailed( DiskManager.ET_OTHER, "Piece check error", e );
+			disk_manager.setFailed( DiskManager.ET_OTHER, "Piece check error", e, true );
 
 			Debug.printStackTrace( e );
 
