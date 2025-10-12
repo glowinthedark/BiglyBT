@@ -103,6 +103,8 @@ public class TableViewPainted
 	public static final String MENUKEY_IS_HEADER = "isHeader";
 
 	public static final String MENUKEY_COLUMN = "column";
+	
+	public static final String TABLEKEY_LAST_AUTOSCROLL = "lastAutoScroll";
 
 	private Composite cTable;
 
@@ -194,6 +196,9 @@ public class TableViewPainted
 	private DropTarget dropTarget;
 	private boolean destroying;
 	private int rowMinHeight;
+
+	private volatile boolean												selectionIsFromDrag;
+	private volatile SelectedContentManager.SelectedContentListenersEnabler SCLEnabler;
 
 	private class
 	RefreshTableRunnable
@@ -309,40 +314,122 @@ public class TableViewPainted
 
 		// Deselect rows if user clicks on a blank spot (a spot with no row)
 		tvSWTCommon = new TableViewSWT_Common(this) {
+			
+			private boolean			mouseDown;
+			private Point			mouseDownPos;
+			private TableRowCore	mouseDownRow;
+			private int				mouseDownLastY 	= -1;
+			private long			lastAutoScroll	= -1;
+			private MouseEvent		lastMouseMove;
+						
+			private Map<Integer,TableRowCore>	rowsMapCache = new HashMap<>();
+			private int							rowsMapCacheMut = -1;
+			
 			@Override
 			public void widgetSelected(SelectionEvent event) {
 				//updateSelectedRows(table.getSelection(), true);
 			}
+			
+			@Override
+			public void 
+			mouseExit(
+				MouseEvent e)
+			{
+				super.mouseExit(e);
+				
+				if ( SCLEnabler != null ){
+					
+					SCLEnabler.setEnabled();
+					
+					if (tvTabsCommon != null ){
+						
+						tvTabsCommon.triggerTabViewsDataSourceChanged(TableViewPainted.this);
+					}
+					
+					SCLEnabler = null;
+				}
+			}
+			
 
 			@Override
-			public void mouseUp(TableRowCore clickedRow, TableCellCore cell, int button,
-                                int stateMask) {
+			public void 
+			mouseUp(
+				TableRowCore	clickedRow, 
+				TableCellCore	cell, 
+				int				button,
+                int				stateMask ) 
+			{
 				super.mouseUp(clickedRow, cell, button, stateMask);
 
+				mouseDown		= false;
+				mouseDownRow	= null;
+				
+				rowsMapCache.clear();
+				rowsMapCacheMut = -1;
+				
+				if ( SCLEnabler != null ){
+					
+					SCLEnabler.setEnabled();
+					
+					if ( tvTabsCommon != null ){
+						
+						tvTabsCommon.triggerTabViewsDataSourceChanged(TableViewPainted.this);
+					}
+					
+					SCLEnabler = null;
+				}
+				
 				if (clickedRow == null) {
 					return;
 				}
 				if (button == 1) {
-  				int keyboardModifier = (stateMask & SWT.MODIFIER_MASK);
-  				if ((keyboardModifier & SWT.SHIFT) != 0) {
-  					// select from focus to row
-  					selectRowsTo(clickedRow);
-  					return;
-  				} else if (keyboardModifier == 0) {
-  					setSelectedRows(new TableRowCore[] {
-  						clickedRow
-  					});
-  					return;
-  				}
+					int keyboardModifier = (stateMask & SWT.MODIFIER_MASK);
+					if ((keyboardModifier & SWT.SHIFT) != 0) {
+						// select from focus to row
+						selectRowsTo(clickedRow);
+						return;
+					} else if (keyboardModifier == 0) {
+						setSelectedRows(new TableRowCore[] {
+								clickedRow
+						});
+						return;
+					}
 				}
 			}
 
 			@Override
+			public void mouseDown(MouseEvent e) {
+				super.mouseDown(e);
+				
+				mouseDownPos = new Point( e.x, e.y );
+			}
+			
+			@Override
 			public void mouseDown(TableRowSWT clickedRow, TableCellCore cell, int button,
 					int stateMask) {
+				
+				mouseDown		= true;
+				mouseDownRow	= clickedRow;
+				
 				if (clickedRow == null) {
 					return;
 				}
+				
+				if ( isSelected(clickedRow) && getSelectedRowsSize() > 1 && !selectionIsFromDrag ){
+					
+						// if there's an existing selection and it has been clicked on
+						// then prevent right-click drag-select from kicking in
+					
+					mouseDownRow = null;
+				}
+				
+					// fuck everything apart from Windows 
+				
+				if ( !Constants.isWindows ){
+					
+					mouseDownRow = null;
+				}
+				
 				int keyboardModifier = (stateMask & SWT.MODIFIER_MASK);
 				if (button == 1) {
   				if ((keyboardModifier & SWT.MOD1) != 0) {
@@ -362,8 +449,203 @@ public class TableViewPainted
 						clickedRow
 					});
 				}
+				
+				if ( mouseDownRow != null ){
+					
+					SCLEnabler = SelectedContentManager.disableSelectedContentListeners();
+				}
 			}
 
+			@Override
+			public void 
+			mouseMove(
+				MouseEvent e )
+			{
+				super.mouseMove(e);
+								
+				lastMouseMove = e;
+					
+				if ( mouseDown && mouseDownRow != null && ( e.stateMask & SWT.BUTTON3 ) != 0 ){
+					
+					if ( mouseDownPos != null ){
+						
+							// don't trigger any behaviour until sufficient movement detected
+						
+						int h = mouseDownRow.getHeight();
+						
+						if ( 	Math.abs( e.y - mouseDownPos.y ) >= h/2 ||
+								Math.abs( e.x - mouseDownPos.x ) >= h ){
+					
+							mouseDownPos 	= null;
+							mouseDownLastY	= -1;
+							lastAutoScroll	= -1;
+																
+							TimerEventPeriodic[] ev = { null };
+							
+							ev[0] =
+								SimpleTimer.addPeriodicEvent(
+									"autoscroll", 100, (x)->{
+										
+										Utils.execSWTThread(()->{
+											if ( !mouseDown ){
+												
+												ev[0].cancel();
+												
+												return;
+											}
+
+											mouseMove( lastMouseMove );
+										});
+									});
+							
+						}else{
+							
+							return;
+						}
+					}
+					
+					try{
+						int mut = mutationCount.get();
+						
+						if ( mut != rowsMapCacheMut ){
+													
+							rowsMapCacheMut = mut;
+							
+							rowsMapCache.clear();
+							
+							TableRowCore[] rows = getRowsAndSubRows( false );
+							
+							for ( TableRowCore v: rows ){
+																
+								rowsMapCache.put( v.getVisibleRowIndex(), v );
+							}
+						}
+						
+						int y = e.y;
+						
+						if ( y < 0 ){
+							
+							y = 0;
+							
+						}else if ( y >= clientArea.height ){
+							
+							y = clientArea.height-1;
+						}
+						
+						TableRowSWT row = getTableRow(e.x, y, true);
+						
+						if ( row != null ){
+												
+							int start	= mouseDownRow.getVisibleRowIndex();
+							int end		= row.getVisibleRowIndex();
+							
+							int num;
+							int selDir;
+							
+							if ( end >= start ){
+								
+								num		= end - start + 1;
+								selDir	= 1;
+								
+							}else{
+								
+								num		= start - end + 1;
+								selDir	= -1;
+							}
+							
+							if ( num > 0 ){
+								
+								int pos = start;
+								
+								TableRowCore[] newRows = new TableRowCore[num];
+								
+								for ( int i=0;i<num;i++){
+									
+									newRows[i] = rowsMapCache.get(pos );
+									
+									pos += selDir;
+								}
+								
+								TableRowCore[] oldRows = getSelectedRows();
+														
+								if ( oldRows.length != newRows.length ){
+									
+									setSelectedRows( newRows );
+									
+										// hack relies on uiSelectionChanged being called synchronously above
+										// otherwise we'd have to introduce a "selection initiator" and modify setSelectedRows and friends
+										// to track the fact that the selection was set by a drag operation
+									
+									selectionIsFromDrag = true;
+									
+								}else{
+									
+									for ( int i=0;i<oldRows.length;i++){
+										
+										if ( oldRows[i] != newRows[i] ){
+											
+											setSelectedRows( newRows );
+											
+											selectionIsFromDrag = true;
+											
+											break;
+										}
+									}
+								}
+									
+								long now = SystemTime.getMonotonousTime();
+								
+								if ( lastAutoScroll == -1 || now - lastAutoScroll >= 200 ){
+									
+									lastAutoScroll = now;
+								
+									int top;
+									int bot;
+									
+									TableRowCore[] vis = getVisibleRows();
+									
+									if ( vis.length > 1 ){
+										
+										top = vis[1].getVisibleRowIndex();
+										
+										bot = vis[vis.length-2].getVisibleRowIndex();
+										
+									}else{
+										
+										top = vis[0].getVisibleRowIndex();
+										
+										bot = vis[vis.length-1].getVisibleRowIndex();
+									}
+									
+									int mouseDir;
+									
+									if ( e.y == mouseDownLastY ){
+										
+										mouseDir = row.getVisibleRowIndex() <= top?-1:1;
+										
+									}else{
+										
+										mouseDir = (e.y >= mouseDownLastY )?1:-1;
+									}
+									
+									if (	( mouseDir == 1 && row.getVisibleRowIndex() >= bot ) ||
+											( mouseDir == -1 && row.getVisibleRowIndex() <= top )){
+										
+										lastAutoScroll = now;
+										
+										cTable.setData( TABLEKEY_LAST_AUTOSCROLL, now );
+										
+										scrollVertically( row.getHeight() * mouseDir );
+									}
+								}
+							}
+						}
+					}finally{
+						mouseDownLastY = e.y;
+					}
+				}
+			}
+			
 			@Override
 			public void keyPressed(KeyEvent event) {
 				if ( event.keyCode == SWT.ESC ){
@@ -1582,6 +1864,7 @@ public class TableViewPainted
 
 		cTable.addMouseListener(tvSWTCommon);
 		cTable.addMouseMoveListener(tvSWTCommon);
+		cTable.addMouseTrackListener(tvSWTCommon);
 		cTable.addKeyListener(tvSWTCommon);
 		cTable.addMenuDetectListener(tvSWTCommon);
 		//composite.addSelectionListener(tvSWTCommon);
@@ -3158,7 +3441,7 @@ public class TableViewPainted
 
 	@Override
 	public void triggerTabViewsDataSourceChanged() {
-		if (tvTabsCommon != null) {
+		if (tvTabsCommon != null && SCLEnabler == null ) {
 			tvTabsCommon.triggerTabViewsDataSourceChanged(this);
 		}
 	}
@@ -3171,6 +3454,9 @@ public class TableViewPainted
 	@Override
 	public void uiSelectionChanged(final TableRowCore[] newlySelectedRows,
 			final TableRowCore[] deselectedRows) {
+		
+		selectionIsFromDrag = false;
+		
 		//System.out.println("Redraw " + Debug.getCompressedStackTrace());
 		Utils.execSWTThread(new AERunnable() {
 			@Override
@@ -3292,8 +3578,20 @@ public class TableViewPainted
 	
 						// If shell is not active, right clicking on a row will
 						// result in a MenuDetect, but not a MouseDown or MouseUp
-						if (!isSelected(row)) {
-							setSelectedRows(new TableRowCore[] { row });
+						
+						Long lastAS = (Long)cTable.getData( TABLEKEY_LAST_AUTOSCROLL );
+						
+						if ( lastAS != null && SystemTime.getMonotonousTime() - lastAS < 1000 ){
+							
+							// however, if we are right-drag-selecting with autoscroll then
+							// it is possible at the time the menu detect occurs the mouse
+							// is over a yet-to-be selected row and we don't want this code 
+							// kicking in and changing the selection
+						}else{
+						
+							if (!isSelected(row)) {
+								setSelectedRows(new TableRowCore[] { row });
+							}
 						}
 					}
 

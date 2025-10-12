@@ -419,6 +419,16 @@ WebEngine
 		}
 	}
 
+	public WebEngine
+	getClone()
+	{
+		MetaSearchImpl ms = getMetaSearch();			
+					
+		WebEngine result = (WebEngine)ms.cloneEngine( this );
+			
+		return( result );
+	}
+	
 	protected void
 	init()
 	{

@@ -86,6 +86,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.InetSocketAddress;
 import java.net.URL;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * @author Olivier
@@ -751,7 +752,9 @@ DownloadManagerImpl
     private volatile int		tcp_port_override;
 
     private volatile int		set_file_priority_high_pieces_rem	= 0;
-    
+
+	private AtomicLong tagMutationCounter = new AtomicLong();
+
 	// Only call this with STATE_QUEUED, STATE_WAITING, or STATE_STOPPED unless you know what you are doing
 
     private volatile boolean	removing;
@@ -1038,6 +1041,20 @@ DownloadManagerImpl
 		return( globalManager );
 	}
 
+	@Override
+	public long 
+	getTagMutationCount()
+	{
+		return( tagMutationCounter.get());
+	}
+	
+	@Override
+	public void 
+	updateTagMutationCount()
+	{
+		tagMutationCounter.incrementAndGet();
+	}
+	
 	@Override
 	public String
 	getTaggableID()
@@ -3004,6 +3021,26 @@ DownloadManagerImpl
 		stopIt( state_after_stopping, remove_torrent, remove_data, false );
 	}
 
+	@Override
+	public void setStartReason(String reason) {
+		setUserData( UD_KEY_START_REASON, reason );
+	}
+
+	@Override
+	public String getStartReason() {
+		return((String)getUserData( UD_KEY_START_REASON ));
+	}
+	
+	@Override
+	public void setQueueReason(String reason) {
+		setUserData( UD_KEY_QUEUE_REASON, reason );
+	}
+
+	@Override
+	public String getQueueReason() {
+		return((String)getUserData( UD_KEY_QUEUE_REASON ));
+	}
+	
 	@Override
 	public void setStopReason(String reason) {
 		setUserData( UD_KEY_STOP_REASON, reason );

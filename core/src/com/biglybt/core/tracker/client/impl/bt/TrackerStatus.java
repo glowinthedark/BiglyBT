@@ -1585,7 +1585,7 @@ public class TrackerStatus {
   scrapeUDP(
 		URL reqUrl, 
 		ByteArrayOutputStream message, 
-		List hashes, 
+		List<HashWrapper> hashesInQuery, 
 		boolean do_auth_test )
 				
 		throws Throwable 
@@ -1647,6 +1647,15 @@ public class TrackerStatus {
 
 		boolean all_skipped = true;
 
+		long timeout = PRUDPPacket.DEFAULT_UDP_TIMEOUT;
+
+ 	    String	tracker_network			= AENetworkClassifier.categoriseAddress( reqUrl.getHost());
+
+ 		if ( tracker_network != AENetworkClassifier.AT_PUBLIC ){
+ 			
+ 			timeout *= 2;
+ 		}
+		
 		for ( InetSocketAddress destination: url_addresses ){
 
 			if ( destination.getAddress() instanceof Inet6Address && !ipv6_enabled ){
@@ -1656,10 +1665,86 @@ public class TrackerStatus {
 			
 			all_skipped = false;
 			
+			String[] networks = null;
+			
+			if ( tracker_network != AENetworkClassifier.AT_PUBLIC ){
+
+				if ( hashesInQuery.size() == 1 ){
+
+					networks = scraper.getEnabledNetworks( hashesInQuery.get(0));
+
+				}else{
+
+					String[] current_nets = null;
+
+					for ( HashWrapper hash: hashesInQuery ){
+
+						String[] nets = scraper.getEnabledNetworks( hash );
+
+						if ( nets == null ){
+
+							nets = new String[0];
+						}
+
+						if ( current_nets == null ){
+
+							current_nets = nets;
+
+						}else{
+
+							boolean	ok = false;
+
+							if ( nets.length == current_nets.length ){
+
+								ok = true;
+
+								for ( String net1: nets ){
+
+									boolean match = false;
+
+									for ( String net2: current_nets ){
+
+										if ( net1 == net2 ){
+
+											match = true;
+
+											break;
+										}
+									}
+
+									if ( !match ){
+
+										ok = false;
+
+										break;
+									}
+								}
+							}else{
+
+								ok = false;
+
+							}
+
+							if ( !ok ){
+
+								bSingleHashScrapes = true;
+
+								throw( new Exception( "Mixed networks, forcing single-hash scrapes" ));
+							}
+						}
+					}
+
+					if ( current_nets != null ){
+
+						networks = current_nets;
+					}
+				}
+			}
+			
 			try{
 				PRUDPPacketHandler handler = PRUDPPacketHandlerFactory.getHandler( handler_port );
 
-				handler = handler.openSession( destination );
+				handler = handler.openSession( destination, networks, "Tracker scrape" );
 
 				try{
 					String	failure_reason = null;
@@ -1669,7 +1754,7 @@ public class TrackerStatus {
 						try{
 							PRUDPPacket connect_request = new PRUDPPacketRequestConnect();
 
-							PRUDPPacket reply = handler.sendAndReceive( auth, connect_request, destination );
+							PRUDPPacket reply = handler.sendAndReceive( auth, connect_request, destination, timeout );
 
 							if ( reply.getAction() == PRUDPPacketTracker.ACT_REPLY_CONNECT ){
 
@@ -1677,7 +1762,7 @@ public class TrackerStatus {
 
 								long	my_connection = connect_reply.getConnectionId();
 
-								PRUDPPacketRequestScrape scrape_request = new PRUDPPacketRequestScrape( my_connection, hashes );
+								PRUDPPacketRequestScrape scrape_request = new PRUDPPacketRequestScrape( my_connection, hashesInQuery );
 
 								reply = handler.sendAndReceive( auth, scrape_request, destination );
 
@@ -1742,7 +1827,7 @@ public class TrackerStatus {
 										int[]		incomplete 	= scrape_reply.getIncomplete();
 
 										int i=0;
-										for(Iterator it = hashes.iterator();it.hasNext() && i < complete.length;i++)
+										for(Iterator it = hashesInQuery.iterator();it.hasNext() && i < complete.length;i++)
 										{
 											HashWrapper hash = (HashWrapper)it.next();
 											Map file = new HashMap();
@@ -1783,7 +1868,7 @@ public class TrackerStatus {
 
 						}catch( PRUDPPacketHandlerException e ){
 
-							if ( e.getMessage() == null || !e.getMessage().contains("timed out")){
+							if ( e.getMessage() == null || !Debug.getNestedExceptionMessage(e).contains("timed out")){
 
 								throw( e );
 							}

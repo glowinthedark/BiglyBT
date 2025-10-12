@@ -686,6 +686,11 @@ SubscriptionImpl
 
 			exec_on_new_result = new String( b_eonr, Constants.UTF_8 );
 		}
+		
+			// add things here -> check cloneWithNewEngine
+		
+		
+		
 	}
 
 	public ExportedDataSource
@@ -1068,6 +1073,10 @@ SubscriptionImpl
 
 					name 	= old_name;
 					version	= old_version;
+					
+				}else{
+					
+					local_name = null;
 				}
 			}
 
@@ -1438,24 +1447,31 @@ SubscriptionImpl
 
 			Map map = JSONUtils.decodeJSON( json );
 
-			long	id = ((Long)map.get( "engine_id" )).longValue();
+			map.put( "engine_id", new Long( engine.getId()));
+			
+			embedEngines(map, engine);
 
-			if ( id == engine.getId()){
+			SubscriptionImpl subs = new SubscriptionImpl( manager, getName(), engine.isPublic(), isAnonymous(), null, JSONUtils.encodeToJSON(map), SubscriptionImpl.ADD_TYPE_CREATE );
 
-				embedEngines(map, engine);
-
-				SubscriptionImpl subs = new SubscriptionImpl( manager, getName(), engine.isPublic(), isAnonymous(), null, JSONUtils.encodeToJSON(map), SubscriptionImpl.ADD_TYPE_CREATE );
-
-				subs = manager.addSubscription( subs );
-
-				setLocalName( getName( false ) + " (old)" );
-
-				return( subs );
-
-			}else{
-
-				throw( new SubscriptionException( "Engine mismatch" ));
+				// duplicate required properties
+			
+			subs.category	 	= category;
+			subs.tag_id			= tag_id;
+			subs.view_options	= view_options;
+			subs.parent			= parent;
+			
+			if ( depends_on != null ){
+				subs.depends_on	= new ArrayList<>( depends_on );
 			}
+			
+			subs.exec_on_new_result	= exec_on_new_result;
+			
+			subs = manager.addSubscription( subs );
+
+			setLocalName( getName( false ) + " (old)" );
+
+			return( subs );
+
 		}catch( Throwable e ){
 
 			throw( new SubscriptionException( "Failed to export engine", e ));
@@ -2550,7 +2566,8 @@ SubscriptionImpl
 		manager.removeSubscription( this );
 	}
 
-	protected boolean
+	@Override
+	public boolean
 	isRemoved()
 	{
 		synchronized( this ){

@@ -3234,11 +3234,13 @@ SubscriptionManagerUI
 
 					Utils.getOffOfSWTThread(()->{
 						try {
-							WebEngine web_engine1 = (WebEngine) sub.getEngine();
+							WebEngine web_engine1 = (WebEngine)sub.getEngine();
 	
-							web_engine1.setSearchUrl(input);
+							web_engine1 = web_engine1.getClone();
+														
+							web_engine1.setSearchUrl( input );
 	
-							sub.cloneWithNewEngine(web_engine1);
+							sub.cloneWithNewEngine( web_engine1 );
 	
 						} catch (Throwable e) {
 	

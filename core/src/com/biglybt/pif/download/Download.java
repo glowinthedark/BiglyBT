@@ -200,7 +200,9 @@ Download extends DownloadEventNotifier, DownloadStub, Taggable
     public static final long FLAG_DISABLE_STOP_AFTER_ALLOC	= 0x00004000;
 
     
+    public static final Object	UD_KEY_START_REASON	= new Object();
     public static final Object	UD_KEY_STOP_REASON	= new Object();
+    public static final Object	UD_KEY_QUEUE_REASON	= new Object();
     
 
 	/** get state from above ST_ set
@@ -298,6 +300,20 @@ Download extends DownloadEventNotifier, DownloadStub, Taggable
 
 		throws DownloadException;
 
+	public void
+	setStartReason(
+		String reason );
+
+	public String
+	getStartReason();
+	
+	public void
+	setQueueReason(
+		String reason );
+
+	public String
+	getQueueReason();
+	
 	public void
 	setStopReason(
 		String reason );

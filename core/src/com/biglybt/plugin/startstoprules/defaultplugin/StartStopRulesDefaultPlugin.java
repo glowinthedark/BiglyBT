@@ -121,6 +121,16 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 
 	private static final Object DEBUG_LINE_KEY = new Object();
 	
+	public static boolean DROO_FEATURES_ENABLE;
+	
+	static{
+		COConfigurationManager.addAndFireParameterListener( 
+			"droo.features.enable",
+			(p)->{
+				DROO_FEATURES_ENABLE = COConfigurationManager.getBooleanParameter(p,false);
+			});
+	}
+	
 	private TagManager tag_manager;
 		
 	private volatile boolean tagsHaveDLorCDLimits;
@@ -194,8 +204,6 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 	private int minDownloads;
 
 	private boolean bAutoReposition;
-
-	private long minTimeAlive;
 
 	private boolean bAutoStart0Peers;
 
@@ -1011,7 +1019,6 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 			bMaxDownloadIgnoreChecking	= plugin_config.getUnsafeBooleanParameter("StartStopManager_bMaxDownloadIgnoreChecking" );
 
 			bAutoReposition = plugin_config.getUnsafeBooleanParameter("StartStopManager_bAutoReposition");
-			minTimeAlive = plugin_config.getUnsafeIntParameter("StartStopManager_iMinSeedingTime") * 1000;
 			bDebugLog = plugin_config.getUnsafeBooleanParameter("StartStopManager_bDebugLog");
 
 			bAutoStart0Peers = plugin_config.getUnsafeBooleanParameter("StartStopManager_bAutoStart0Peers");
@@ -1845,7 +1852,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 				if (dlData.isForceStart()) {
 					if (state == Download.ST_STOPPED || state == Download.ST_QUEUED) {
 						try {
-							dlData.restart();
+							dlData.restart( "Force start" );
 							
 							if (bDebugLog){
 								String s = "restart: isForceStart";
@@ -1860,7 +1867,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 
 					if (state == Download.ST_READY) {
 						try {
-							dlData.start();
+							dlData.start( "Force start" );
 							
 							if (bDebugLog){
 								String s = "Start: isForceStart";
@@ -2644,19 +2651,22 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					(	globalRateAdjustedActivelyDownloading ||
 						!bDownloading ||
 						(bDownloading && totals.maxActive != 0 && !globalRateAdjustedActivelyDownloading &&	totals.activelyCDing + totals.activelyDLing >= totals.maxActive))){
-				try
-				{
-					if (bDebugLog)
+				try{
+
+					String stopReason = ivars.numWaitingOrDLing + " waiting or downloading, when limit is " + maxDLs + "(" + maxDownloads + ")";
+					if (ivars.higherDLtoStart)
 					{
-						String s = "   stopAndQueue: " + ivars.numWaitingOrDLing + " waiting or downloading, when limit is " + maxDLs + "(" + maxDownloads + ")";
-						if (ivars.higherDLtoStart)
-						{
-							s += " and higher DL is starting";
-						}
+						stopReason += " and higher DL is starting";
+					}
+
+					if (bDebugLog){
+					
+						String s = "   stopAndQueue: " + stopReason;
+						
 						log.log(dlData.getRelatedTo(), LoggerChannel.LT_INFORMATION, s);
 						dlData.appendTrace( s + "\n" );
 					}
-					dlData.stopAndQueue();
+					dlData.stopAndQueue( "Downloading rules: " + stopReason );
 					// reduce counts
 					ivars.numWaitingOrDLing--;
 					for (ProcessTagVarsIncomplete tvars: tagVars ){
@@ -2708,7 +2718,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						log.log(dlData.getRelatedTo(), LoggerChannel.LT_INFORMATION, s);
 						dlData.appendTrace( s + "\n" );
 					}
-					dlData.start();
+					dlData.start( "Start: downloading < max" );
 
 					// adjust counts
 					totals.waitingToDL--;
@@ -2744,7 +2754,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 							log.log(LoggerChannel.LT_INFORMATION, s);
 							dlData.appendTrace( s + "\n" );
 						}
-						dlData.restart();
+						dlData.restart( "Restart: downloading < max" );
 	
 						// increase counts
 						ivars.numWaitingOrDLing++;
@@ -2895,7 +2905,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					try {
 						if (bDebugLog)
 							sDebugLine += "\nrestart() 0Peers";
-						dlData.restart(); // set to Waiting
+						dlData.restart( "Restart: 0 peers" ); // set to Waiting
 						totals.waitingToSeed++;
 						cvars.numWaitingOrSeeding++;
 						
@@ -2907,7 +2917,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						if (state == Download.ST_READY) {
 							if (bDebugLog)
 								sDebugLine += "\nstart(); 0Peers";
-							dlData.start();
+							dlData.start( "Start: 0 peers" );
 							totals.activelyCDing++;
 						}
 					} catch (Exception ignore) {/*ignore*/
@@ -2917,7 +2927,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					try {
 						if (bDebugLog)
 							sDebugLine += "\nstart(); 0Peers";
-						dlData.start();
+						dlData.start( "Start: 0 peers" );
 						totals.activelyCDing++;
 						cvars.numWaitingOrSeeding++;
 						
@@ -2930,7 +2940,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 				return;
 			}
 
-			int rank = dlData.getSeedingRank();
+			final int rank = dlData.getSeedingRank();
 
 			// Short Circuit: if rank is set to IGNORED, we can skip everything
 			// except when:
@@ -3108,7 +3118,9 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 				
 				long timeAlive = (SystemTime.getCurrentTime() - dlData.getTimeStarted());
 				
-				okToQueue = (timeAlive >= minTimeAlive);
+				long minTimeAlive = dlData.getMinTimeSeedingMillis();
+				
+				okToQueue = (timeAlive >= minTimeAlive );
 
 				if (!okToQueue && bDebugLog)
 					sDebugLine += "\n  Torrent can't be stopped yet, timeAlive("
@@ -3197,7 +3209,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 							 * Really I'm not sure if force-start should count at all... 
 							 */
 						
-						dlData.restart(); // set to Waiting
+						dlData.restart( "Restart: slot available (rank=" + rank + ")" ); // set to Waiting
 						
 						okToQueue = false;
 
@@ -3300,7 +3312,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 									+ totals.activelyCDing + ") < maxSeeders("
 									+ totals.maxSeeders + ")";
 
-						dlData.start();
+						dlData.start( "Start: seeders < max (rank=" + rank +")");
 						okToQueue = false;
 					} catch (Exception ignore) {
 						/*ignore*/
@@ -3325,7 +3337,13 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 			if (okToQueue || bForceStop) {
 
 				boolean okToStop = bForceStop;
+				
+				String stopReason = "";
+
 				if (!okToStop) {
+					
+					boolean bSeeding = state == Download.ST_SEEDING;
+
 						// break up the logic into variables to make more readable
 						// parg: added the "or up-limit-prohibits & higherCD" case because if we're not starting any new
 						// seeds and we're below the seed limit we will never get to stop any lower priority seeds in order
@@ -3347,40 +3365,55 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 					
 					boolean overLimit = overCurrentLimit || overGlobalLimit;
 					
-					overLimit |= 	( !bActivelySeeding && cvars.stalledSeeders > maxStalledSeeding ) ||
-									(	( 	cvars.numWaitingOrSeeding >= totals.maxSeeders ||
-											totals.upLimitProhibitsNewSeeds ) && 
-										cvars.higherCDtoStart);
+					boolean inactiveAndOverStalled = !bActivelySeeding && cvars.stalledSeeders > maxStalledSeeding;
 
-					boolean bSeeding = state == Download.ST_SEEDING;
-
-						// not checking AND (at limit of seeders OR rank is set to ignore) AND
+					boolean atLimitAndHigherToStart = 
+							(cvars.numWaitingOrSeeding >= totals.maxSeeders ||	totals.upLimitProhibitsNewSeeds ) && 
+							cvars.higherCDtoStart;
+									
+					if ( DROO_FEATURES_ENABLE ){
+						
+						stopReason += "Droo enabled; ";
+						
+						overLimit |= inactiveAndOverStalled || ( atLimitAndHigherToStart && !bActivelySeeding );
+						
+					}else{
+				
+						overLimit |= inactiveAndOverStalled || atLimitAndHigherToStart;
+					}
 					
+						// not checking AND (at limit of seeders OR rank is set to ignore)
+
 					okToStop = 	!dlData.isChecking() &&
 								!dlData.isMoving() &&
 								(overLimit || rank < DefaultRankCalculator.SR_IGNORED_LESS_THAN);
+					
+					if (okToStop) {
+						if (overLimit) {
+							if ( overGlobalLimit ){
+								stopReason += "over global limit";
+							}else if ( overCurrentLimit ){
+								stopReason += "over current limit";
+							}else if ( inactiveAndOverStalled ){
+								stopReason += "over stale seeds limit";
+							}else if ( atLimitAndHigherToStart) {
+								stopReason += "higherQueued (it should be seeding instead of this one)";
+							}
+						} else if (rank < DefaultRankCalculator.SR_IGNORED_LESS_THAN)
+							stopReason += "ignoreRule met";
 
+						stopReason += " && ";
+						if (bActivelySeeding)
+							stopReason += "activelySeeding";
+						else if (!bSeeding)
+							stopReason += "not SEEDING";
+						else if (!bActivelySeeding && bSeeding)
+							stopReason += "SEEDING, but not actively";
+					}
+					
 					if (bDebugLog) {
 						if (okToStop) {
-							sDebugLine += "\n  stopAndQueue: ";
-							if (overLimit) {
-								if (cvars.higherCDtoStart) {
-									sDebugLine += "higherQueued (it should be seeding instead of this one)";
-								} else if (!bActivelySeeding && cvars.stalledSeeders > totals.maxSeeders) {
-									sDebugLine += "over stale seeds limit";
-								} else {
-									sDebugLine += "over limit";
-								}
-							} else if (rank < DefaultRankCalculator.SR_IGNORED_LESS_THAN)
-								sDebugLine += "ignoreRule met";
-
-							sDebugLine += " && ";
-							if (bActivelySeeding)
-								sDebugLine += "activelySeeding";
-							else if (!bSeeding)
-								sDebugLine += "not SEEDING";
-							else if (!bActivelySeeding && bSeeding)
-								sDebugLine += "SEEDING, but not actively";
+							sDebugLine += "\n  stopAndQueue: " + stopReason;
 						}
 					} else {
 						sDebugLine += "\n  NOT queuing: ";
@@ -3398,11 +3431,14 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 						}
 					}
 				} else {
+					stopReason = "force stop";
+					
 					if (bDebugLog)
 						sDebugLine += "\n  Forcing a stop..";
 				}
 
 				if (okToStop) {
+					stopReason += " (rank=" + rank + ")";
 					try {
 						if (state == Download.ST_READY)
 							totals.waitingToSeed--;
@@ -3411,7 +3447,7 @@ public class StartStopRulesDefaultPlugin implements Plugin,
 							dlog.log( "    stopping" );
 						}
 
-						dlData.stopAndQueue();
+						dlData.stopAndQueue( "Seeding rules: " + stopReason );
 
 						// okToQueue only allows READY and SEEDING state.. and in both cases
 						// we have to reduce counts

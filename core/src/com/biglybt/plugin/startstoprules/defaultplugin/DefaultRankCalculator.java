@@ -144,17 +144,20 @@ DefaultRankCalculator
 		throws DownloadException;
 
 	public void
-	start()
+	start(
+		String	reason )
 	
 		throws DownloadException;
 	
 	public void
-	restart()
+	restart(
+		String	reason )
 	
 		throws DownloadException;
 
 	public void
-	stopAndQueue()
+	stopAndQueue(
+		String reason )
 		
 		throws DownloadException;
 	
@@ -166,6 +169,9 @@ DefaultRankCalculator
 	
 	public int
 	getSeedingRank();
+	
+	public long
+	getMinTimeSeedingMillis();
 	
 	public boolean
 	getActivelySeeding();

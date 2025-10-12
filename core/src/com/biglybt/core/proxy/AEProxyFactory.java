@@ -80,6 +80,12 @@ AEProxyFactory
 	public static final String PO_PREFERRED_PROXY_TYPE	= "preferred_proxy_type";	// String SOCKS(default) or HTTP
 	public static final String PO_FORCE_PROXY			= "force_proxy";			// Boolean
 	
+		// these constants are inline in the I2P plugin at the moment, update sometime
+	
+	public static final String PO_PROTOCOL				= "protocol";				// String, PO_PROTOCOL_<x>, default = TCP
+	public static final String PO_PROTOCOL_TCP			= "TCP";
+	public static final String PO_PROTOCOL_UDP			= "UDP";
+	
 	public static PluginProxy
 	getPluginProxy(
 		String		reason,
@@ -187,6 +193,14 @@ AEProxyFactory
 	public static final String	SP_NEW_IDENTITY		= "new-identity";
 	public static final String	SP_BIND				= "bind";
 
+	public static boolean
+	hasPluginServerProxy(
+		String					reason,
+		String					network )
+	{
+		return( AEPluginProxyHandler.hasPluginServerProxy( reason, network  ));
+	}
+	
 	public static Map<String,Object>
 	getPluginServerProxy(
 		String					reason,

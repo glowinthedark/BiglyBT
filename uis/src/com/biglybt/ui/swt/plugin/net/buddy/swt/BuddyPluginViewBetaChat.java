@@ -2698,7 +2698,7 @@ BuddyPluginViewBetaChat
 			StyleRange styleRange = new StyleRange();
 			styleRange.start = start;
 			styleRange.length = url_text.length();
-			styleRange.foreground = parent.getDisplay().getSystemColor(SWT.COLOR_LINK_FOREGROUND);
+			styleRange.foreground = Utils.getLinkForegroundColor();
 			styleRange.underline = true;
 
 			styleRange.data = url;
@@ -3399,11 +3399,7 @@ BuddyPluginViewBetaChat
 						widgetSelected(
 							SelectionEvent e )
 						{
-							String name = chat.getDisplayName();
-							
-							if ( name == null ) {
-								name = chat.getName();
-							}
+							String name = chat.getDisplayNameEx();
 							
 							UISWTInputReceiver entry = new SimpleTextEntryWindow();
 							entry.setPreenteredText(name, false );
@@ -7101,7 +7097,7 @@ BuddyPluginViewBetaChat
 									StyleRange styleRange 	= new MyStyleRange( message );
 									styleRange.start 		= this_style_start;
 									styleRange.length 		= this_style_length;
-									styleRange.foreground 	= Utils.getDisplay().getSystemColor(SWT.COLOR_LINK_FOREGROUND);
+									styleRange.foreground 	= Utils.getLinkForegroundColor();
 									styleRange.underline 	= true;
 
 										// DON'T store the URL object because in their wisdom SWT invokes the .equals method

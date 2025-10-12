@@ -30,6 +30,7 @@ import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.download.DownloadManagerStateAttributeListener;
 import com.biglybt.core.internat.MessageText;
+import com.biglybt.core.peer.PEPeerManager;
 import com.biglybt.core.tag.Tag;
 import com.biglybt.core.tag.TagFeatureRateLimit;
 import com.biglybt.core.tag.TagType;
@@ -146,7 +147,9 @@ RankCalculatorReal
 
 	private static int iFirstPriorityIgnoreIdleMinutes;
 
-	private static long minTimeAlive;
+	protected static long minTimeAlive;
+	
+	private static long minTimeAliveWhenActive;
 
 	private static boolean bAutoStart0Peers;
 
@@ -330,6 +333,7 @@ RankCalculatorReal
 		iRankTypeSeedFallback = cfg.getUnsafeIntParameter("StartStopManager_iRankTypeSeedFallback");
 		bPreferLargerSwarms = cfg.getUnsafeBooleanParameter("StartStopManager_bPreferLargerSwarms");
 		minTimeAlive = cfg.getUnsafeIntParameter("StartStopManager_iMinSeedingTime") * 1000;
+		minTimeAliveWhenActive = cfg.getUnsafeIntParameter("StartStopManager_iMinSeedingTimeWhenActive") * 1000;
 		bAutoStart0Peers = cfg.getUnsafeBooleanParameter("StartStopManager_bAutoStart0Peers");
 
 		// Ignore torrent if seed count is at least..
@@ -567,26 +571,35 @@ RankCalculatorReal
 		dl.initialize();
 	}
 	public void
-	start()
+	start(
+		String		reason )
 	
 		throws DownloadException
 	{
+		dl.setStartReason( reason );
+		
 		dl.start();
 	}
 	
 	public void
-	restart()
+	restart(
+		String		reason )
 	
 		throws DownloadException
 	{
+		dl.setStartReason( reason );
+		
 		dl.restart();
 	}
 	
 	public void
-	stopAndQueue()
+	stopAndQueue(
+		String reason )
 		
 		throws DownloadException
 	{
+		dl.setQueueReason(reason);
+		
 		dl.stopAndQueue();
 	}
 	
@@ -837,6 +850,44 @@ RankCalculatorReal
 		return bActivelyDownloading;
 	}
 
+	@Override
+	public long 
+	getMinTimeSeedingMillis()
+	{
+		long result = minTimeAlive;
+		
+		PEPeerManager pm = core_dm.getPeerManager();
+		
+		if ( pm != null ){
+			
+			long time_diff = minTimeAliveWhenActive - minTimeAlive;
+			
+			if ( time_diff > 0 ){
+				
+				double global_up	= core_dm.getGlobalManager().getStats().getSmoothedSendRate();
+				
+				double dm_up		= pm.getStats().getSmoothedDataSendRate();
+				
+				if ( global_up > 0 && dm_up > 0 ){
+					
+					double up_diff = global_up - dm_up;
+					
+					if ( up_diff <= 0 ){
+						
+						result += time_diff;
+						
+					}else{
+						
+						double ratio = dm_up/global_up;
+						
+						result += (long)( time_diff*ratio );				
+					}
+				}
+			}
+		}
+		
+		return( result );
+	}
 	/**
 	 * Retrieves whether the torrent is "actively" seeding
 	 *
@@ -1271,7 +1322,7 @@ RankCalculatorReal
 						|| state == Download.ST_WAITING || state == Download.ST_PREPARING) {
 					// force sort to top
 					long lMsElapsed = 0;
-					long lMsTimeToSeedFor = minTimeAlive;
+					long lMsTimeToSeedFor = getMinTimeSeedingMillis();
 					if (state == Download.ST_SEEDING && !dl.isForceStart()) {
 						long seedingStart = stats.getTimeStartedSeeding();
 						lMsElapsed = (SystemTime.getCurrentTime() - seedingStart );
@@ -2164,7 +2215,7 @@ RankCalculatorReal
 						long seedingStart = dl.getStats().getTimeStartedSeeding();
 						long timeLeft;
 
-						long lMsTimeToSeedFor = minTimeAlive;
+						long lMsTimeToSeedFor = getMinTimeSeedingMillis();
 						if (iTimed_MinSeedingTimeWithPeers > 0) {
 							
 		  					PeerManager peerManager = dl.getPeerManager();
@@ -2239,7 +2290,13 @@ RankCalculatorReal
 				sText = "ERR" + sr;
 			}
 			// Add a Star if it's before minTimeAlive
-			if (SystemTime.getCurrentTime() - dl.getStats().getTimeStartedSeeding() < minTimeAlive){
+			
+			long seedingTime = SystemTime.getCurrentTime() - dl.getStats().getTimeStartedSeeding();
+			
+			long minSeedingTime = getMinTimeSeedingMillis();
+			
+			if ( seedingTime < minSeedingTime){
+				
 				if ( verbose ){
 				
 					sText = "< " + MessageText.getString( "ConfigView.label.minSeedingTime" ) + "; " + sText;

@@ -2108,6 +2108,13 @@ TRTrackerBTAnnouncerImpl
  	{
  		long timeout = is_probe?10000: PRUDPPacket.DEFAULT_UDP_TIMEOUT;
 
+ 	    String	tracker_network			= AENetworkClassifier.categoriseAddress( original_reqUrl.getHost());
+
+ 		if ( tracker_network != AENetworkClassifier.AT_PUBLIC ){
+ 			
+ 			timeout *= 2;
+ 		}
+ 		
  		URL reqUrl = TRTrackerUtils.adjustURLForHosting( original_reqUrl );
 
  		if ( reqUrl != original_reqUrl ){
@@ -2163,7 +2170,7 @@ TRTrackerBTAnnouncerImpl
  				try{
 	 	 			PRUDPPacketHandler handler = PRUDPPacketHandlerFactory.getHandler( handler_port );
 	
-	 	 			handler = handler.openSession( destination );
+	 	 			handler = handler.openSession( destination, peer_networks, "Tracker announce" );
 	
 		 			try{
 		
@@ -2347,7 +2354,9 @@ TRTrackerBTAnnouncerImpl
 					 					map.put( "complete", new Long(announce_reply.getSeeders()));
 					 					map.put( "incomplete", new Long(announce_reply.getLeechers()));
 		
-					 					if ( announce_reply.isIPV6()){
+					 					int at = announce_reply.getAddressType();
+					 					
+					 					if ( at == PRUDPPacketReplyAnnounce2.AT_IPV6 ){
 					 						
 					 						byte[] v6peers = new byte[addresses.length*18];
 					 						
@@ -2366,7 +2375,7 @@ TRTrackerBTAnnouncerImpl
 						 						
 						 						pos++;
 						 					}
-					 					}else{
+					 					}else if ( at == PRUDPPacketReplyAnnounce2.AT_IPV4 ){
 					 						
 						 					List	peers = new ArrayList();
 		
@@ -2381,6 +2390,16 @@ TRTrackerBTAnnouncerImpl
 						 						peer.put( "ip", PRHelpers.bytesToAddress(addresses[i]).getBytes());
 						 						peer.put( "port", new Long( ports[i]));
 						 					}
+					 					}else{
+					 						
+					 						byte[] peers = new byte[addresses.length*32];
+					 						
+					 						for ( int i=0;i<addresses.length;i++){
+					 							
+					 							System.arraycopy( addresses[i], 0, peers, i*32, 32 );
+					 						}
+					 						
+					 						map.put( "peers", peers );
 					 					}
 		
 					 					byte[] data = BEncoder.encode( map );
@@ -2402,7 +2421,7 @@ TRTrackerBTAnnouncerImpl
 					 		}catch( PRUDPPacketHandlerException e ){
 		
 					 			if ( e.getMessage() == null ||
-									!e.getMessage().contains("timed out")){
+									!Debug.getNestedExceptionMessage(e).contains("timed out")){
 		
 					 				throw( e );
 					 			}
@@ -3724,10 +3743,10 @@ TRTrackerBTAnnouncerImpl
 
 						int peers_length = meta_peers.size();
 
-				  	 if (Logger.isEnabled()) {
+						if (Logger.isEnabled()) {
 								Logger.log(new LogEvent(torrent, LOGID,
 										"ANNOUNCE old style non-compact: num=" + peers_length));
-					   }
+						}
 
 						if ( crypto_flags != null && peers_length != crypto_flags.length ){
 
@@ -3855,9 +3874,22 @@ TRTrackerBTAnnouncerImpl
 
 			  					byte[] i2p_id 		= new byte[32];
 			  					byte[] peer_peer_id = new byte[20];
-
+		  					
 			  					System.arraycopy( meta_peers, i, i2p_id, 0, 32 );
 			  					System.arraycopy( meta_peers, i, peer_peer_id, 0, 20 );
+			  					
+			  					boolean all_z = true;
+			  					for ( int j=0;j<i2p_id.length;j++){
+			  						if ( i2p_id[j] != 0 ){
+			  							all_z = false;
+			  							break;
+			  						}
+			  					}
+			  					
+			  					if ( all_z ){
+			  						// invalid address
+			  						continue;
+			  					}
 
 			  					String hostname = Base32.encode( i2p_id ).toLowerCase(Locale.US) + ".b32.i2p";
 

@@ -95,6 +95,8 @@ DownloadManager
 
 	public static final int EF_WAS_FORCE_START			= 0x01;
 	
+	public static final Object UD_KEY_START_REASON = Download.UD_KEY_START_REASON;
+	public static final Object UD_KEY_QUEUE_REASON = Download.UD_KEY_QUEUE_REASON;
 	public static final Object UD_KEY_STOP_REASON = Download.UD_KEY_STOP_REASON;
 	
 	public void
@@ -194,11 +196,25 @@ DownloadManager
         boolean remove_data );
 
     public void
+    setStartReason(
+    	String	reason );
+    
+    public String
+    getStartReason();
+    
+    public void
     setStopReason(
     	String	reason );
     
     public String
     getStopReason();
+    
+    public void
+    setQueueReason(
+    	String	reason );
+    
+    public String
+    getQueueReason();
     
     /**
      * As above but definitely indicates that the stop is for removal (if for_removal is true) and therefore that any removal specific actions

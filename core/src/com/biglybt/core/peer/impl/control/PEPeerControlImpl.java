@@ -26,6 +26,7 @@ import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ConfigKeys;
@@ -51,6 +52,7 @@ import com.biglybt.core.peer.impl.transport.PEPeerTransportProtocol;
 import com.biglybt.core.peer.util.PeerIdentityDataID;
 import com.biglybt.core.peer.util.PeerIdentityManager;
 import com.biglybt.core.peer.util.PeerUtils;
+import com.biglybt.core.peermanager.PeerManager;
 import com.biglybt.core.peermanager.PeerManagerRegistration;
 import com.biglybt.core.peermanager.control.PeerControlInstance;
 import com.biglybt.core.peermanager.control.PeerControlScheduler;
@@ -1290,6 +1292,11 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		String fail_reason = null;
 
+		if ( PEPeerControl.TEST_PERMIT_PEER_CONNECTIONS ){
+			
+			force = true;
+		}
+		
 		if(force || !isAlreadyConnected(peer_item)){
 
 			boolean tcp_ok = TCPNetworkManager.TCP_OUTGOING_ENABLED && tcp_port > 0;
@@ -1475,9 +1482,12 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 			if ( rc != null ){
 				
-				// System.out.println( "Ignoring " + key + " due to " + rc );
+				if ( !PEPeerControl.TEST_PERMIT_PEER_CONNECTIONS ){
 				
-				return( "Ignoring outbound connection due to previous close_reason: " + rc );
+						// System.out.println( "Ignoring " + key + " due to " + rc );
+				
+					return( "Ignoring outbound connection due to previous close_reason: " + rc );
+				}
 				
 			}else{
 				
@@ -1538,7 +1548,10 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 		if(!same_allowed && PeerIdentityManager.containsIPAddress(_hash, address)){
 
-			return("Already connected to IP");
+			if ( !PEPeerControl.TEST_PERMIT_PEER_CONNECTIONS ){
+			
+				return("Already connected to IP");
+			}
 		}
 
 		if(PeerUtils.ignorePeerPort(tcp_port)){
@@ -5248,10 +5261,11 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 								}
 							}
 
-							boolean tcp_ok = TCPNetworkManager.TCP_OUTGOING_ENABLED && tcp_port > 0
-									&& tcp_remaining > 0;
-							boolean udp_ok = UDPNetworkManager.UDP_OUTGOING_ENABLED && udp_port > 0
-									&& udp_remaining > 0;
+							boolean tcp_ok = TCPNetworkManager.TCP_OUTGOING_ENABLED && PeerManager.enable_public_tcp_peers &&
+												tcp_port > 0	&& tcp_remaining > 0;
+							
+							boolean udp_ok = UDPNetworkManager.UDP_OUTGOING_ENABLED && PeerManager.enable_public_udp_peers && 
+												udp_port > 0	&& udp_remaining > 0;
 
 							if(tcp_ok && !(prefer_udp_overall && udp_ok)){
 
@@ -7077,6 +7091,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		private volatile int[] incoming_requested_pieces = {};
 		private volatile int[] outgoing_requested_pieces = {};
 
+		private AtomicLong tagMutationCounter = new AtomicLong();
+
 		private void update(){
 			if(last_active == 0){
 
@@ -7577,6 +7593,20 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			return(null);
 		}
 
+		@Override
+		public long 
+		getTagMutationCount()
+		{
+			return( tagMutationCounter.get());
+		}
+		
+		@Override
+		public void 
+		updateTagMutationCount()
+		{
+			tagMutationCounter.incrementAndGet();
+		}
+		
 		@Override
 		public Object getTaggableTransientProperty(String key){
 			return null;

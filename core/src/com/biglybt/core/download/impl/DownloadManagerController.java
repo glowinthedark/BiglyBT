@@ -416,6 +416,18 @@ DownloadManagerController
 
 		download_manager.informWillBeStarted( temp );
 
+		if (Logger.isEnabled()){
+			
+			Logger.log(
+					new LogEvent(
+						this, 
+						LogIDs.CORE, 
+						"Started - state=" + getState() +
+							" reason=" + download_manager.getStartReason()));
+			
+			download_manager.setStartReason( null );
+		}
+		
 		temp.start();
 
 		   //The connection to the tracker
@@ -1215,7 +1227,15 @@ DownloadManagerController
 
 			control_mon.exit();
 
-			Logger.log(new LogEvent(this, LogIDs.CORE, "Stopped - state=" + getState() + ",error=" + getErrorType() + "/" + getErrorDetail() + "/" + getErrorFlags()));
+			Logger.log(
+				new LogEvent(
+					this, 
+					LogIDs.CORE, 
+					"Stopped - state=" + getState() +
+						" reason=" + download_manager.getStopReason() + "/" + download_manager.getQueueReason() +
+						", error=" + getErrorType() + "/" + getErrorDetail() + "/" + getErrorFlags()));
+			
+			download_manager.setQueueReason( null );
 
 			download_manager.informStateChanged();
 		}
