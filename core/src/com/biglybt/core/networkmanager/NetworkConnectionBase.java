@@ -21,10 +21,14 @@ package com.biglybt.core.networkmanager;
 
 public interface
 NetworkConnectionBase
+	extends ControllerAllocationManagement
 {
 	public ConnectionEndpoint
 	getEndpoint();
 
+	public int
+	getPartitionID();
+	
 	 /**
 	   * Inform connection of a thrown exception.
 	   * @param error exception

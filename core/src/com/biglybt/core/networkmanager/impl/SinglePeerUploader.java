@@ -33,16 +33,17 @@ import com.biglybt.core.util.Debug;
 /**
  * A fast write entity backed by a single peer connection.
  */
-public class SinglePeerUploader implements RateControlledEntity {
+public class SinglePeerUploader extends RateControlledSingleEntity {
 
-  private final NetworkConnectionBase connection;
-  private final RateHandler rate_handler;
+	private final NetworkConnectionBase connection;
+	private final RateHandler rate_handler;
 
-  public SinglePeerUploader( NetworkConnectionBase connection, RateHandler rate_handler ) {
-    this.connection = connection;
-    this.rate_handler = rate_handler;
-  }
-
+	public SinglePeerUploader( NetworkConnectionBase connection, RateHandler rate_handler ) {
+		super( connection );
+		this.connection = connection;
+		this.rate_handler = rate_handler;
+	}
+	
 	@Override
 	public RateHandler
 	getRateHandler()
@@ -50,6 +51,13 @@ public class SinglePeerUploader implements RateControlledEntity {
 		return( rate_handler );
 	}
 
+	@Override
+	public int 
+	getPartitionID()
+	{
+		return( connection.getPartitionID());
+	}
+	
 ////////////////RateControlledWriteEntity implementation ////////////////////
 
 	@Override
@@ -68,7 +76,7 @@ public class SinglePeerUploader implements RateControlledEntity {
 			if( connection.getOutgoingMessageQueue().getTotalSize() < 1 ) {
 				return false;  //no data to send
 			}
-			int[] allowed = rate_handler.getCurrentNumBytesAllowed();
+			long[] allowed = rate_handler.getCurrentNumBytesAllowed();
 
 			if( allowed[0] < 1 ){
 
@@ -102,7 +110,7 @@ public class SinglePeerUploader implements RateControlledEntity {
 	}
 
 	@Override
-	public int 
+	public long 
 	doProcessing(
 		EventWaiter waiter, 
 		int max_bytes ) 
@@ -115,9 +123,9 @@ public class SinglePeerUploader implements RateControlledEntity {
 				return 0;
 			}
 	
-			int[] allowed = rate_handler.getCurrentNumBytesAllowed();
+			long[] allowed = rate_handler.getCurrentNumBytesAllowed();
 	
-			int num_bytes_allowed = allowed[0];
+			long num_bytes_allowed = allowed[0];
 	
 			boolean	protocol_is_free = allowed[1] > 0;
 	
@@ -150,7 +158,7 @@ public class SinglePeerUploader implements RateControlledEntity {
 				return 0;
 			}
 	
-			int num_bytes_to_write = num_bytes_allowed > num_bytes_available ? num_bytes_available : num_bytes_allowed;
+			long num_bytes_to_write = num_bytes_allowed > num_bytes_available ? num_bytes_available : num_bytes_allowed;
 	
 			//int mss = NetworkManager.getTcpMssSize();
 			//if( num_bytes_to_write > mss )  num_bytes_to_write = mss;
@@ -258,11 +266,11 @@ public class SinglePeerUploader implements RateControlledEntity {
   public String
   getString()
   {
-	  int[] temp = rate_handler.getCurrentNumBytesAllowed();
+	  long[] temp = rate_handler.getCurrentNumBytesAllowed();
 	  
 	  String ba = "";
 	  
-	  for ( int t: temp ){
+	  for ( long t: temp ){
 		  ba += (ba.isEmpty()?"":",") + t;
 	  }
 	  

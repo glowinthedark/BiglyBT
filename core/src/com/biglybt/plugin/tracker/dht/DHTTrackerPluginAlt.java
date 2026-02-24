@@ -23,9 +23,12 @@ package com.biglybt.plugin.tracker.dht;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.UnsupportedAddressTypeException;
 import java.util.*;
 
 import com.biglybt.core.dht.transport.DHTTransportAlternativeContact;
@@ -40,9 +43,11 @@ DHTTrackerPluginAlt
 	private static final long	startup_time 	= SystemTime.getMonotonousTime();
 	private static final int	startup_grace	= 60*1000;
 
-	private static final int INITAL_DELAY	= 5*1000;
-	private static final int RPC_TIMEOUT	= 15*1000;
-	private static final int LOOKUP_TIMEOUT	= 90*1000;
+	private static final int INITAL_DELAY_FAST	= 250;
+	private static final int INITAL_DELAY_SLOW	= 2500;
+	
+	private static final int RPC_TIMEOUT	= 10*1000;
+	private static final int LOOKUP_TIMEOUT	= 30*1000;
 	private static final int LOOKUP_LINGER	= 5*1000;
 
 	private static final int CONC_LOOKUPS	= 8;
@@ -55,8 +60,10 @@ DHTTrackerPluginAlt
 
 	private final byte[]	NID = new byte[20];
 
-	private DatagramSocket	current_server;
-	private Throwable		last_server_error;
+	private DatagramSocket	current_server_v4;
+	private DatagramSocket	current_server_v6;
+	private Throwable		last_server_error_v4;
+	private Throwable		last_server_error_v6;
 
 	private ByteArrayHashMap<Object[]>	tid_map = new ByteArrayHashMap<>();
 
@@ -64,8 +71,10 @@ DHTTrackerPluginAlt
 
 	private AsyncDispatcher		dispatcher = new AsyncDispatcher();
 
-	private volatile long	lookup_count;
-	private volatile long	hit_count;
+	private volatile long	lookup_count_v4;
+	private volatile long	lookup_count_v6;
+	private volatile long	hit_count_v4;
+	private volatile long	hit_count_v6;
 
 	private volatile long	packets_out;
 	private volatile long	packets_in;
@@ -84,108 +93,251 @@ DHTTrackerPluginAlt
 	}
 
 	private DatagramSocket
-	getServer()
+	getServer(
+		boolean		v4 )
 	{
 		synchronized( this ){
 
-			if ( current_server != null ){
+			NetworkAdmin adm = NetworkAdmin.getSingleton();
 
-				if ( current_server.isClosed()){
+			InetAddress default_bind_ip = adm.getSingleHomedServiceBindAddress();
 
-					current_server = null;
-
-				}else{
-
-					return( current_server );
+			if ( default_bind_ip == null ){
+				
+				try{
+					default_bind_ip = InetAddress.getByName( "127.0.0.1" );
+					
+				}catch( Throwable e ){
+					
+					Debug.out(e);
 				}
 			}
-
-			try{
-				final DatagramSocket server = new DatagramSocket(null);
-
-				server.setReuseAddress(true);
-
-				InetAddress bind_ip = NetworkAdmin.getSingleton().getSingleHomedServiceBindAddress();
-
-				if ( bind_ip == null ){
-
-					bind_ip = InetAddress.getByName( "127.0.0.1" );
+			
+			InetAddress target_bind_ip = default_bind_ip;
+			
+			if (	( default_bind_ip instanceof Inet4Address && v4  ) ||
+					( default_bind_ip instanceof Inet6Address && !v4 )){
+				
+				target_bind_ip = default_bind_ip;
+				
+			}else{
+				
+				try{
+					if ( default_bind_ip instanceof Inet6Address && !default_bind_ip.isAnyLocalAddress() && adm.hasIPV4Potential()){
+						
+						target_bind_ip = adm.getSingleHomedServiceBindAddress(NetworkAdmin.IP_PROTOCOL_VERSION_REQUIRE_V4);
+						
+					}else if (default_bind_ip instanceof Inet4Address && adm.hasIPV6Potential()){
+						
+						target_bind_ip = adm.getSingleHomedServiceBindAddress(NetworkAdmin.IP_PROTOCOL_VERSION_REQUIRE_V6);
+					}
+					
+				}catch (UnsupportedAddressTypeException e){
 				}
-
-				server.bind( new InetSocketAddress(bind_ip, port));
-
-				current_server = server;
-
-				last_server_error	= null;
-
-				new AEThread2( "DHTPluginAlt:server" )
-				{
-					@Override
-					public void
-					run()
+			}
+				
+			if ( target_bind_ip instanceof Inet4Address ){
+				
+				if ( current_server_v4 != null ){
+	
+					if ( current_server_v4.isClosed()){
+	
+						current_server_v4 = null;
+						
+					}else if ( !target_bind_ip.equals( current_server_v4.getLocalAddress())){
+						
+						current_server_v4.close();
+						
+						current_server_v4 = null;
+						
+					}else{
+	
+						return( current_server_v4 );
+					}
+				}
+	
+				try{
+					final DatagramSocket server = new DatagramSocket(null);
+	
+					server.setReuseAddress(true);
+	
+					server.bind( new InetSocketAddress(target_bind_ip, port));
+	
+					current_server_v4 = server;
+	
+					last_server_error_v4	= null;
+	
+					new AEThread2( "DHTPluginAlt:server v4" )
 					{
-						try{
-							while( true ){
-
-								byte[] buffer = new byte[5120];
-
-								DatagramPacket packet = new DatagramPacket( buffer, buffer.length );
-
-								server.receive( packet );
-
-								packets_in++;
-
-								bytes_in += packet.getLength();
-
-								Map<String, Object> map = new BDecoder().decodeByteArray(packet.getData(), 0, packet.getLength() ,false);
-
-								//System.out.println( "got " + map );
-
-								byte[]	tid = (byte[])map.get( "t" );
-
-								if ( tid != null ){
-
-									Object[] task;
-
-									synchronized( tid_map ){
-
-										task = tid_map.remove( tid );
-									}
-
-									if ( task != null ){
-
-										((GetPeersTask)task[0]).handleReply((InetSocketAddress)packet.getSocketAddress(), tid, map );
+						@Override
+						public void
+						run()
+						{
+							try{
+								while( true ){
+	
+									byte[] buffer = new byte[5120];
+	
+									DatagramPacket packet = new DatagramPacket( buffer, buffer.length );
+	
+									server.receive( packet );
+	
+									packets_in++;
+	
+									bytes_in += packet.getLength();
+	
+									Map<String, Object> map = new BDecoder().decodeByteArray(packet.getData(), 0, packet.getLength() ,false);
+	
+									//System.out.println( "got " + map );
+	
+									byte[]	tid = (byte[])map.get( "t" );
+	
+									if ( tid != null ){
+	
+										Object[] task;
+	
+										synchronized( tid_map ){
+	
+											task = tid_map.remove( tid );
+										}
+	
+										if ( task != null ){
+	
+											((GetPeersTask)task[0]).handleReply((InetSocketAddress)packet.getSocketAddress(), tid, map );
+										}
 									}
 								}
-							}
-						}catch( Throwable e ){
-
-						}finally{
-
-							try{
-								server.close();
-
-							}catch( Throwable f ){
-							}
-
-							synchronized( DHTTrackerPluginAlt.this ){
-
-								if ( current_server == server ){
-
-									current_server = null;
+							}catch( Throwable e ){
+	
+							}finally{
+	
+								try{
+									server.close();
+	
+								}catch( Throwable f ){
+								}
+	
+								synchronized( DHTTrackerPluginAlt.this ){
+	
+									if ( current_server_v4 == server ){
+	
+										current_server_v4 = null;
+									}
 								}
 							}
 						}
+					}.start();
+	
+					return( server );
+	
+				}catch( Throwable e ){
+	
+					last_server_error_v4 = e;
+	
+					return( null );
+				}
+			}else{
+				
+				
+				if ( current_server_v6 != null ){
+					
+					if ( current_server_v6.isClosed()){
+	
+						current_server_v6 = null;
+					
+					}else if ( !target_bind_ip.equals( current_server_v6.getLocalAddress())){
+						
+						current_server_v6.close();
+						
+						current_server_v6 = null;
+						
+					}else{
+	
+						return( current_server_v6 );
 					}
-				}.start();
-
-				return( server );
-
-			}catch( Throwable e ){
-
-				last_server_error = e;
-
-				return( null );
+				}
+	
+				try{
+					final DatagramSocket server = new DatagramSocket(null);
+	
+					server.setReuseAddress(true);
+		
+					server.bind( new InetSocketAddress(target_bind_ip, port));
+	
+					current_server_v6 = server;
+	
+					last_server_error_v6	= null;
+	
+					new AEThread2( "DHTPluginAlt:server v6" )
+					{
+						@Override
+						public void
+						run()
+						{
+							try{
+								while( true ){
+	
+									byte[] buffer = new byte[5120];
+	
+									DatagramPacket packet = new DatagramPacket( buffer, buffer.length );
+	
+									server.receive( packet );
+	
+									packets_in++;
+	
+									bytes_in += packet.getLength();
+	
+									Map<String, Object> map = new BDecoder().decodeByteArray(packet.getData(), 0, packet.getLength() ,false);
+	
+									//System.out.println( "got " + map );
+	
+									byte[]	tid = (byte[])map.get( "t" );
+	
+									if ( tid != null ){
+	
+										Object[] task;
+	
+										synchronized( tid_map ){
+	
+											task = tid_map.remove( tid );
+										}
+	
+										if ( task != null ){
+	
+											((GetPeersTask)task[0]).handleReply((InetSocketAddress)packet.getSocketAddress(), tid, map );
+										}
+									}
+								}
+							}catch( Throwable e ){
+	
+							}finally{
+	
+								try{
+									server.close();
+	
+								}catch( Throwable f ){
+								}
+	
+								synchronized( DHTTrackerPluginAlt.this ){
+	
+									if ( current_server_v6 == server ){
+	
+										current_server_v6 = null;
+									}
+								}
+							}
+						}
+					}.start();
+	
+					return( server );
+	
+				}catch( Throwable e ){
+	
+					last_server_error_v6 = e;
+	
+					return( null );
+				}
+				
 			}
 		}
 	}
@@ -194,11 +346,12 @@ DHTTrackerPluginAlt
 	get(
 		final byte[]				hash,
 		final boolean				no_seeds,
+		final boolean				fast,
 		final LookupListener		listener )
 	{
 		SimpleTimer.addEvent(
 			"altlookup.delay",
-			SystemTime.getCurrentTime() + INITAL_DELAY,
+			SystemTime.getCurrentTime() + ( fast?INITAL_DELAY_FAST:INITAL_DELAY_SLOW ),
 			new TimerEventPerformer()
 			{
 				@Override
@@ -236,8 +389,9 @@ DHTTrackerPluginAlt
 		final boolean				no_seeds,
 		final LookupListener		listener )
 	{
-		List<DHTTransportAlternativeContact> contacts;
-
+		List<DHTTransportAlternativeContact> contacts_v4;
+		List<DHTTransportAlternativeContact> contacts_v6;
+		
 		while( true ){
 
 			if ( listener.isComplete()){
@@ -245,9 +399,18 @@ DHTTrackerPluginAlt
 				return;
 			}
 
-			contacts = DHTUDPUtils.getAlternativeContacts( DHTTransportAlternativeNetwork.AT_MLDHT_IPV4, 16 );
-
-			if ( contacts.size() == 0 ){
+			contacts_v4 = DHTUDPUtils.getAlternativeContacts( DHTTransportAlternativeNetwork.AT_MLDHT_IPV4, 16 );
+			
+			if ( NetworkAdmin.getSingleton().hasDHTIPV6()){
+	
+				contacts_v6 = DHTUDPUtils.getAlternativeContacts( DHTTransportAlternativeNetwork.AT_MLDHT_IPV6, 16 );
+				
+			}else{
+				
+				contacts_v6 = Collections.emptyList();
+			}
+			
+			if ( contacts_v4.isEmpty() && contacts_v6.isEmpty()){
 
 				long now = SystemTime.getMonotonousTime();
 
@@ -271,16 +434,79 @@ DHTTrackerPluginAlt
 			}
 		}
 
-		DatagramSocket	server = getServer();
-
-		if ( server == null ){
-
-			return;
+		LookupListener task_listener;
+		
+		if ( contacts_v4.isEmpty() || contacts_v6.isEmpty()){
+		
+			task_listener = listener;
+			
+		}else{
+			
+			task_listener= 
+				new LookupListener(){
+				
+					private int complete_count = 0;
+				
+					@Override
+					public boolean 
+					isComplete()
+					{
+						return( listener.isComplete());
+					}
+					
+					@Override
+					public void 
+					foundPeer(
+						InetSocketAddress address)
+					{
+						listener.foundPeer(address);
+					}
+					
+					@Override
+					public void 
+					completed()
+					{
+						boolean done;
+						
+						synchronized( this ){
+						
+							complete_count++;
+							
+							done = complete_count == 2;
+						}
+						
+						if ( done ){
+							
+							listener.completed();
+						}
+					}
+				};
 		}
+		
+		if ( !contacts_v4.isEmpty()){
+			
+			DatagramSocket	server = getServer( true );
+	
+			if ( server != null ){
+	
+				lookup_count_v4++;
+				
+				new GetPeersTask( server, contacts_v4, hash, no_seeds, task_listener );
+			}
+		}
+		
+		if ( !contacts_v6.isEmpty()){
+			
+			DatagramSocket	server = getServer( false );
+	
+			if ( server != null ){
+	
+				lookup_count_v6++;
+				
+				new GetPeersTask( server, contacts_v6, hash, no_seeds, task_listener );
+			}
 
-		lookup_count++;
-
-		new GetPeersTask( server, contacts, hash, no_seeds, listener );
+		}
 	}
 
 	private byte[]
@@ -433,10 +659,11 @@ DHTTrackerPluginAlt
 	protected String
 	getString()
 	{
-		return( "lookups=" + lookup_count + ", hits=" + hit_count +
+		return( "lookups=" + lookup_count_v4 + "/" + lookup_count_v6 + ", hits=" + hit_count_v4 + "/" + hit_count_v6 +
 				", out=" + packets_out + "/" + DisplayFormatters.formatByteCountToKiBEtc( bytes_out ) +
 				", in=" + packets_in + "/" + DisplayFormatters.formatByteCountToKiBEtc( bytes_in ) +
-				(last_server_error==null?"":(", error=" + Debug.getNestedExceptionMessage( last_server_error ))));
+				(last_server_error_v4==null?"":(", error4=" + Debug.getNestedExceptionMessage( last_server_error_v4 ))) +
+				(last_server_error_v6==null?"":(", error6=" + Debug.getNestedExceptionMessage( last_server_error_v6 ))));
 	}
 
 	private class
@@ -784,7 +1011,9 @@ DHTTrackerPluginAlt
 
 						int	port = bb.getShort()&0xffff;
 
-						InetSocketAddress addr = new InetSocketAddress( InetAddress.getByAddress(address), port );
+						InetAddress ia = InetAddress.getByAddress(address);
+						
+						InetSocketAddress addr = new InetSocketAddress( ia, port );
 
 						synchronized( this ){
 
@@ -798,7 +1027,11 @@ DHTTrackerPluginAlt
 
 						// System.out.println("Found peer: " + addr );
 						
-						hit_count++;
+						if ( ia instanceof Inet4Address ){
+							hit_count_v4++;
+						}else{
+							hit_count_v6++;
+						}
 
 						listener.foundPeer( addr );
 
@@ -807,16 +1040,16 @@ DHTTrackerPluginAlt
 				}
 			}
 
-			byte[]	nodes 	= (byte[])reply.get( "nodes" );
+			byte[]	nodes4 	= (byte[])reply.get( "nodes" );
 			byte[]	nodes6 	= (byte[])reply.get( "nodes6" );
 
-			if ( nodes != null ){
+			if ( nodes4 != null ){
 
 				int	entry_size = 20+4+2;
 
-				for ( int i=0;i<nodes.length;i+=entry_size ){
+				for ( int i=0;i<nodes4.length;i+=entry_size ){
 
-					ByteBuffer bb = ByteBuffer.wrap(nodes, i, entry_size );
+					ByteBuffer bb = ByteBuffer.wrap(nodes4, i, entry_size );
 
 					byte[] nid = new byte[20];
 
@@ -843,6 +1076,39 @@ DHTTrackerPluginAlt
 				}
 			}
 
+			if ( nodes6 != null ){
+
+				int	entry_size = 20+16+2;
+
+				for ( int i=0;i<nodes6.length;i+=entry_size ){
+
+					ByteBuffer bb = ByteBuffer.wrap(nodes6, i, entry_size );
+
+					byte[] nid = new byte[20];
+
+					bb.get(nid);
+
+					byte[] address = new byte[ 16 ];
+
+					bb.get( address );
+
+					int port = bb.getShort()&0xffff;
+
+					try{
+						InetSocketAddress addr = new InetSocketAddress( InetAddress.getByAddress(address), port );
+
+						synchronized( this ){
+
+							if ( !queried_nodes.contains( addr )){
+
+								to_query.put( nid, addr );
+							}
+						}
+					}catch( Throwable e ){
+					}
+				}
+			}
+			
 			tryQuery();
 		}
 

@@ -28,9 +28,7 @@ import java.util.Set;
 import com.biglybt.core.Core;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
-import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.global.GlobalManagerAdapter;
-import com.biglybt.core.global.GlobalManagerListener;
 import com.biglybt.core.networkmanager.impl.*;
 import com.biglybt.core.networkmanager.impl.http.HTTPNetworkManager;
 import com.biglybt.core.networkmanager.impl.tcp.TCPNetworkManager;
@@ -49,23 +47,33 @@ import com.biglybt.core.util.FeatureAvailability;
  */
 public class NetworkManager {
 
-  public static final int UNLIMITED_RATE = 1024 * 1024 * 100; //100 mbyte/s
+  public static final long UNLIMITED_RATE = 1024*1024*1024*1024L;
 
+  	// default partitioning is by download so all connections for a given download will end up on
+  	// the same read/write processor. So, for example, if there is a single download active then it
+  	// will not benefit from having multiple processors. The alternative is simply to partition by
+  	// connection, distributing a download's connections across the processors.
+  	// 
+  
+  private static final boolean PARTITION_BY_CONNECTION = true;
+  
   private static final NetworkManager instance = new NetworkManager();
 
-  static int max_download_rate_bps;
-  static int external_max_download_rate_bps;
+  private static long external_max_download_rate_bps;
+  private static long external_max_upload_rate_bps_normal;
+  private static long external_max_upload_rate_bps_seeding_only;
+  
+  private static long max_download_rate_bps_adj;
+  private static long max_upload_rate_bps_normal_adj;
+  private static long max_upload_rate_bps_seeding_only_adj;
+  private static long max_upload_rate_bps_adj;
 
-  static int max_upload_rate_bps_normal;
-  static int max_upload_rate_bps_seeding_only;
-  static int max_upload_rate_bps;
+  private static boolean lan_rate_enabled;
+  private static long max_lan_upload_rate_bps_adj;
+  private static long max_lan_download_rate_bps_adj;
 
-  static boolean lan_rate_enabled;
-  static int max_lan_upload_rate_bps;
-  static int max_lan_download_rate_bps;
-
-  static boolean seeding_only_mode_allowed;
-  static boolean seeding_only_mode = false;
+  private static boolean seeding_only_mode_allowed;
+  private static boolean seeding_only_mode = false;
 
   public static boolean 	REQUIRE_CRYPTO_HANDSHAKE;
   public static boolean 	INCOMING_HANDSHAKE_FALLBACK_ALLOWED;
@@ -103,32 +111,30 @@ public class NetworkManager {
 
     				 USE_REQUEST_LIMITING					= COConfigurationManager.getBooleanParameter("Use Request Limiting");
 
-    				 max_upload_rate_bps_normal = COConfigurationManager.getIntParameter( "Max Upload Speed KBs" ) * 1024;
-    				 if( max_upload_rate_bps_normal < 1024 )  max_upload_rate_bps_normal = UNLIMITED_RATE;
-    				 if( max_upload_rate_bps_normal > UNLIMITED_RATE )  max_upload_rate_bps_normal = UNLIMITED_RATE;
+    				 external_max_upload_rate_bps_normal = max_upload_rate_bps_normal_adj = COConfigurationManager.getLongParameter( "Max Upload Speed KBs" ) * 1024;
+    				 if( max_upload_rate_bps_normal_adj < 1024 )  max_upload_rate_bps_normal_adj = UNLIMITED_RATE;
+    				 if( max_upload_rate_bps_normal_adj > UNLIMITED_RATE )  max_upload_rate_bps_normal_adj = UNLIMITED_RATE;
 
-    				 max_lan_upload_rate_bps = COConfigurationManager.getIntParameter( "Max LAN Upload Speed KBs" ) * 1024;
-    				 if( max_lan_upload_rate_bps < 1024 )  max_lan_upload_rate_bps = UNLIMITED_RATE;
-    				 if( max_lan_upload_rate_bps > UNLIMITED_RATE )  max_lan_upload_rate_bps = UNLIMITED_RATE;
+    				 max_lan_upload_rate_bps_adj = COConfigurationManager.getLongParameter( "Max LAN Upload Speed KBs" ) * 1024;
+    				 if( max_lan_upload_rate_bps_adj < 1024 )  max_lan_upload_rate_bps_adj = UNLIMITED_RATE;
+    				 if( max_lan_upload_rate_bps_adj > UNLIMITED_RATE )  max_lan_upload_rate_bps_adj = UNLIMITED_RATE;
 
-
-    				 max_upload_rate_bps_seeding_only = COConfigurationManager.getIntParameter( "Max Upload Speed Seeding KBs" ) * 1024;
-    				 if( max_upload_rate_bps_seeding_only < 1024 )  max_upload_rate_bps_seeding_only = UNLIMITED_RATE;
-    				 if( max_upload_rate_bps_seeding_only > UNLIMITED_RATE )  max_upload_rate_bps_seeding_only = UNLIMITED_RATE;
+    				 external_max_upload_rate_bps_seeding_only = max_upload_rate_bps_seeding_only_adj = COConfigurationManager.getLongParameter( "Max Upload Speed Seeding KBs" ) * 1024;
+    				 if( max_upload_rate_bps_seeding_only_adj < 1024 )  max_upload_rate_bps_seeding_only_adj = UNLIMITED_RATE;
+    				 if( max_upload_rate_bps_seeding_only_adj > UNLIMITED_RATE )  max_upload_rate_bps_seeding_only_adj = UNLIMITED_RATE;
 
     				 seeding_only_mode_allowed = COConfigurationManager.getBooleanParameter( "enable.seedingonly.upload.rate" );
 
-
-    				 external_max_download_rate_bps = max_download_rate_bps = (int)(COConfigurationManager.getIntParameter( "Max Download Speed KBs" ) * 1024); // leave 5KiB/s room for the request limiting
-    				 if( max_download_rate_bps < 1024 || max_download_rate_bps > UNLIMITED_RATE)
-    					 max_download_rate_bps = UNLIMITED_RATE;
+    				 external_max_download_rate_bps = max_download_rate_bps_adj = (COConfigurationManager.getLongParameter( "Max Download Speed KBs" ) * 1024); 
+    				 if( max_download_rate_bps_adj < 1024 || max_download_rate_bps_adj > UNLIMITED_RATE)
+    					 max_download_rate_bps_adj = UNLIMITED_RATE;
     				 else if(USE_REQUEST_LIMITING && FeatureAvailability.isRequestLimitingEnabled())
-    					 max_download_rate_bps += Math.max(max_download_rate_bps * 0.1, 5*1024);
+    					 max_download_rate_bps_adj += Math.max(max_download_rate_bps_adj * 0.1, 5*1024); // leave some room for the request limiting
 
     				 lan_rate_enabled = COConfigurationManager.getBooleanParameter("LAN Speed Enabled");
-    				 max_lan_download_rate_bps = COConfigurationManager.getIntParameter( "Max LAN Download Speed KBs" ) * 1024;
-    				 if( max_lan_download_rate_bps < 1024 )  max_lan_download_rate_bps = UNLIMITED_RATE;
-    				 if( max_lan_download_rate_bps > UNLIMITED_RATE )  max_lan_download_rate_bps = UNLIMITED_RATE;
+    				 max_lan_download_rate_bps_adj = COConfigurationManager.getLongParameter( "Max LAN Download Speed KBs" ) * 1024;
+    				 if( max_lan_download_rate_bps_adj < 1024 )  max_lan_download_rate_bps_adj = UNLIMITED_RATE;
+    				 if( max_lan_download_rate_bps_adj > UNLIMITED_RATE )  max_lan_download_rate_bps_adj = UNLIMITED_RATE;
 
 				     if (first) {
 				     	first = false;
@@ -162,7 +168,7 @@ public class NetworkManager {
 
 	 for (int i=0;i<num_read;i++){
 
-		 read_controllers.add( new ReadController());
+		 read_controllers.add( new ReadController( i+1 ));
 	 }
 
 	 int	num_write = COConfigurationManager.getIntParameter( "network.control.write.processor.count" );
@@ -171,7 +177,7 @@ public class NetworkManager {
 
 	 for (int i=0;i<num_write;i++){
 
-		 write_controllers.add( new WriteController());
+		 write_controllers.add( new WriteController( i+1 ));
 	 }
 	 
 	  upload_processor = new TransferProcessor(
@@ -186,21 +192,21 @@ public class NetworkManager {
 					  return( "global_up" );
 				  }
 				  @Override
-				  public int
+				  public long
 				  getRateLimitBytesPerSecond()
 				  {
-					  return max_upload_rate_bps;
+					  return max_upload_rate_bps_adj;
 				  }
 				  @Override
 				  public boolean
 				  isDisabled()
 				  {
-					  return( max_upload_rate_bps == -1 );
+					  return( max_upload_rate_bps_adj == -1 );
 				  }
 				  @Override
 				  public void
 				  updateBytesUsed(
-						  int	used )
+						long	used )
 				  {
 				  }
 			  },
@@ -218,21 +224,21 @@ public class NetworkManager {
 					  return( "global_down" );
 				  }
 				  @Override
-				  public int
+				  public long
 				  getRateLimitBytesPerSecond()
 				  {
-					  return max_download_rate_bps;
+					  return max_download_rate_bps_adj;
 				  }
 				  @Override
 				  public boolean
 				  isDisabled()
 				  {
-					  return( max_download_rate_bps == -1 );
+					  return( max_download_rate_bps_adj == -1 );
 				  }
 				  @Override
 				  public void
 				  updateBytesUsed(
-						  int	used )
+						long	used )
 				  {
 				  }
 			  },
@@ -250,21 +256,21 @@ public class NetworkManager {
 					  return( "global_lan_up" );
 				  }
 				  @Override
-				  public int
+				  public long
 				  getRateLimitBytesPerSecond()
 				  {
-					  return max_lan_upload_rate_bps;
+					  return max_lan_upload_rate_bps_adj;
 				  }
 				  @Override
 				  public boolean
 				  isDisabled()
 				  {
-					  return( max_lan_upload_rate_bps == -1 );
+					  return( max_lan_upload_rate_bps_adj == -1 );
 				  }
 				  @Override
 				  public void
 				  updateBytesUsed(
-						  int	used )
+						 long	used )
 				  {
 				  }
 			  },
@@ -282,21 +288,21 @@ public class NetworkManager {
 					  return( "global_lan_down" );
 				  }
 				  @Override
-				  public int
+				  public long
 				  getRateLimitBytesPerSecond()
 				  {
-					  return max_lan_download_rate_bps;
+					  return max_lan_download_rate_bps_adj;
 				  }
 				  @Override
 				  public boolean
 				  isDisabled()
 				  {
-					  return( max_lan_download_rate_bps == -1 );
+					  return( max_lan_download_rate_bps_adj == -1 );
 				  }
 				  @Override
 				  public void
 				  updateBytesUsed(
-						  int	used )
+						  long	used )
 				  {
 				  }
 			  },
@@ -326,21 +332,21 @@ public class NetworkManager {
 
   static void refreshRates() {
     if( isSeedingOnlyUploadRate() ) {
-      max_upload_rate_bps = max_upload_rate_bps_seeding_only;
+      max_upload_rate_bps_adj = max_upload_rate_bps_seeding_only_adj;
     }
     else {
-      max_upload_rate_bps = max_upload_rate_bps_normal;
+      max_upload_rate_bps_adj = max_upload_rate_bps_normal_adj;
     }
 
-    if( max_upload_rate_bps < 1024 ) {
-      Debug.out( "max_upload_rate_bps < 1024=" +max_upload_rate_bps);
+    if( max_upload_rate_bps_adj < 1024 ) {
+      Debug.out( "max_upload_rate_bps < 1024=" +max_upload_rate_bps_adj);
     }
 
     	//ensure that mss isn't greater than up/down rate limits
 
-    int	min_rate = Math.min( max_upload_rate_bps,
-    					Math.min( max_download_rate_bps,
-    						Math.min( max_lan_upload_rate_bps, max_lan_download_rate_bps )));
+    long	min_rate = Math.min( max_upload_rate_bps_adj,
+    					Math.min( max_download_rate_bps_adj,
+    						Math.min( max_lan_upload_rate_bps_adj, max_lan_download_rate_bps_adj )));
 
     TCPNetworkManager.refreshRates( min_rate );
     UDPNetworkManager.refreshRates( min_rate );
@@ -350,25 +356,19 @@ public class NetworkManager {
   public static boolean isSeedingOnlyUploadRate() {
     return seeding_only_mode_allowed && seeding_only_mode;
   }
-
-  public static int getMaxUploadRateBPSNormal() {
-    if( max_upload_rate_bps_normal == UNLIMITED_RATE )  return 0;
-    return max_upload_rate_bps_normal;
+  
+  public static long getMaxUploadRateBPSNormal() {
+	  return external_max_upload_rate_bps_normal;
   }
 
-  public static int getMaxUploadRateBPSSeedingOnly() {
-    if( max_upload_rate_bps_seeding_only == UNLIMITED_RATE )  return 0;
-    return max_upload_rate_bps_seeding_only;
+  public static long getMaxUploadRateBPSSeedingOnly() {
+	  return external_max_upload_rate_bps_seeding_only;
   }
 
-  /**
-   * This method is for display purposes only, the internal rate limiting is 10% higher than returned by this method!
-   */
-  public static int getMaxDownloadRateBPS() {
-    if( max_download_rate_bps == UNLIMITED_RATE )  return 0;
-    return external_max_download_rate_bps;
+  public static long getMaxDownloadRateBPS() {
+	  return external_max_download_rate_bps;
   }
-
+	  
   public static final int CRYPTO_OVERRIDE_NONE			= 0;
   public static final int CRYPTO_OVERRIDE_REQUIRED		= 1;
   public static final int CRYPTO_OVERRIDE_NOT_REQUIRED	= 2;
@@ -484,7 +484,10 @@ public class NetworkManager {
    * Add an upload entity for write processing.
    * @param entity to add
    */
-  public void addWriteEntity( RateControlledEntity entity, int partition_id ) {
+  public void addWriteEntity( RateControlledEntity entity, int _partition_id ) {
+	  
+	  int partition_id = PARTITION_BY_CONNECTION?entity.getPartitionID():_partition_id;
+	  
 	  if ( write_controllers.size() == 1 || partition_id < 0 ){
 
 		  write_controllers.get(0).addWriteEntity(entity);
@@ -502,20 +505,19 @@ public class NetworkManager {
    * Remove an upload entity from write processing.
    * @param entity to remove
    */
-  public boolean removeWriteEntity( RateControlledEntity entity ) {
-	  if ( write_controllers.size() == 1 ){
-		  return( write_controllers.get(0).removeWriteEntity( entity ));
+  public boolean removeWriteEntity( RateControlledEntity entity, int _partition_id ) {
+	  
+	  int partition_id = PARTITION_BY_CONNECTION?entity.getPartitionID():_partition_id;
+
+	  if ( write_controllers.size() == 1 || partition_id < 0 ){
+
+		  return( write_controllers.get(0).removeWriteEntity(entity));
+
 	  }else{
-		  boolean found = false;
-		  
-		  for (WriteController write_controller: write_controllers ){
-			  if ( write_controller.removeWriteEntity( entity )){
-				  
-				  found = true;
-			  }
-		  }
-		  
-		  return( found );
+
+		  WriteController controller = write_controllers.get((partition_id%(write_controllers.size()-1))+1 );
+
+		  return( controller.removeWriteEntity( entity ));
 	  }
   }
 
@@ -524,7 +526,10 @@ public class NetworkManager {
    * Add a download entity for read processing.
    * @param entity to add
    */
-  public void addReadEntity( RateControlledEntity entity, int partition_id ) {
+  public void addReadEntity( RateControlledEntity entity, int _partition_id ) {
+	  
+	  int partition_id = PARTITION_BY_CONNECTION?entity.getPartitionID():_partition_id;
+
 	  if ( read_controllers.size() == 1 || partition_id < 0 ){
 
 		  read_controllers.get(0).addReadEntity(entity);
@@ -542,19 +547,19 @@ public class NetworkManager {
    * Remove a download entity from read processing.
    * @param entity to remove
    */
-  public boolean removeReadEntity( RateControlledEntity entity ) {
-	  if ( read_controllers.size() == 1 ){
-		  return( read_controllers.get(0).removeReadEntity( entity ));
+  public boolean removeReadEntity( RateControlledEntity entity, int _partition_id ) {
+	  
+	  int partition_id = PARTITION_BY_CONNECTION?entity.getPartitionID():_partition_id;
+
+	  if ( read_controllers.size() == 1 || partition_id < 0 ){
+
+		  return( read_controllers.get(0).removeReadEntity(entity));
+
 	  }else{
-		  boolean found = false;
-		  
-		  for (ReadController read_controller: read_controllers ){
-			  if ( read_controller.removeReadEntity( entity )){
-				  found = true;
-			  }
-		  }
-		  
-		  return( found );
+
+		  ReadController controller = read_controllers.get((partition_id%(read_controllers.size()-1))+1 );
+
+		  return( controller.removeReadEntity( entity ));
 	  }
   }
 
@@ -604,14 +609,14 @@ public class NetworkManager {
    * Cancel network upload and download handling for the given connection.
    * @param peer_connection to cancel
    */
-  public void stopTransferProcessing( NetworkConnectionBase peer_connection ) {
+  public void stopTransferProcessing( NetworkConnectionBase peer_connection, int partition_id ) {
   	if( lan_upload_processor.isRegistered( peer_connection )) {
-  		lan_upload_processor.deregisterPeerConnection( peer_connection );
-  		lan_download_processor.deregisterPeerConnection( peer_connection );
+  		lan_upload_processor.deregisterPeerConnection( peer_connection, partition_id );
+  		lan_download_processor.deregisterPeerConnection( peer_connection, partition_id );
   	}
   	else {
-  		upload_processor.deregisterPeerConnection( peer_connection );
-  		download_processor.deregisterPeerConnection( peer_connection );
+  		upload_processor.deregisterPeerConnection( peer_connection, partition_id );
+  		download_processor.deregisterPeerConnection( peer_connection, partition_id );
   	}
   }
 
@@ -635,14 +640,14 @@ public class NetworkManager {
    * Downgrade the given connection back to a normal-speed network transfer handling.
    * @param peer_connection to downgrade
    */
-  public void downgradeTransferProcessing( NetworkConnectionBase peer_connection ) {
+  public void downgradeTransferProcessing( NetworkConnectionBase peer_connection, int partition_id ) {
 	  if( lan_upload_processor.isRegistered( peer_connection )) {
-  		lan_upload_processor.downgradePeerConnection( peer_connection );
-  		lan_download_processor.downgradePeerConnection( peer_connection );
+  		lan_upload_processor.downgradePeerConnection( peer_connection, partition_id );
+  		lan_download_processor.downgradePeerConnection( peer_connection, partition_id );
   	}
   	else {
-  		upload_processor.downgradePeerConnection( peer_connection );
-  		download_processor.downgradePeerConnection( peer_connection );
+  		upload_processor.downgradePeerConnection( peer_connection, partition_id );
+  		download_processor.downgradePeerConnection( peer_connection, partition_id );
   	}
   }
 

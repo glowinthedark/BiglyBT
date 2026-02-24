@@ -21,6 +21,7 @@ package com.biglybt.core.networkmanager.impl;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import com.biglybt.core.networkmanager.EventWaiter;
 import com.biglybt.core.networkmanager.NetworkConnectionBase;
@@ -42,9 +43,12 @@ import com.biglybt.core.util.SystemTime;
  * round-robin write scheduling, where connections each take turns writing a
  * single full packet per round.
  */
-public class MultiPeerUploader implements RateControlledEntity {
+public class MultiPeerUploader extends RateControlledMultipleEntity {
 	private static final int FLUSH_CHECK_LOOP_TIME = 500;  //500ms
 	private static final int FLUSH_WAIT_TIME = 3*1000;  //3sec no-new-data wait before forcing write flush
+	
+	private final int partition_id = -1;
+	
 	private long last_flush_check_time = 0;
 
 
@@ -56,7 +60,11 @@ public class MultiPeerUploader implements RateControlledEntity {
 	final AEMonitor lists_lock = new AEMonitor( "PacketFillingMultiPeerUploader:lists_lock" );
 
 	private volatile EventWaiter	waiter;
+	private volatile boolean		processing;
+	
+	private final ConcurrentLinkedQueue<NetworkConnectionBase>	to_deactivate = new ConcurrentLinkedQueue<>();
 
+	  
 	/**
 	 * Create a new packet-filling multi-peer upload entity,
 	 * rate-controlled by the given handler.
@@ -73,6 +81,13 @@ public class MultiPeerUploader implements RateControlledEntity {
 		return( rate_handler );
 	}
 
+	@Override
+	public int 
+	getPartitionID()
+	{
+		return( partition_id );
+	}
+	
 	/**
 	 * Checks the connections in the waiting list to see if it's time to be force-flushed.
 	 */
@@ -161,12 +176,21 @@ public class MultiPeerUploader implements RateControlledEntity {
 		int mss_size = peer_connection.getMssSize();
 		boolean has_urgent_data = peer_connection.getOutgoingMessageQueue().hasUrgentMessage();
 		int num_bytes_ready = peer_connection.getOutgoingMessageQueue().getTotalSize();
-
-		if( num_bytes_ready >= mss_size || has_urgent_data ) {  //has a full packet's worth, or has urgent data
-			addToReadyList( peer_connection );
-		}
-		else {   //has data to send, but not enough for a full packet
-			addToWaitingList( peer_connection );
+		
+		try{
+			lists_lock.enter();
+			
+			peer_connection.setTargetWriteControllerPartition( partition_id );
+	
+			if( num_bytes_ready >= mss_size || has_urgent_data ) {  //has a full packet's worth, or has urgent data
+				addToReadyList( peer_connection );
+			}
+			else {   //has data to send, but not enough for a full packet
+				addToWaitingList( peer_connection );
+			}
+		}finally{
+			
+			lists_lock.exit();
 		}
 
 		EventWaiter waiter_to_kick = waiter;
@@ -196,30 +220,58 @@ public class MultiPeerUploader implements RateControlledEntity {
 			return( false );
 		}
 		
+		boolean found = false;
+		
 		try {
 			lists_lock.enter();
 
-			//look for the connection in the waiting list and cancel listener if found
+				//look for the connection in the waiting list and cancel listener if found
+			
 			PeerData peer_data = (PeerData)waiting_connections.remove( peer_connection );
-			if( peer_data != null ) {
+			
+			if ( peer_data != null ){
+				
+				peer_connection.setTargetWriteControllerPartition( RateControlledEntity.UNALLOCATED_PARTITION );
+
 				peer_connection.getOutgoingMessageQueue().cancelQueueListener( peer_data.queue_listener );
-				return true;
-			}
+				
+				found = true;
+			}else{	
+				
+					//look for the connection in the ready list
+				
+				if ( ready_connections.remove( peer_connection )){
+				
+					peer_connection.setTargetWriteControllerPartition( RateControlledEntity.UNALLOCATED_PARTITION );
 
-			//look for the connection in the ready list
-			if( ready_connections.remove( peer_connection ) ) {
-				return true;
+					found = true;
+				}
 			}
+	
+			if ( found ){
+				  if ( !processing ){
 
-			return false;
-		}
-		finally {
+					  // guaranteed this process loop isn't going to subsequently process the entity
+
+					  peer_connection.setWriteControllerInactive();
+
+				  }else{
+
+					  // possible the process loop is actively about to process it so we can't mark the entity as processable by
+					  // another processor until later
+
+					  peer_connection.activeWriteControllerRelease( true );
+					  
+					  to_deactivate.add( peer_connection  );
+				  }
+			}
+		}finally{
+			
 			lists_lock.exit();
 		}
+		
+		return( found );
 	}
-
-
-
 
 	//connections with less than a packet's worth of data
 	private void addToWaitingList( final NetworkConnectionBase conn ) {
@@ -314,7 +366,7 @@ public class MultiPeerUploader implements RateControlledEntity {
 	void addToReadyList(final NetworkConnectionBase conn) {
 		try {
 			lists_lock.enter();
-
+			
 			ready_connections.addLast( conn );  //add to ready list
 		}
 		finally {
@@ -322,9 +374,7 @@ public class MultiPeerUploader implements RateControlledEntity {
 		}
 	}
 
-
-
-	private int write( EventWaiter waiter, int num_bytes_to_write, boolean protocol_is_free ) {  //TODO: model this class after the simplicity of MultiPeerDownloader
+	private long write( EventWaiter waiter, long num_bytes_to_write, boolean protocol_is_free ) {  //TODO: model this class after the simplicity of MultiPeerDownloader
 		if ( num_bytes_to_write < 1 ){
 
 			if ( !protocol_is_free ){
@@ -340,7 +390,7 @@ public class MultiPeerUploader implements RateControlledEntity {
 		HashMap connections_to_notify_of_exception = new HashMap();
 		ArrayList manual_notifications = new ArrayList();
 
-		int num_bytes_remaining = num_bytes_to_write;
+		long num_bytes_remaining = num_bytes_to_write;
 
 		int data_bytes_written 		= 0;
 		int protocol_bytes_written	= 0;
@@ -355,7 +405,7 @@ public class MultiPeerUploader implements RateControlledEntity {
 
 				TransportBase tb = conn.getTransportBase();
 				
-				if( tb == null || !tb.isReadyForWrite( waiter ) ) {  //not yet ready for writing
+				if( !conn.isWriteControllerActive( partition_id ) || tb == null || !tb.isReadyForWrite( waiter ) ) {  //not yet ready for writing
 					ready_connections.addLast( conn );  //re-add to end as currently unusable
 					num_unusable_connections++;
 					continue;  //move on to the next connection
@@ -369,7 +419,7 @@ public class MultiPeerUploader implements RateControlledEntity {
 				}
 
 				int mss_size = conn.getMssSize();
-				int num_bytes_allowed = num_bytes_remaining > mss_size ? mss_size : num_bytes_remaining;  //allow a single full packet at most
+				long num_bytes_allowed = num_bytes_remaining > mss_size ? mss_size : num_bytes_remaining;  //allow a single full packet at most
 				int num_bytes_available = total_size > mss_size ? mss_size : total_size;  //allow a single full packet at most
 
 				if( num_bytes_allowed >= num_bytes_available ) { //we're allowed enough (for either a full packet or to drain any remaining data)
@@ -454,7 +504,7 @@ public class MultiPeerUploader implements RateControlledEntity {
 			conn.notifyOfException( exception );
 		}
 
-		int num_bytes_written = num_bytes_to_write - num_bytes_remaining;
+		long num_bytes_written = num_bytes_to_write - num_bytes_remaining;
 		if( num_bytes_written > 0 ) {
 			rate_handler.bytesProcessed( data_bytes_written, protocol_bytes_written );
 		}
@@ -572,11 +622,25 @@ public class MultiPeerUploader implements RateControlledEntity {
 		EventWaiter waiter ) 
 	{
 		try{
-			flushCheck();  //since this method is called repeatedly from a loop, we can use it to check flushes
+			while( true ){
 
+				NetworkConnectionBase connection =  to_deactivate.poll();
+
+				if ( connection == null ){
+
+					break;
+
+				}else{
+
+					connection.activeWriteControllerRelease( false );
+				}
+			}
+		      
+			flushCheck();  //since this method is called repeatedly from a loop, we can use it to check flushes
+			
 			if( ready_connections.isEmpty() )  return false;  //no data to send
 
-			int[] allowed = rate_handler.getCurrentNumBytesAllowed();
+			long[] allowed = rate_handler.getCurrentNumBytesAllowed();
 
 			if( allowed[0] < 1 && allowed[1] == 0 )  return false;
 			
@@ -591,15 +655,17 @@ public class MultiPeerUploader implements RateControlledEntity {
 	}
 
 	@Override
-	public int 
+	public long 
 	doProcessing(
 		EventWaiter waiter, 
 		int max_bytes ) 
 	{
 		try{
-			int[] allowed = rate_handler.getCurrentNumBytesAllowed();
+			processing = true;
+			
+			long[] allowed = rate_handler.getCurrentNumBytesAllowed();
 	
-			int 	num_bytes_allowed 	= allowed[0];
+			long 	num_bytes_allowed 	= allowed[0];
 			boolean	protocol_is_free 	= allowed[1] > 0;
 	
 			if( num_bytes_allowed < 1 )  return 0;
@@ -615,6 +681,9 @@ public class MultiPeerUploader implements RateControlledEntity {
 			Debug.out( getString(), e );
 			
 			throw( e );
+		}finally{
+			
+			processing = false;
 		}
 	}
 
@@ -626,6 +695,16 @@ public class MultiPeerUploader implements RateControlledEntity {
 	@Override
 	public boolean getPriorityBoost(){ return false; }
 
+	private String
+	getString(
+		long[]	a )
+	{
+		String str = "";
+		for ( long i:a ){
+			str += (str.isEmpty()?"":"/") + i;
+		}
+		return( str );
+	}
 	@Override
 	public String
 	getString()
@@ -634,8 +713,8 @@ public class MultiPeerUploader implements RateControlledEntity {
 
 		str.append("MPU (").append(waiting_connections.size()).append("/").append(ready_connections.size()).append("): ");
 
-		str.append("can_process=").append(canProcess(null)).append(",bytes_allowed=").append(rate_handler.getCurrentNumBytesAllowed())
-		.append(", waiting=");
+		str.append("can_process=").append(canProcess(null)).append(",bytes_allowed=").append(getString(rate_handler.getCurrentNumBytesAllowed()))
+		.append(", waiting=[");
 
 		try {
 			lists_lock.enter();
@@ -653,7 +732,7 @@ public class MultiPeerUploader implements RateControlledEntity {
 				str.append( conn.getString());
 			}
 
-			str.append( ": ready=" );
+			str.append( "], ready=[" );
 
 			num = 0;
 
@@ -667,6 +746,7 @@ public class MultiPeerUploader implements RateControlledEntity {
 
 				str.append( conn.getString());
 			}
+			str.append("]");
 		}finally{
 
 			lists_lock.exit();

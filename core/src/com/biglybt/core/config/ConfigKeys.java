@@ -248,6 +248,7 @@ public final class ConfigKeys {
 		public static final String BCFG_FILE_DECODER_SHOW_LAX = "File.Decoder.ShowLax";
 		public static final String BCFG_FILE_DECODER_SHOW_ALL = "File.Decoder.ShowAll";
 		public static final String BCFG_ENABLE_SPARSE_FILES = "Enable Sparse Files";
+		public static final String BCFG_SPARSE_FILES_NO_PREALLOC = "Sparse Files No Prealloc";
 		public static final String SCFG_FILE_AUTO_SEQUENTIAL_EXTS = "file.auto.sequential.exts";
 		public static final String SCFG_PREFIX_FILE_AUTO_TAG_EXTS = "File Auto Tag Exts ";
 		public static final String SCFG_PREFIX_FILE_AUTO_TAG_NAME = "File Auto Tag Name ";
@@ -416,10 +417,16 @@ public final class ConfigKeys {
 
 	public static class Transfer {
 
-		public static final String ICFG_MAX_DOWNLOAD_SPEED_KBS = "Max Download Speed KBs";
-		public static final String ICFG_MAX_UPLOAD_SPEED_KBS = "Max Upload Speed KBs";
-		public static final String BCFG_ENABLE_SEEDINGONLY_UPLOAD_RATE = "enable.seedingonly.upload.rate";
-		public static final String ICFG_MAX_UPLOAD_SPEED_SEEDING_KBS = "Max Upload Speed Seeding KBs";
+		public static final String LCFG_MAX_DOWNLOAD_SPEED_KBS = "Max Download Speed KBs";
+		@Deprecated
+		public static final String ICFG_MAX_DOWNLOAD_SPEED_KBS = LCFG_MAX_DOWNLOAD_SPEED_KBS;
+		public static final String LCFG_MAX_UPLOAD_SPEED_KBS = "Max Upload Speed KBs";
+		@Deprecated
+		public static final String ICFG_MAX_UPLOAD_SPEED_KBS = LCFG_MAX_UPLOAD_SPEED_KBS;		
+		public static final String BCFG_ENABLE_SEEDINGONLY_UPLOAD_RATE = "enable.seedingonly.upload.rate";		
+		public static final String LCFG_MAX_UPLOAD_SPEED_SEEDING_KBS = "Max Upload Speed Seeding KBs";
+		@Deprecated
+		public static final String ICFG_MAX_UPLOAD_SPEED_SEEDING_KBS = LCFG_MAX_UPLOAD_SPEED_SEEDING_KBS;		
 		public static final String ICFG_MAX_UPLOADS_WHEN_BUSY_INC_MIN_SECS = "max.uploads.when.busy.inc.min.secs";
 		public static final String BCFG_BIAS_UPLOAD_ENABLE = "Bias Upload Enable";
 		public static final String ICFG_BIAS_UPLOAD_SLACK_KBS = "Bias Upload Slack KBs";
@@ -451,8 +458,12 @@ public final class ConfigKeys {
 		public static final String ICFG_SET_FILE_PRIORITY_REM_PIECE = "Set File Priority Remaining Pieces";
 		public static final String SCFG_IGNORE_PEER_PORTS = "Ignore.peer.ports";
 		public static final String BCFG_LAN_SPEED_ENABLED = "LAN Speed Enabled";
-		public static final String ICFG_MAX_LAN_UPLOAD_SPEED_K_BS = "Max LAN Upload Speed KBs";
-		public static final String ICFG_MAX_LAN_DOWNLOAD_SPEED_K_BS = "Max LAN Download Speed KBs";
+		public static final String LCFG_MAX_LAN_UPLOAD_SPEED_K_BS = "Max LAN Upload Speed KBs";
+		@Deprecated
+		public static final String ICFG_MAX_LAN_UPLOAD_SPEED_K_BS = LCFG_MAX_LAN_UPLOAD_SPEED_K_BS;
+		public static final String LCFG_MAX_LAN_DOWNLOAD_SPEED_K_BS = "Max LAN Download Speed KBs";
+		@Deprecated
+		public static final String ICFG_MAX_LAN_DOWNLOAD_SPEED_K_BS = LCFG_MAX_LAN_DOWNLOAD_SPEED_K_BS;
 	}
 
 	public static class AutoSpeed {

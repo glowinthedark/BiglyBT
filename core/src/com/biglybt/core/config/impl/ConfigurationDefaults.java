@@ -440,7 +440,8 @@ public class ConfigurationDefaults {
     def.put( "Use Lazy Bitfield", FALSE );
     def.put( "Zero New", FALSE );
     def.put( "Zero New Stop", FALSE );
-    def.put( "Enable Sparse Files", FALSE );
+    def.put( ConfigKeys.File.BCFG_ENABLE_SPARSE_FILES, FALSE );
+    def.put( ConfigKeys.File.BCFG_SPARSE_FILES_NO_PREALLOC, FALSE );
     def.put( "XFS Allocation", FALSE );
     def.put( "Copy And Delete Data Rather Than Move", FALSE);
     def.put( "Move If On Same Drive", FALSE);
@@ -695,7 +696,7 @@ public class ConfigurationDefaults {
 
     boolean	tcp_half_open_limited = Constants.isWindows && !(Constants.isWindowsVistaSP2OrHigher || Constants.isWindows7OrHigher );
 
-    def.put( "network.max.simultaneous.connect.attempts", new Long( tcp_half_open_limited?8:24 ));
+    def.put( "network.max.simultaneous.connect.attempts", new Long( tcp_half_open_limited?8:40 ));
     def.put( "network.tcp.max.connections.outstanding", new Long( 2048 ));
     def.put( "network.tcp.connect.outbound.enable", TRUE );
     def.put( "network.tcp.mtu.size", new Long(1500) );
@@ -717,8 +718,8 @@ public class ConfigurationDefaults {
     def.put( "network.control.write.aggressive", FALSE );
     def.put( "network.control.read.idle.time", new Long(50));
     def.put( "network.control.read.aggressive", FALSE );
-    def.put( "network.control.read.processor.count", new Long(1));
-    def.put( "network.control.write.processor.count", new Long(1));
+    def.put( "network.control.read.processor.count", new Long(3));
+    def.put( "network.control.write.processor.count", new Long(4));
     def.put( "peermanager.schedule.time", new Long(100));
     def.put( "enable_small_osx_fonts", TRUE );
     def.put( "Play Download Finished Announcement", FALSE);

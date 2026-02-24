@@ -19,6 +19,9 @@
 
 package com.biglybt.net.upnp.impl.services;
 
+import java.net.Inet4Address;
+import java.net.InetAddress;
+
 /**
  * @author parg
  *
@@ -66,7 +69,8 @@ UPnPActionInvocationImpl
 
 	@Override
 	public UPnPActionArgument[]
-	invoke()
+	invoke(
+		InetAddress		bind )
 
 		throws UPnPException
 	{
@@ -100,7 +104,7 @@ UPnPActionInvocationImpl
 
 				// try standard POST
 
-			resp_doc	= ((UPnPDeviceImpl)action.getService().getDevice()).getUPnP().performSOAPRequest( service, soap_action, request );
+			resp_doc	= ((UPnPDeviceImpl)action.getService().getDevice()).getUPnP().performSOAPRequest( service, soap_action, request, bind );
 
 			SimpleXMLParserDocumentNode	body = resp_doc.getChild( "Body" );
 
@@ -174,7 +178,7 @@ UPnPActionInvocationImpl
 			}
 
 			throw new UPnPException("Invoke of '" + soap_action + "' on '"
-					+ action.getService().getControlURLs() + "' failed: "
+					+ action.getService().getControlURLs( bind==null||bind instanceof Inet4Address ) + "' failed: "
 					+ e.getMessage(), e, soap_action, action, resp_doc);
 		}
 	}
@@ -185,7 +189,7 @@ UPnPActionInvocationImpl
 
   		throws UPnPException
 	{
-		UPnPActionArgument[]	res = invoke();
+		UPnPActionArgument[]	res = invoke( null );
 
 		Map	map = new HashMap();
 

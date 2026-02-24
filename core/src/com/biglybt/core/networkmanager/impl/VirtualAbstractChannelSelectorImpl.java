@@ -16,7 +16,7 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  *
  */
-package com.biglybt.core.networkmanager.impl.tcp;
+package com.biglybt.core.networkmanager.impl;
 
 
 import java.io.IOException;
@@ -33,6 +33,7 @@ import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
+import com.biglybt.core.networkmanager.VirtualAbstractChannelSelector;
 import com.biglybt.core.networkmanager.VirtualChannelSelector;
 import com.biglybt.core.util.*;
 
@@ -41,7 +42,7 @@ import com.biglybt.core.util.*;
 /**
  * Provides a simplified and safe (selectable-channel) socket single-op selector.
  */
-public class VirtualChannelSelectorImpl {
+public class VirtualAbstractChannelSelectorImpl {
 
 	private static final LogIDs LOGID = LogIDs.NWMAN;
 
@@ -142,7 +143,7 @@ public class VirtualChannelSelectorImpl {
 
 		final AESemaphore sem = new AESemaphore( "getSelector" );
 
-		synchronized( VirtualChannelSelectorImpl.class ){
+		synchronized( VirtualAbstractChannelSelectorImpl.class ){
 
 			try{
 				final TimerEvent event =
@@ -156,7 +157,7 @@ public class VirtualChannelSelectorImpl {
 								perform(
 									TimerEvent event )
 								{
-									synchronized( VirtualChannelSelectorImpl.class ){
+									synchronized( VirtualAbstractChannelSelectorImpl.class ){
 
 										if ( result[0] == null ){
 
@@ -179,7 +180,7 @@ public class VirtualChannelSelectorImpl {
 						try{
 							Selector sel = Selector.open();
 
-							synchronized( VirtualChannelSelectorImpl.class ){
+							synchronized( VirtualAbstractChannelSelectorImpl.class ){
 
 								if ( result[0] == null ){
 
@@ -193,7 +194,7 @@ public class VirtualChannelSelectorImpl {
 
 						}catch( Throwable e ){
 
-							synchronized( VirtualChannelSelectorImpl.class ){
+							synchronized( VirtualAbstractChannelSelectorImpl.class ){
 
 								if ( result[0] == null ){
 
@@ -282,7 +283,7 @@ public class VirtualChannelSelectorImpl {
     private final int 		INTEREST_OP;
     private final boolean	pause_after_select;
 
-    protected final VirtualChannelSelector parent;
+    protected final VirtualAbstractChannelSelector parent;
 
 
     //private int[] select_counts = new int[ 50 ];
@@ -302,7 +303,7 @@ public class VirtualChannelSelectorImpl {
 
     private long last_reopen_attempt = SystemTime.getMonotonousTime();
 
-    public VirtualChannelSelectorImpl( VirtualChannelSelector _parent, int _interest_op, boolean _pause_after_select, boolean _randomise_keys ) {
+    public VirtualAbstractChannelSelectorImpl( VirtualAbstractChannelSelector _parent, int _interest_op, boolean _pause_after_select, boolean _randomise_keys ) {
       this.parent = _parent;
       INTEREST_OP = _interest_op;
 
@@ -966,15 +967,18 @@ public class VirtualChannelSelectorImpl {
 
 	        	if ( INTEREST_OP != VirtualChannelSelector.OP_ACCEPT ){
 
-	        		SocketChannel sc = (SocketChannel)data.channel;
+	        		AbstractSelectableChannel asc = (AbstractSelectableChannel)data.channel;
 
-	        		Socket socket = sc.socket();
-
-	        		InetAddress address = socket.getInetAddress();
-
-	        		if ( address != null ){
-
-	        			loopback_connection = address.isLoopbackAddress();
+	        		if ( asc instanceof SocketChannel ){
+	        			
+		        		Socket socket = ((SocketChannel)asc).socket();
+	
+		        		InetAddress address = socket.getInetAddress();
+	
+		        		if ( address != null ){
+	
+		        			loopback_connection = address.isLoopbackAddress();
+		        		}
 	        		}
 	        	}
 
@@ -1016,9 +1020,7 @@ public class VirtualChannelSelectorImpl {
 	        					"VirtualChannelSelector: No progress for op " + INTEREST_OP +
 	        					": listener = " + data.listener.getClass() +
 	        					", count = " + data.non_progress_count +
-	        					", socket: open = " + data.channel.isOpen() +
-	        					(INTEREST_OP==VirtualChannelSelector.OP_ACCEPT?"":
-	        						(", connected = " + ((SocketChannel)data.channel).isConnected())));
+	        					", socket: open = " + data.channel.isOpen());
 	        			}
 
 	        			if ( data.non_progress_count == 1000 ){

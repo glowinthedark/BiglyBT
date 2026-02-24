@@ -22,7 +22,6 @@ package com.biglybt.core.config.impl;
 
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FilenameFilter;
 import java.io.InputStream;
 import java.lang.reflect.Field;
@@ -34,6 +33,7 @@ import java.util.Properties;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.custom.CustomizationManagerFactory;
+import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.logging.LogEvent;
 import com.biglybt.core.logging.LogIDs;
 import com.biglybt.core.logging.Logger;
@@ -43,6 +43,7 @@ import com.biglybt.core.util.*;
 import com.biglybt.platform.PlatformManager;
 import com.biglybt.platform.PlatformManagerCapabilities;
 import com.biglybt.platform.PlatformManagerFactory;
+import com.biglybt.platform.PlatformManagerJVMOptionsUtils;
 
 
 /**
@@ -74,6 +75,8 @@ ConfigurationChecker
   protected static void
   setSystemProperties()
   {
+	  	// NEVER USE DEBUG.OUT or similar in this method due to risk of deadlock on startup!!!!
+	  
   	try{
   		class_mon.enter();
 
@@ -96,142 +99,150 @@ ConfigurationChecker
 	  		loadProperties( user_path );
 	  	}
 
-	  		// kinda hard to do this system property setting early enough as we musn't load the
-	  		// config until after checking the "pass to existing process" code and this loads the
-	  		// class InetAddress that caches the current system prop
-
-	  	COConfigurationManager.addAndFireParameterListener(
-	  		"IPV6 Prefer Addresses",
-	  		new ParameterListener()
-	  		{
-	  			private boolean done_something = false;
-
-	  			@Override
-				  public void
-	  			parameterChanged(
-	  				String name )
-	  			{
-	  			  	boolean	prefer_ipv6 	= COConfigurationManager.getBooleanParameter( name );
-
-	  			  	boolean existing = !System.getProperty( "java.net.preferIPv6Addresses", "false" ).equalsIgnoreCase( "false" );
-
-	  			  		// if user has overridden with a -D at az start then we don't want to let our config
-	  			  		// setting (which currently defaults to FALSE) to set this back
-
-	  			  	if ( existing && !done_something ){
-
-	  			  		return;
-	  			  	}
-
-	  			  	if ( existing != prefer_ipv6 ){
-
-	  			  		done_something = true;
-
-		  		  		System.setProperty( "java.net.preferIPv6Addresses", prefer_ipv6?"true":"false" );
-
-		  		  		try{
-		  		  			Field field = InetAddress.class.getDeclaredField( "preferIPv6Address" );
-
-		  		  			field.setAccessible( true );
-
-		  		  			try{
-		  		  				field.setBoolean( null, prefer_ipv6 );
-		  		  				
-		  		  			}catch( Throwable e ){
-		  		  				
-		  		  					// changed to an int 
-		  		  				
-		  		  				try{
-		  		  					field.setInt( null, prefer_ipv6?1:0 );
-		  		  					
-		  		  				}catch( Throwable e2 ){
-		  		  					
-		  		  						// Java 10+ prevented setting Field fields
-		  		  					
-		  		  					Java10PlusHacks.setFieldNonFinal( field );
-		  		  					
-		  		  					field.setInt( null, prefer_ipv6?1:0 );
-		  		  				}
-		  		  			}
-
-		  		  		}catch( Throwable e ){
-
-		  		  			Debug.out( "Failed to update 'preferIPv6Address'", e );
-		  		  		}
-	  			  	}
-	  			}
-	  		});
-
-	  	if ( Constants.isWindowsVistaOrHigher ){
-
-	  		COConfigurationManager.addAndFireParameterListener(
-		  		"IPV4 Prefer Stack",
+	  	
+	  	if ( !Constants.isJava18OrHigher ){
+	  		
+		  		// kinda hard to do this system property setting early enough as we musn't load the
+		  		// config until after checking the "pass to existing process" code and this loads the
+		  		// class InetAddress that caches the current system prop
+	
+		  	COConfigurationManager.addAndFireParameterListener(
+		  		"IPV6 Prefer Addresses",
 		  		new ParameterListener()
 		  		{
 		  			private boolean done_something = false;
-
+	
 		  			@Override
 					  public void
 		  			parameterChanged(
 		  				String name )
 		  			{
-		  			  	boolean	prefer_ipv4 	= COConfigurationManager.getBooleanParameter( name );
-
-		  			  	boolean existing = !System.getProperty( "java.net.preferIPv4Stack", "false" ).equalsIgnoreCase( "false" );
-
+		  			  	boolean	prefer_ipv6 	= COConfigurationManager.getBooleanParameter( name );
+	
+		  			  	boolean existing = !System.getProperty( "java.net.preferIPv6Addresses", "false" ).equalsIgnoreCase( "false" );
+	
 		  			  		// if user has overridden with a -D at az start then we don't want to let our config
 		  			  		// setting (which currently defaults to FALSE) to set this back
-
+	
 		  			  	if ( existing && !done_something ){
-
+	
 		  			  		return;
 		  			  	}
-
-		  			  	if ( existing != prefer_ipv4 ){
-
+	
+		  			  	if ( existing != prefer_ipv6 ){
+	
 		  			  		done_something = true;
-
-			  		  		System.setProperty( "java.net.preferIPv4Stack", prefer_ipv4?"true":"false" );
-
+	
+			  		  		System.setProperty( "java.net.preferIPv6Addresses", prefer_ipv6?"true":"false" );
+	
 			  		  		try{
-			  		  			Class<?> plainSocketImpl = getClass().forName( "java.net.PlainSocketImpl");
-
-			  		  			Field pref_field = plainSocketImpl.getDeclaredField( "preferIPv4Stack" );
-
-			  		  			pref_field.setAccessible( true );
-
+			  		  			Field field = InetAddress.class.getDeclaredField( "preferIPv6Address" );
+	
+			  		  			field.setAccessible( true );
+	
 			  		  			try{
-			  		  				pref_field.setBoolean( null, prefer_ipv4 );
+			  		  				field.setBoolean( null, prefer_ipv6 );
 			  		  				
-		  		  				}catch( Throwable e2 ){
-		  		  					
-		  		  						// Java 10+ prevented setting Field fields
-		  		  					
-		  		  					Java10PlusHacks.setFieldNonFinal( pref_field );
-		  		  					
-		  		  					pref_field.setBoolean( null, prefer_ipv4 );
-		  		  				}
-
-			  		  				// doesn't existing J10+, not sure if things are even
-			  		  				// working but whatever
-			  		  			
-			  		  			if ( !Constants.isJava10OrHigher ){
+			  		  			}catch( Throwable e ){
 			  		  				
-					  		  		Field dual_field = plainSocketImpl.getDeclaredField( "useDualStackImpl" );
-	
-					  		  		dual_field.setAccessible( true );
-	
-					  		  		dual_field.setBoolean( null, !prefer_ipv4 );
+			  		  					// changed to an int 
+			  		  				
+			  		  				try{
+			  		  					field.setInt( null, prefer_ipv6?1:0 );
+			  		  					
+			  		  				}catch( Throwable e2 ){
+			  		  					
+			  		  						// Java 10+ prevented setting Field fields
+			  		  					
+			  		  					Java10PlusHacks.setFieldNonFinal( field );
+			  		  					
+			  		  					field.setInt( null, prefer_ipv6?1:0 );
+			  		  				}
 			  		  			}
+	
 			  		  		}catch( Throwable e ){
-
-			  		  			Debug.out( "Failed to update 'preferIPv4Stack'", e );
+	
+			  		  			// NO Debug.out, see above
+			  		  			System.err.println( "Failed to update 'preferIPv6Address'" );
+			  		  			e.printStackTrace();
 			  		  		}
 		  			  	}
 		  			}
 		  		});
+	
+		  	if ( Constants.isWindowsVistaOrHigher ){
+	
+		  		COConfigurationManager.addAndFireParameterListener(
+			  		"IPV4 Prefer Stack",
+			  		new ParameterListener()
+			  		{
+			  			private boolean done_something = false;
+	
+			  			@Override
+						  public void
+			  			parameterChanged(
+			  				String name )
+			  			{
+			  			  	boolean	prefer_ipv4 	= COConfigurationManager.getBooleanParameter( name );
+	
+			  			  	boolean existing = !System.getProperty( "java.net.preferIPv4Stack", "false" ).equalsIgnoreCase( "false" );
+	
+			  			  		// if user has overridden with a -D at az start then we don't want to let our config
+			  			  		// setting (which currently defaults to FALSE) to set this back
+	
+			  			  	if ( existing && !done_something ){
+	
+			  			  		return;
+			  			  	}
+	
+			  			  	if ( existing != prefer_ipv4 ){
+	
+			  			  		done_something = true;
+	
+				  		  		System.setProperty( "java.net.preferIPv4Stack", prefer_ipv4?"true":"false" );
+	
+				  		  		try{
+				  		  			Class<?> plainSocketImpl = getClass().forName( "java.net.PlainSocketImpl");
+	
+				  		  			Field pref_field = plainSocketImpl.getDeclaredField( "preferIPv4Stack" );
+	
+				  		  			pref_field.setAccessible( true );
+	
+				  		  			try{
+				  		  				pref_field.setBoolean( null, prefer_ipv4 );
+				  		  				
+			  		  				}catch( Throwable e2 ){
+			  		  					
+			  		  						// Java 10+ prevented setting Field fields
+			  		  					
+			  		  					Java10PlusHacks.setFieldNonFinal( pref_field );
+			  		  					
+			  		  					pref_field.setBoolean( null, prefer_ipv4 );
+			  		  				}
+	
+				  		  				// doesn't existing J10+, not sure if things are even
+				  		  				// working but whatever
+				  		  			
+				  		  			if ( !Constants.isJava10OrHigher ){
+				  		  				
+						  		  		Field dual_field = plainSocketImpl.getDeclaredField( "useDualStackImpl" );
+		
+						  		  		dual_field.setAccessible( true );
+		
+						  		  		dual_field.setBoolean( null, !prefer_ipv4 );
+				  		  			}
+				  		  		}catch( Throwable e ){
+	
+				  		  			// NO Debug.out, see above
+				  		  			System.err.println( "Failed to update 'preferIPv4Stack'" );
+				  		  			e.printStackTrace();
+				  		  		}
+			  			  	}
+			  			}
+			  		});
+		  	}
 	  	}
-
+	  	
 
       // socket connect/read timeouts
 
@@ -645,8 +656,8 @@ ConfigurationChecker
 	    	changed = true;
 	    }
 
-	    int maxUpSpeed 		= COConfigurationManager.getIntParameter("Max Upload Speed KBs",0);
-	    int maxDownSpeed 	= COConfigurationManager.getIntParameter("Max Download Speed KBs",0);
+	    long maxUpSpeed 	= COConfigurationManager.getLongParameter("Max Upload Speed KBs",0);
+	    long maxDownSpeed 	= COConfigurationManager.getLongParameter("Max Download Speed KBs",0);
 
 	    if(	maxUpSpeed > 0 &&
 	    	maxUpSpeed < COConfigurationManager.CONFIG_DEFAULT_MIN_MAX_UPLOAD_SPEED &&
@@ -963,9 +974,122 @@ ConfigurationChecker
   	ConfigurationDefaults.getInstance().runVerifiers();
   }
 
+  private static boolean ip_prefs_changing;
+  
+  private static void
+  checkIPPrefs(
+		  boolean first_time )
+  {
+	  if ( Constants.isJava18OrHigher && PlatformManagerJVMOptionsUtils.canAccessOptions()){
+
+		  boolean did_it = false;
+		  
+		  try{
+			  class_mon.enter();
+		  
+			  if ( ip_prefs_changing ){
+				  
+				  return;
+			  }
+			  
+			  did_it = true;
+			  
+			  ip_prefs_changing = true;
+			  
+			  // this is to handle the case where our hacks no longer work and we fall back to
+			  // using the vmoptions file
+	
+			  String[][]	params = {
+					  { "IPV6 Prefer Addresses",	"java.net.preferIPv6Addresses" },
+					  { "IPV4 Prefer Stack",		"java.net.preferIPv4Stack" },
+			  };
+	
+			  boolean changed = false;
+	
+			  for ( String[] param: params ){
+	
+				  String config_str	= param[0];
+				  String prop_str	= param[1];
+	
+				  boolean config_value = COConfigurationManager.getBooleanParameter( config_str );
+	
+				  boolean sys_prop_value = !System.getProperty( prop_str, "false" ).equalsIgnoreCase( "false" );
+	
+				  if ( config_value != sys_prop_value || !first_time ){
+	
+					  try{
+	
+						  if ( first_time && sys_prop_value ){
+								
+							  	// startup and property already set so migrate the config
+							  	// to match
+								  
+							  COConfigurationManager.setParameter( config_str, true );
+								  
+							  PlatformManagerJVMOptionsUtils.setBooleanProperty( prop_str, true );	// not 100% necessary but good for consistency
+							  
+						  }else{
+							  
+							  Boolean vm_opt = PlatformManagerJVMOptionsUtils.getBooleanProperty( prop_str );
+								
+							  if ( vm_opt == null || vm_opt != config_value ){
+								  
+								  PlatformManagerJVMOptionsUtils.setBooleanProperty( prop_str, config_value );
+		
+								  changed = true;
+							  }
+						  }
+					  }catch( Throwable e ){
+	
+						  Debug.out( e );
+					  }
+				  }
+			  }
+	
+			  if ( first_time && changed ){
+				  
+				  String key = "config.checker.ipprefs.restart.warned";
+				  
+				  if ( !COConfigurationManager.getBooleanParameter( key, false )){
+					  
+					  COConfigurationManager.setParameter( key, true );
+					  
+					  LogAlert la = 
+							new LogAlert( 
+								LogAlert.REPEATABLE,
+								LogAlert.AT_WARNING, 
+								"config.migrated.restart");
+								
+					  la.forceNotify = true;
+					  
+					  Logger.logTextResource( la );
+				  } 
+			  }
+		  }finally{
+			  
+			  if ( did_it ){
+				  
+				  ip_prefs_changing = false;
+			  }
+			  
+			  class_mon.exit();
+		  }
+	  }
+  }
+  
   private static void
   setupVerifier()
   {
+	 COConfigurationManager.addParameterListener(
+		  	new String[]{
+		  		"IPV6 Prefer Addresses",
+		  		"IPV4 Prefer Stack"
+		  	},
+		  	(n)->{
+		  		checkIPPrefs( false );
+		  	});
+
+		  		
 	  SimpleTimer.addEvent(
 			"ConfigCheck:ver",
 			SystemTime.getOffsetTime( 10*1000 ),
@@ -973,12 +1097,16 @@ ConfigurationChecker
 
 				private TimerEventPeriodic event;
 
+				int count = 0;
+						
 				@Override
 				public void
 				perform(
 					TimerEvent ev )
 				{
-					runVerifier();
+					count++;
+					
+					runVerifier( count == 1 );
 
 					if ( event == null ){
 
@@ -1000,8 +1128,14 @@ ConfigurationChecker
   }
 
   static void
-  runVerifier()
+  runVerifier(
+	boolean	first_time )
   {
+	  if ( first_time ){
+		  	
+		 checkIPPrefs( true );
+	  }
+	  
 	  try{
 		  PlatformManager pm = PlatformManagerFactory.getPlatformManager();
 
@@ -1026,7 +1160,9 @@ ConfigurationChecker
 		  }
 	  }catch( Throwable e ){
 
-		  Debug.out( e );
+  			// NO Debug.out, see above
+  			System.err.println( "Failed to run verifier" );
+  			e.printStackTrace();
 	  }
   }
 

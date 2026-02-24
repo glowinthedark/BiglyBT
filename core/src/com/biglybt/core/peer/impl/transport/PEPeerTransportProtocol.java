@@ -546,11 +546,13 @@ implements PEPeerTransport
 					exceptionThrown(
 							Throwable error )
 					{
-						if( error.getMessage() == null ) {
-							Debug.out( error );
+						String msg = error.getMessage();
+						
+						if ( msg == null ){
+							msg = Debug.getNestedExceptionMessageAndStack(error);
 						}
 
-						closeConnectionInternally( "connection exception: " + error.getMessage(), Transport.CR_NONE, false, true );
+						closeConnectionInternally( "connection exception: " + msg, Transport.CR_NONE, false, true );
 					}
 
 					@Override
@@ -4940,14 +4942,14 @@ implements PEPeerTransport
 				}
 
 				@Override
-				public final void protocolBytesReceived(int byte_count ) {
+				public final void protocolBytesReceived(long byte_count ) {
 					//update stats
 					peer_stats.protocolBytesReceived( byte_count );
 					manager.protocolBytesReceived( PEPeerTransportProtocol.this, byte_count );
 				}
 
 				@Override
-				public final void dataBytesReceived(int byte_count ) {
+				public final void dataBytesReceived(long byte_count ) {
 					// Observe that the peer is sending data so that if theyre so slow that the whole
 					// data block times out, we don't think theyre not sending anything at all
 					

@@ -25,14 +25,10 @@ package com.biglybt.net.upnp.impl;
  */
 
 import com.biglybt.net.upnp.UPnPException;
-import com.biglybt.net.upnp.UPnPSSDP;
 
 public interface
 SSDPIGD
 {
-	public UPnPSSDP
-	getSSDP();
-
 	public void
 	start()
 
@@ -44,7 +40,7 @@ SSDPIGD
 	public void
 	searchNow(
 		String[]	STs );
-
+	
 	public void
 	addListener(
 		SSDPIGDListener	l );

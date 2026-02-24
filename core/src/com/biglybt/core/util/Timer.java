@@ -31,14 +31,16 @@ import java.util.*;
 import com.biglybt.core.util.TimerEvent.TimerEventLogged;
 
 public class Timer
-	extends 	AERunnable
 	implements	SystemTime.ChangeListener
 {
 	private static final boolean DEBUG_TIMERS = true;
 	private static ArrayList<WeakReference<Timer>> timers = null;
 	static final AEMonitor timers_mon = new AEMonitor("timers list");
 
-	private ThreadPool<TimerEvent>	thread_pool;
+	private final String		name;
+	private final int			thread_priority;
+	
+	private ThreadPoolParent<TimerEvent>	thread_pool;
 
 	private Set<TimerEvent>	events = new TreeSet<>();
 
@@ -52,6 +54,9 @@ public class Timer
 	private int			max_events_logged;
 
 	private int			slow_event_limit;
+	
+	private AEThread2		current_thread;
+	private DelayedEvent	current_wakeup;
 	
 	public
 	Timer(
@@ -74,6 +79,19 @@ public class Timer
 		int		thread_pool_size,
 		int		thread_priority )
 	{
+		this( name, thread_pool_size, thread_priority, false );
+	}
+	
+	protected
+	Timer(
+		String	_name,
+		int		_thread_pool_size,
+		int		_thread_priority,
+		boolean	_virtual )
+	{
+		name				= _name;
+		thread_priority		= _thread_priority;
+		
 		if (DEBUG_TIMERS) {
 			try {
 				timers_mon.enter();
@@ -87,20 +105,19 @@ public class Timer
 			}
 		}
 
-		thread_pool = new ThreadPool<TimerEvent>(name,thread_pool_size);
+		if ( _virtual && AEThreadVirtual.areBasicVirtualThreadsAvailable()){
+			
+			thread_pool = new ThreadPoolVirtual<TimerEvent>(name,_thread_pool_size);
+			
+		}else{
+			
+			thread_pool = new ThreadPool<TimerEvent>(name,_thread_pool_size);
+		}
 
 		SystemTime.registerClockChangeListener( this );
-
-		Thread t = new Thread(this, "Timer:" + name );
-
-		t.setDaemon( true );
-
-		t.setPriority(thread_priority);
-
-		t.start();
 	}
 
-	public ThreadPool<TimerEvent>
+	public ThreadPoolParent<TimerEvent>
 	getThreadPool()
 	{
 		return( thread_pool );
@@ -225,15 +242,37 @@ public class Timer
 		return( slow_event_limit );
 	}
 	
-	public void
-	setLogCPU()
+	private void
+	wakeup()
 	{
-		thread_pool.setLogCPU();
+		synchronized( this ){
+			
+			if ( current_thread == null ){		
+
+				current_thread = 
+						new AEThread2( "Timer:" + name, true )
+						{
+							@Override
+							public void 
+							run()
+							{
+								schedule();
+							}
+						};
+
+				current_thread.setPriority( thread_priority );
+
+				current_thread.start();
+				
+			}else{
+			
+				notify();
+			}
+		}
 	}
 
-	@Override
-	public void
-	runSupport()
+	private void
+	schedule()
 	{
 		while( true ){
 
@@ -249,16 +288,26 @@ public class Timer
 
 					if ( events.isEmpty()){
 
-						// System.out.println( "waiting forever" );
+						//System.out.println( "waiting forever" );
 
 						try{
 							current_when = Integer.MAX_VALUE;
 
+							if ( thread_priority == Thread.NORM_PRIORITY && !indestructable ){
+								
+								current_thread = null;
+								
+								return;
+							}
+							
 							this.wait();
 
 						}finally{
 
-							current_when = 0;
+							if ( current_thread != null ){
+							
+								current_when = 0;
+							}
 						}
 					}else{
 
@@ -272,16 +321,47 @@ public class Timer
 
 						if ( delay > 0 ){
 
-							// System.out.println( "waiting for " + delay );
+							//System.out.println( name + ": waiting for " + delay );
 
 							try{
 								current_when = when;
 
+								if ( 	delay > 500 && 
+										thread_priority == Thread.NORM_PRIORITY 
+										&& !indestructable ){
+									
+									current_thread = null;
+									
+									String ev_name = "Timer:wakeup (" + getName() + "/" + delay + ")";
+													
+									if ( current_wakeup != null ){
+										
+										current_wakeup.cancel();
+									}
+									
+									current_wakeup = new DelayedEvent( 
+										ev_name,
+										delay,
+										()->{
+											synchronized( Timer.this ){
+												
+												current_wakeup = null;
+											
+												wakeup();
+											}
+										});
+									
+									return;
+								}
+								
 								this.wait(delay);
 
 							}finally{
 
-								current_when = 0;
+								if ( current_thread != null ){
+								
+									current_when = 0;
+								}
 							}
 						}
 					}
@@ -323,8 +403,6 @@ public class Timer
 
 				if ( event_to_run != null ){
 
-					event_to_run.setHasRun();
-
 					if ( log ){
 						
 						System.out.println( "running: " + event_to_run.getString() );
@@ -344,7 +422,7 @@ public class Timer
 	execute(
 		TimerEvent		event )
 	{
-		thread_pool.run( event );
+		thread_pool.runTask( event );
 	}
 	
 	@Override
@@ -481,7 +559,7 @@ public class Timer
 				// must have this notify here as the scheduling code uses the current time to calculate
 				// how long to sleep for and this needs to be guaranteed to be using the correct (new) time
 
-				notify();
+				wakeup();
 			}
 		}
 	}
@@ -528,7 +606,7 @@ public class Timer
 				events = new TreeSet<>(new ArrayList<>(events));
 			}
 
-			notify();
+			wakeup();
 		}
 	}
 
@@ -547,7 +625,7 @@ public class Timer
 				
 				if ( current_when == Integer.MAX_VALUE || new_when < current_when ){
 
-					notify();
+					wakeup();
 				}
 			}
 		}
@@ -647,9 +725,9 @@ public class Timer
 
 		// System.out.println( "event added (" + when + ") - queue = " + events.size());
 
-		if ( current_when == Integer.MAX_VALUE || when < current_when ){
+		if ( current_when == Integer.MAX_VALUE || when < current_when || current_thread == null ){
 
-			notify();
+			wakeup();
 		}
 
 		return( event );
@@ -704,7 +782,7 @@ public class Timer
 
 			// System.out.println( "event cancelled (" + event.getWhen() + ") - queue = " + events.size());
 
-			notify();
+			wakeup();
 		}
 	}
 
@@ -719,7 +797,7 @@ public class Timer
 
 			destroyed	= true;
 
-			notify();
+			wakeup();
 
 			SystemTime.unregisterClockChangeListener( this );
 		}

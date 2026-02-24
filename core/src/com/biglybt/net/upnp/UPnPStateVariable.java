@@ -19,6 +19,8 @@
 
 package com.biglybt.net.upnp;
 
+import java.net.InetAddress;
+
 /**
  * @author parg
  *
@@ -34,7 +36,8 @@ UPnPStateVariable
 	getService();
 
 	public String
-	getValue()
+	getValue(
+		InetAddress bind )
 
 		throws UPnPException;
 }

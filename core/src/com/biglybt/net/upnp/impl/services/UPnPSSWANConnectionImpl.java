@@ -19,6 +19,7 @@
 
 package com.biglybt.net.upnp.impl.services;
 
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -41,7 +42,8 @@ UPnPSSWANConnectionImpl
 	implements UPnPWANConnection
 {
 	private static AEMonitor	class_mon 	= new AEMonitor( "UPnPSSWANConnection" );
-	private static List			services	= new ArrayList();
+	
+	private static List<UPnPSSWANConnectionImpl>			services	= new ArrayList<>();
 
 	static{
 
@@ -53,16 +55,16 @@ UPnPSSWANConnectionImpl
 					"UPnPSSWAN:checker",
 					()->{
 						try{
-							List	to_check = new ArrayList();
+							List<UPnPSSWANConnectionImpl>	to_check = new ArrayList();
 
 							try{
 								class_mon.enter();
 
-								Iterator	it = services.iterator();
+								Iterator<UPnPSSWANConnectionImpl>	it = services.iterator();
 
 								while( it.hasNext()){
 
-									UPnPSSWANConnectionImpl	s = (UPnPSSWANConnectionImpl)it.next();
+									UPnPSSWANConnectionImpl	s = it.next();
 
 									if ( s.getGenericService().getDevice().getRootDevice().isDestroyed()){
 
@@ -82,7 +84,7 @@ UPnPSSWANConnectionImpl
 							for (int i=0;i<to_check.size();i++){
 
 								try{
-									((UPnPSSWANConnectionImpl)to_check.get(i)).checkMappings();
+									to_check.get(i).checkMappings();
 
 								}catch( Throwable e ){
 
@@ -98,8 +100,9 @@ UPnPSSWANConnectionImpl
 	}
 
 	private UPnPServiceImpl		service;
-	private List				mappings	= new ArrayList();
-	private List				listeners	= new ArrayList();
+	
+	private List<PortMapping>						mappings	= new ArrayList();
+	private List<UPnPWANConnectionListener>			listeners	= new ArrayList();
 
 	private boolean				recheck_mappings	= true;
 
@@ -112,16 +115,6 @@ UPnPSSWANConnectionImpl
 		UPnPServiceImpl		_service )
 	{
 		service	= _service;
-
-		try{
-			class_mon.enter();
-
-			services.add( this );
-
-		}finally{
-
-			class_mon.exit();
-		}
 	}
 
 	@Override
@@ -165,7 +158,7 @@ UPnPSSWANConnectionImpl
 
 			UPnPActionInvocation inv = act.getInvocation();
 
-			UPnPActionArgument[]	args = inv.invoke();
+			UPnPActionArgument[]	args = inv.invoke( null );
 
 			String	connection_status	= null;
 			String	connection_error	= null;
@@ -213,6 +206,15 @@ UPnPSSWANConnectionImpl
 			return;
 		}
 
+		InetAddress local_ia = getGenericService().getDevice().getRootDevice().getLocalAddress( true );
+		
+		if ( local_ia == null ){
+			
+				// no local IPv4 address
+			
+			return;
+		}
+				
 		List	mappings_copy;
 
 		try{
@@ -231,7 +233,7 @@ UPnPSSWANConnectionImpl
 
 		while( it.hasNext()){
 
-			portMapping	mapping = (portMapping)it.next();
+			PortMapping	mapping = (PortMapping)it.next();
 
 			for (int j=0;j<current.length;j++){
 
@@ -266,7 +268,7 @@ UPnPSSWANConnectionImpl
 
 		while( it.hasNext()){
 
-			portMapping	mapping = (portMapping)it.next();
+			PortMapping	mapping = (PortMapping)it.next();
 
 			try{
 					// some routers appear to continually fail to report the mappings - avoid
@@ -277,7 +279,7 @@ UPnPSSWANConnectionImpl
 					log( "Re-establishing mapping " + mapping.getString());
 				}
 
-				addPortMapping(  mapping.isTCP(), mapping.getExternalPort(), mapping.getDescription());
+				addPortMapping(  mapping.isTCP(), mapping.getExternalPort(), local_ia, mapping.getDescription());
 
 			}catch( Throwable e ){
 
@@ -286,15 +288,34 @@ UPnPSSWANConnectionImpl
 		}
 	}
 
+	private void
+	checkRegistered()
+	{
+		try{
+			class_mon.enter();
+
+			if ( !services.contains( this )){
+			
+				services.add( this );
+			}
+		}finally{
+
+			class_mon.exit();
+		}
+	}
+	
 	@Override
 	public void
 	addPortMapping(
-		boolean		tcp,			// false -> UDP
-		int			port,
-		String		description )
+		boolean			tcp,			// false -> UDP
+		int				port,
+		InetAddress		internal_host,
+		String			description )
 
 		throws UPnPException
 	{
+		checkRegistered();
+		
 		UPnPAction act = service.getAction( "AddPortMapping" );
 
 		if ( act == null ){
@@ -309,7 +330,7 @@ UPnPSSWANConnectionImpl
 			add_inv.addArgument( "NewExternalPort", 			"" + port );
 			add_inv.addArgument( "NewProtocol", 				tcp?"TCP":"UDP" );
 			add_inv.addArgument( "NewInternalPort", 			"" + port );
-			add_inv.addArgument( "NewInternalClient",			service.getDevice().getRootDevice().getLocalAddress().getHostAddress());
+			add_inv.addArgument( "NewInternalClient",			internal_host.getHostAddress());
 			add_inv.addArgument( "NewEnabled", 					"1" );
 			add_inv.addArgument( "NewPortMappingDescription", 	description );
 			add_inv.addArgument( "NewLeaseDuration",			"0" );		// 0 -> infinite (?)
@@ -317,7 +338,7 @@ UPnPSSWANConnectionImpl
 			boolean	ok = false;
 
 			try{
-				add_inv.invoke();
+				add_inv.invoke( internal_host );
 
 				ok	= true;
 
@@ -326,7 +347,8 @@ UPnPSSWANConnectionImpl
 					// some routers won't add properly if the mapping's already there
 
 				try{
-					log("Problem when adding port mapping - will try to see if an existing mapping is in the way");
+					// log( "Problem when adding port mapping - will try to see if an existing mapping is in the way");
+					
 					deletePortMapping(tcp, port);
 
 				}catch( Throwable e ){
@@ -334,7 +356,7 @@ UPnPSSWANConnectionImpl
 					throw( original_error );
 				}
 
-				add_inv.invoke();
+				add_inv.invoke( internal_host );
 
 				ok	= true;
 
@@ -363,7 +385,7 @@ UPnPSSWANConnectionImpl
 
 				while( it.hasNext()){
 
-					portMapping	m = (portMapping)it.next();
+					PortMapping	m = (PortMapping)it.next();
 
 					if ( m.getExternalPort() == port && m.isTCP() == tcp ){
 
@@ -371,7 +393,7 @@ UPnPSSWANConnectionImpl
 					}
 				}
 
-				mappings.add( new portMapping( port, tcp, "", description ));
+				mappings.add( new PortMapping( port, tcp, internal_host, description ));
 
 			}finally{
 
@@ -388,6 +410,8 @@ UPnPSSWANConnectionImpl
 
 		throws UPnPException
 	{
+		checkRegistered();
+		
 		UPnPAction act = service.getAction( "DeletePortMapping" );
 
 		if ( act == null ){
@@ -396,7 +420,7 @@ UPnPSSWANConnectionImpl
 
 		}else{
 
-			boolean	mapping_found = false;
+			PortMapping	mapping_found = null;
 
 			try{
 				class_mon.enter();
@@ -405,14 +429,14 @@ UPnPSSWANConnectionImpl
 
 				while( it.hasNext()){
 
-					portMapping	mapping = (portMapping)it.next();
+					PortMapping	mapping = (PortMapping)it.next();
 
 					if ( 	mapping.getExternalPort() == port &&
 							mapping.isTCP() == tcp ){
 
 						it.remove();
 
-						mapping_found	= true;
+						mapping_found	= mapping;
 
 						break;
 					}
@@ -431,7 +455,7 @@ UPnPSSWANConnectionImpl
 				inv.addArgument( "NewProtocol", 				tcp?"TCP":"UDP" );
 				inv.addArgument( "NewExternalPort", 			"" + port );
 
-				inv.invoke();
+				inv.invoke( mapping_found==null?null:mapping_found.getInternalHost() );
 
 				long	elapsed = SystemTime.getCurrentTime() - start;
 
@@ -448,7 +472,7 @@ UPnPSSWANConnectionImpl
 
 					// only bitch about the failure if we believed we mapped it in the first place
 
-				if ( mapping_found ){
+				if ( mapping_found != null ){
 
 					throw( e );
 
@@ -488,12 +512,12 @@ UPnPSSWANConnectionImpl
 
 			}else{
 
-				List	res = new ArrayList();
+				List<UPnPWANConnectionPortMapping>	res = new ArrayList<>();
 
 					// I've also seen some routers loop here rather than failing when the index gets too large (they
 					// seem to keep returning the last entry) - check for a duplicate entry and exit if found
 
-				portMapping	prev_mapping	= null;
+				PortMapping	prev_mapping	= null;
 
 				for (int i=0;i<(entries==0?512:entries);i++){
 
@@ -502,7 +526,7 @@ UPnPSSWANConnectionImpl
 					inv.addArgument( "NewPortMappingIndex", "" + i );
 
 					try{
-						UPnPActionArgument[] outs = inv.invoke();
+						UPnPActionArgument[] outs = inv.invoke( null );
 
 						int		port			= 0;
 						boolean	tcp				= false;
@@ -544,9 +568,15 @@ UPnPSSWANConnectionImpl
 							}
 						}
 
-						prev_mapping = new portMapping( port, tcp, internal_host, description );
+						try{
+							prev_mapping = new PortMapping( port, tcp, InetAddress.getByName( internal_host ), description );
 
-						res.add( prev_mapping );
+							res.add( prev_mapping );
+							
+						}catch( Throwable e ){
+							
+							Debug.out(e);
+						}
 
 					}catch( UPnPException e ){
 
@@ -603,7 +633,7 @@ UPnPSSWANConnectionImpl
 
 			UPnPActionInvocation inv = act.getInvocation();
 
-			UPnPActionArgument[]	args = inv.invoke();
+			UPnPActionArgument[]	args = inv.invoke( null );
 
 			String	ip	= null;
 
@@ -647,20 +677,20 @@ UPnPSSWANConnectionImpl
 	}
 
 	private static class
-	portMapping
+	PortMapping
 		implements UPnPWANConnectionPortMapping
 	{
 		protected int			external_port;
 		protected boolean		tcp;
-		protected String		internal_host;
+		protected InetAddress	internal_host;
 		protected String		description;
 
 		protected
-		portMapping(
-			int			_external_port,
-			boolean		_tcp,
-			String		_internal_host,
-			String		_description )
+		PortMapping(
+			int				_external_port,
+			boolean			_tcp,
+			InetAddress		_internal_host,
+			String			_description )
 		{
 			external_port	= _external_port;
 			tcp				= _tcp;
@@ -683,7 +713,7 @@ UPnPSSWANConnectionImpl
 		}
 
 		@Override
-		public String
+		public InetAddress
 		getInternalHost()
 		{
 			return( internal_host );

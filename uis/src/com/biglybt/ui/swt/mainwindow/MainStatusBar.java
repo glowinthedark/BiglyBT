@@ -16,6 +16,7 @@
  */
 package com.biglybt.ui.swt.mainwindow;
 
+import java.net.InetAddress;
 import java.text.NumberFormat;
 import java.util.*;
 
@@ -42,6 +43,8 @@ import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.ipfilter.IpFilter;
 import com.biglybt.core.logging.LogAlert;
 import com.biglybt.core.networkmanager.NetworkManager;
+import com.biglybt.core.networkmanager.admin.NetworkAdmin;
+import com.biglybt.core.speedmanager.SpeedManager;
 import com.biglybt.core.stats.transfer.OverallStats;
 import com.biglybt.core.stats.transfer.StatsFactory;
 import com.biglybt.core.util.*;
@@ -102,6 +105,8 @@ public class MainStatusBar
 
 	private CLabelPadding srStatus;
 
+	private CLabelPadding niStatus;
+	
 	private CLabelPadding natStatus;
 
 	private CLabelPadding dhtStatus;
@@ -123,6 +128,7 @@ public class MainStatusBar
 
 	private int 	lastNATstatus 	= -1;
 	private String 	lastNATInfo		= "";
+	private String	lastNIInfo		= "";
 	
 	private String lastNATimageID = null;
 
@@ -172,7 +178,7 @@ public class MainStatusBar
 
 	private String lastSRimageID = null;
 
-	private int last_dl_limit;
+	private long last_dl_limit;
 
 	private long last_rec_data = - 1;
 
@@ -418,6 +424,23 @@ public class MainStatusBar
 					}
 				});
 
+			// Network Info
+		
+		niStatus = new CLabelPadding(statusBar, borderFlag);
+		niStatus.setText("");			
+		ClipboardCopy.addCopyToClipMenu( niStatus, ()->niStatus.getText());
+		
+		Utils.addAndFireParameterListener(mapConfigListeners, true,
+				"Status Area Show NI", new ParameterListener() {
+					@Override
+					public void parameterChanged(String parameterName) {
+						niStatus.setVisible(COConfigurationManager.getBooleanParameter(parameterName));
+						statusBar.layout();
+					}
+				});
+		
+			// NAT Status
+		
 		natStatus = new CLabelPadding(statusBar, borderFlag);
 		natStatus.setText("");
 
@@ -1159,12 +1182,14 @@ public class MainStatusBar
 			"ConfigView.section.style.status.show_nat",
 			"ConfigView.section.style.status.show_ddb",
 			"ConfigView.section.style.status.show_ipf",
+			"label.quick.net.info",
 		};
 		final String[] statusAreaConfig = {
 			"Status Area Show SR",
 			"Status Area Show NAT",
 			"Status Area Show DDB",
 			"Status Area Show IPF",
+			"Status Area Show NI",
 		};
 
 		for (int i = 0; i < statusAreaConfig.length; i++) {
@@ -1367,6 +1392,10 @@ public class MainStatusBar
 		}
 
 
+		if (niStatus.isVisible()) {
+			updateNIStatus();
+		}
+		
 		if (natStatus.isVisible()) {
 			updateNatStatus();
 		}
@@ -1383,8 +1412,17 @@ public class MainStatusBar
 			GlobalManagerStats stats = gm.getStats();
 
 			int kinb = DisplayFormatters.getKinB();
+			int base = DisplayFormatters.getXinBBase();
 			
-			int dl_limit = NetworkManager.getMaxDownloadRateBPS() / kinb;
+			char K_str = DisplayFormatters.getUnit(DisplayFormatters.UNIT_KB ).charAt(0);
+			char M_str = DisplayFormatters.getUnit(DisplayFormatters.UNIT_MB ).charAt(0);
+			
+			char D_str = K_str;
+			long dl_limit = NetworkManager.getMaxDownloadRateBPS() / kinb;
+			if ( dl_limit > kinb * base){
+				dl_limit /= kinb;
+				D_str = M_str;
+			}
 			long rec_data = stats.getDataReceiveRate();
 			long rec_prot = stats.getProtocolReceiveRate();
 
@@ -1393,36 +1431,45 @@ public class MainStatusBar
 				last_rec_data = rec_data;
 				last_rec_prot = rec_prot;
 
-				statusDown.setText((dl_limit == 0 ? "" : "[" + dl_limit + "K] ")
+				statusDown.setText((dl_limit == 0 ? "" : "[" + dl_limit + D_str +"] ")
 						+ DisplayFormatters.formatDataProtByteCountToKiBEtcPerSec(rec_data, rec_prot));
 			}
 
 			boolean auto_up = TransferSpeedValidator.isAutoSpeedActive(gm)
 					&& TransferSpeedValidator.isAutoUploadAvailable(core);
 
-			int ul_limit_norm = NetworkManager.getMaxUploadRateBPSNormal() / kinb;
+			long ul_limit_norm = NetworkManager.getMaxUploadRateBPSNormal() / kinb;
 
 			String seeding_only;
 			if (NetworkManager.isSeedingOnlyUploadRate()) {
-				int ul_limit_seed = NetworkManager.getMaxUploadRateBPSSeedingOnly() / kinb;
+				long ul_limit_seed = NetworkManager.getMaxUploadRateBPSSeedingOnly() / kinb;
 				if (ul_limit_seed == 0) {
-					seeding_only = "+" + Constants.INFINITY_STRING + "K";
+					seeding_only = "+" + Constants.INFINITY_STRING + K_str;
 				} else {
-					int diff = ul_limit_seed - ul_limit_norm;
-					seeding_only = (diff >= 0 ? "+" : "") + diff + "K";
+					long diff = ul_limit_seed - ul_limit_norm;
+					char X_str = K_str;
+					if ( diff > kinb * base ){
+						diff /= kinb;
+						X_str = M_str;
+					}
+					seeding_only = (diff >= 0 ? "+" : "") + diff + X_str;
 				}
 			} else {
 				seeding_only = "";
 			}
 
-			int sent_data = stats.getDataSendRate();
+			long sent_data = stats.getDataSendRate();
 			if (imgRec != null && !imgRec.isDisposed()) {
 				updateGraph(statusDown, imgRec, rec_data, max_rec);
 				updateGraph(statusUp, imgSent, sent_data, max_sent);
 			}
 
-
-			statusUp.setText((ul_limit_norm == 0 ? "" : "[" + ul_limit_norm + "K"
+			char U_str = K_str;
+			if ( ul_limit_norm > kinb * base ){
+				ul_limit_norm /= kinb;
+				U_str = M_str;
+			}
+			statusUp.setText((ul_limit_norm == 0 ? "" : "[" + ul_limit_norm + U_str
 					+ seeding_only + "]")
 					+ (auto_up ? "* " : " ")
 					+ DisplayFormatters.formatDataProtByteCountToKiBEtcPerSec(
@@ -1623,6 +1670,43 @@ public class MainStatusBar
 		}
 	}
 
+	private void 
+	updateNIStatus() 
+	{
+		if (!CoreFactory.isCoreRunning()){
+			
+			return;
+		}
+
+		Core core = CoreFactory.getSingleton();
+		
+		InetAddress ip = NetworkAdmin.getSingleton().getDefaultPublicAddress( true );
+
+		InetAddress ip_v6 = NetworkAdmin.getSingleton().getDefaultPublicAddressV6();
+
+		String str = MessageText.getString( "Peers.column.ip" ) + ": " + ( ip==null?"":ip.getHostAddress());
+
+		if ( ip_v6 != null && !ip_v6.equals( ip )){
+
+			str += (str.isEmpty()?"":", ") + ip_v6.getHostAddress();
+		}
+		
+		if ( !str.equals(lastNIInfo)){
+
+			lastNIInfo		= str;
+			
+			niStatus.setText( str );
+			
+			SpeedManager sm = core.getSpeedManager();
+			
+			if ( sm != null ){
+				
+				Utils.setTT( niStatus, sm.getASN());
+			}
+		}
+	}
+
+	
 	/**
 	 *
 	 *

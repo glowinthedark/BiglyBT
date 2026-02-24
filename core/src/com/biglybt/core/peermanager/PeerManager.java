@@ -19,6 +19,8 @@
 
 package com.biglybt.core.peermanager;
 
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
@@ -108,6 +110,20 @@ public class PeerManager implements CoreStatsProvider {
 					enable_public_udp_peers		= COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_PEERCONTROL_UDP_PUBLIC_ENABLE );
 					socks_data					= COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_PROXY_DATA_ENABLE );
 				}
+			});
+	}
+	
+	private static volatile boolean	ignore_v4;
+	private static volatile boolean	ignore_v6;
+	
+	static{
+		COConfigurationManager.addAndFireParameterListeners(
+			new String[]{
+				ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES,
+				ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES },
+			(n)->{
+				ignore_v4 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES );
+				ignore_v6 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES );
 			});
 	}
 	
@@ -1230,7 +1246,9 @@ public class PeerManager implements CoreStatsProvider {
 
 				return;
 			}
-			
+
+			InetAddress address_mbn = is_address.getAddress();
+
 			if ( net_cat == AENetworkClassifier.AT_PUBLIC ){
 				
 				if ( socks_data ){
@@ -1245,10 +1263,16 @@ public class PeerManager implements CoreStatsProvider {
 
 						return;
 					}
+				}else{
+					
+					if ( ( address_mbn instanceof Inet4Address && ignore_v4 ) || ( address_mbn instanceof Inet6Address && ignore_v6 )){
+							
+						connection.close( "ip family is ignored" );
+						
+						return;
+					}
 				}
 			}
-
-			InetAddress address_mbn = is_address.getAddress();
 
 			boolean same_allowed = COConfigurationManager.getBooleanParameter( "Allow Same IP Peers" ) || ( address_mbn != null && address_mbn.isLoopbackAddress());
 
@@ -1396,7 +1420,7 @@ public class PeerManager implements CoreStatsProvider {
 				}
 
 				@Override
-				public int getRateLimitBytesPerSecond(){
+				public long getRateLimitBytesPerSecond(){
 					return(-1);
 				}
 
@@ -1406,7 +1430,7 @@ public class PeerManager implements CoreStatsProvider {
 				}
 
 				@Override
-				public void updateBytesUsed(int used){
+				public void updateBytesUsed(long used){
 				}
 			};
 
@@ -1417,7 +1441,7 @@ public class PeerManager implements CoreStatsProvider {
 				}
 
 				@Override
-				public int getRateLimitBytesPerSecond(){
+				public long getRateLimitBytesPerSecond(){
 					return(0);
 				}
 
@@ -1427,9 +1451,11 @@ public class PeerManager implements CoreStatsProvider {
 				}
 
 				@Override
-				public void updateBytesUsed(int used){
+				public void updateBytesUsed(long used){
 				}
 			};
+			
+			PeerIdentityDataID data_id = PeerIdentityManager.createDataID(getHash());
 			
 			public int
 			getUID()
@@ -1489,7 +1515,7 @@ public class PeerManager implements CoreStatsProvider {
 			public PeerIdentityDataID
 			getPeerIdentityDataID()
 			{ 
-				log(); return( null ); 
+				return( data_id );
 			}
 
 			public byte[]
@@ -1624,23 +1650,23 @@ public class PeerManager implements CoreStatsProvider {
 			public long getLastRemoteConnectionTime(){ log(); return( 0 ); }
 			
 			public int
-			getMaxNewConnectionsAllowed( String network ){ log(); return( 0 ); }
+			getMaxNewConnectionsAllowed( String network ){ return( 0 ); }
 
 			public boolean
 			hasPotentialConnections(){ log(); return( false ); }
 
-			public void	dataBytesReceived( PEPeer peer, int	l ){log(); }
+			public void	dataBytesReceived( PEPeer peer, long	l ){log(); }
 
-			public void	dataBytesSent( PEPeer peer, int	l ){log(); }
+			public void	dataBytesSent( PEPeer peer, long	l ){log(); }
 
 			public void 
 			protocolBytesSent( 
-				PEPeer peer, int length )
+				PEPeer peer, long length )
 			{
 				
 			}
 
-			public void protocolBytesReceived( PEPeer peer, int length ){}
+			public void protocolBytesReceived( PEPeer peer, long length ){}
 
 			public void
 			discarded(
@@ -1892,13 +1918,13 @@ public class PeerManager implements CoreStatsProvider {
 				int		ct_def ){ log(); return( 0 ); }
 
 			public int[]
-			getMaxConnections(){ log(); return( null ); }
+			getMaxConnections(){ return( new int[2] ); }
 
 			public boolean
 			doOptimisticDisconnect(
 					boolean pending_lan_local_peer,
 					boolean	force,
-					String	network ){ log(); return( false ); }
+					String	network ){ return( false ); }
 
 			public int getNbActivePieces(){ log(); return( 0 ); }
 

@@ -38,6 +38,7 @@ import com.biglybt.core.ipfilter.*;
 import com.biglybt.core.logging.*;
 import com.biglybt.core.networkmanager.LimitedRateGroup;
 import com.biglybt.core.networkmanager.NetworkConnectionBase;
+import com.biglybt.core.networkmanager.NetworkManager;
 import com.biglybt.core.networkmanager.Transport;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.networkmanager.admin.NetworkAdminASN;
@@ -231,6 +232,20 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	private static final NetworkAdmin network_admin = NetworkAdmin.getSingleton();
 
+	private static volatile boolean	ignore_v4;
+	private static volatile boolean	ignore_v6;
+	
+	static{
+		COConfigurationManager.addAndFireParameterListeners(
+			new String[]{
+				ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES,
+				ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES },
+			(n)->{
+				ignore_v4 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES );
+				ignore_v6 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES );
+			});
+	}
+	
 	private static final IpFilter ip_filter = IpFilterManagerFactory.getSingleton().getIPFilter();
 
 	private static final AtomicInteger UUID_GEN = new AtomicInteger();
@@ -445,7 +460,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 
 		@Override
-		public int getRateLimitBytesPerSecond(){
+		public long getRateLimitBytesPerSecond(){
 			int rate = adapter.getEffectiveUploadRateLimitBytesPerSecond();
 
 			boolean disabled = rate < 0;
@@ -485,7 +500,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 
 		@Override
-		public void updateBytesUsed(int used){
+		public void updateBytesUsed(long used){
 		}
 	};
 
@@ -496,7 +511,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 
 		@Override
-		public int getRateLimitBytesPerSecond(){
+		public long getRateLimitBytesPerSecond(){
 			int rate = adapter.getDownloadRateLimitBytesPerSecond();
 
 			boolean disabled = rate < 0;
@@ -536,7 +551,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 
 		@Override
-		public void updateBytesUsed(int used){
+		public void updateBytesUsed(long used){
 		}
 	};
 
@@ -1468,7 +1483,12 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 				key = new PeerUnresolvedCacheKey( address, tcp_port );
 				
 			}else{
-				
+
+				if ( ( bytes.length == 4 && ignore_v4 ) || ( bytes.length == 16 && ignore_v6 )){
+					
+					return( "ip family is ignored" );
+				}
+
 				key = new PeerResolvedCacheKey( bytes, tcp_port );
 			}
 		}else{
@@ -2943,7 +2963,7 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	}
 
 	@Override
-	public void dataBytesReceived(PEPeer peer, int length){
+	public void dataBytesReceived(PEPeer peer, long length){
 		if(length > 0){
 			_stats.dataBytesReceived(peer, length);
 
@@ -2952,21 +2972,21 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	}
 
 	@Override
-	public void protocolBytesReceived(PEPeer peer, int length){
+	public void protocolBytesReceived(PEPeer peer, long length){
 		if(length > 0){
 			_stats.protocolBytesReceived(peer, length);
 		}
 	}
 
 	@Override
-	public void dataBytesSent(PEPeer peer, int length){
+	public void dataBytesSent(PEPeer peer, long length){
 		if(length > 0){
 			_stats.dataBytesSent(peer, length);
 		}
 	}
 
 	@Override
-	public void protocolBytesSent(PEPeer peer, int length){
+	public void protocolBytesSent(PEPeer peer, long length){
 		if(length > 0){
 			_stats.protocolBytesSent(peer, length);
 		}
@@ -7638,17 +7658,17 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		public void setPeer(PEPeer p){
 		}
 
-		public void dataBytesSent(int num_bytes){
+		public void dataBytesSent(long num_bytes){
 		}
 
-		public void protocolBytesSent(int num_bytes){
+		public void protocolBytesSent(long num_bytes){
 
 		}
 
-		public void dataBytesReceived(int num_bytes){
+		public void dataBytesReceived(long num_bytes){
 		}
 
-		public void protocolBytesReceived(int num_bytes){
+		public void protocolBytesReceived(long num_bytes){
 		}
 
 		public void bytesDiscarded(int num_bytes){
@@ -7747,15 +7767,15 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			return(peer.getDownloadRateLimitBytesPerSecond());
 		}
 
-		public int getPermittedBytesToSend(){
-			return(Integer.MAX_VALUE);
+		public long getPermittedBytesToSend(){
+			return(NetworkManager.UNLIMITED_RATE);
 		}
 
 		public void permittedSendBytesUsed(int num){
 		}
 
-		public int getPermittedBytesToReceive(){
-			return(Integer.MAX_VALUE);
+		public long getPermittedBytesToReceive(){
+			return(NetworkManager.UNLIMITED_RATE);
 		}
 
 		public void permittedReceiveBytesUsed(int num){

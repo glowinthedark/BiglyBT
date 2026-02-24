@@ -254,13 +254,13 @@ PeerImpl
 	@Override
 	public boolean isInterested()
 	{
-		return( delegate.isInteresting());
+		return( delegate.isInterested());
 	}
 
 	@Override
 	public boolean isInteresting()
 	{
-		return( delegate.isInterested());
+		return( delegate.isInteresting());
 	}
 
 	@Override
@@ -574,17 +574,17 @@ PeerImpl
 	}
 
 	@Override
-	public int
+	public long
 	readBytes(
-		int	max )
+		long	max )
 	{
 		throw( new RuntimeException( "not supported"));
 	}
 
 	@Override
-	public int
+	public long
 	writeBytes(
-		int	max )
+		long	max )
 	{
 		throw( new RuntimeException( "not supported"));
 	}

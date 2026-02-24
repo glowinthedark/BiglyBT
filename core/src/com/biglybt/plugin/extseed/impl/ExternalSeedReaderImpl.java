@@ -123,7 +123,7 @@ ExternalSeedReaderImpl
 
 	private AESemaphore			rate_sem = new AESemaphore( "ExternalSeedReaderRequest" );
 	private int					rate_bytes_read;
-	private int					rate_bytes_permitted;
+	private long				rate_bytes_permitted;
 
 	private volatile CopyOnWriteSet<MutableInteger>		bad_pieces = new CopyOnWriteSet<>(true);
 
@@ -379,14 +379,14 @@ ExternalSeedReaderImpl
 
 				int	existing_peer_count = existing_peers.length;
 
-				int	global_limit	= TransferSpeedValidator.getGlobalDownloadRateLimitBytesPerSecond();
+				long	global_limit	= TransferSpeedValidator.getGlobalDownloadRateLimitBytesPerSecond();
 
 				if ( global_limit > 0 ){
 
 						// if we have a global limit in force and we are near it then no point in
 						// activating
 
-					int current_down = plugin.getGlobalDownloadRateBytesPerSec();
+					long current_down = plugin.getGlobalDownloadRateBytesPerSec();
 
 					if ( global_limit - current_down < 5*1024 ){
 
@@ -394,7 +394,7 @@ ExternalSeedReaderImpl
 					}
 				}
 
-				int	download_limit  = peer_manager.getDownloadRateLimitBytesPerSecond();
+				long	download_limit  = peer_manager.getDownloadRateLimitBytesPerSecond();
 
 				if ( global_limit > 0 && global_limit < download_limit ){
 
@@ -835,16 +835,16 @@ ExternalSeedReaderImpl
 		 */
 
 	@Override
-	public int
+	public long
 	readBytes(
-		int		max )
+		long		max )
 	{
 			// permission to read a bunch of bytes
 
 			// we're out of step here due to multiple threads so we have to report what
 			// has already happened and prepare for what will
 
-		int	res = 0;
+		long	res = 0;
 
 		synchronized( rate_sem ){
 
@@ -860,7 +860,7 @@ ExternalSeedReaderImpl
 				rate_bytes_read -= res;
 			}
 
-			int	rem = max - res;
+			long	rem = max - res;
 
 			if ( rem > rate_bytes_permitted ){
 
@@ -883,7 +883,7 @@ ExternalSeedReaderImpl
 		return( res );
 	}
 
-	public int
+	public long
 	getPermittedBytes()
 
 		throws ExternalSeedException
@@ -1160,7 +1160,7 @@ ExternalSeedReaderImpl
    	        	}
 
    	        	@Override
-	            public int
+	            public long
    	        	getPermittedBytes()
 
    	        		throws ExternalSeedException

@@ -2,8 +2,9 @@
 [Desktop Entry]
 Name=BiglyBT
 GenericName=BitTorrent Client
+GenericName[ru]=Клиент сети БитТоррент
 Exec=${installer:dir.main}/biglybt %U
-Icon=${installer:dir.main}/biglybt.svg
+Icon=${installer:dir.main}/biglybt
 Terminal=false
 Type=Application
 MimeType=x-scheme-handler/magnet;application/x-bittorrent;application/x-biglybt;x-scheme-handler/biglybt;

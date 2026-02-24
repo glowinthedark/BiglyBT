@@ -19,6 +19,7 @@
 
 package com.biglybt.net.upnp;
 
+import java.net.InetAddress;
 import java.util.Map;
 
 /**
@@ -39,8 +40,17 @@ UPnPActionInvocation
 		 * @throws UPnPException
 		 */
 
-	public UPnPActionArgument[]
+	public default UPnPActionArgument[]
 	invoke()
+
+		throws UPnPException
+	{
+		return( invoke( null ));
+	}
+	
+	public UPnPActionArgument[]
+	invoke(
+		InetAddress		bind )
 
 		throws UPnPException;
 

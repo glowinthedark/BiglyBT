@@ -35,6 +35,7 @@ import com.biglybt.core.config.ParameterListener;
 
 public class
 ThreadPool<T extends AERunnable>
+	implements ThreadPoolParent<T>
 {
 	private static final boolean	NAME_THREADS = Constants.IS_CVS_VERSION && System.getProperty( "az.thread.pool.naming.enable", "true" ).equals( "true" );
 
@@ -83,11 +84,11 @@ ThreadPool<T extends AERunnable>
 		}
 	}
 
-	static final ThreadLocal		tls	=
-		new ThreadLocal()
+	static final ThreadLocal<ThreadPoolTask.Worker>		tls	=
+		new ThreadLocal<ThreadPoolTask.Worker>()
 		{
 			@Override
-			public Object
+			public ThreadPoolTask.Worker
 			initialValue()
 			{
 				return( null );
@@ -127,6 +128,8 @@ ThreadPool<T extends AERunnable>
 	private int					current_permits;
 
 	private int			thread_priority	= Thread.NORM_PRIORITY;
+	private boolean		is_daemon		= true;
+	
 	private boolean		warn_when_full;
 
 	private long		task_total;
@@ -199,6 +202,13 @@ ThreadPool<T extends AERunnable>
 	}
 
 	public void
+	setDaemon(
+		boolean	d )
+	{
+		is_daemon = d;
+	}
+	
+	public void
 	setExecutionLimit(
 		long		millis )
 	{
@@ -208,6 +218,21 @@ ThreadPool<T extends AERunnable>
 		}
 	}
 
+	public void 
+	runTask(T runnable) 
+	{
+		run(runnable, false, false);
+	}
+	
+	public void 
+	runTask(
+		T 			runnable, 
+		boolean		high_priority, 
+		boolean 	manualRelease)
+	{
+		run(runnable, high_priority, manualRelease);	
+	}
+	
 	public threadPoolWorker 
 	run(T runnable) 
 	{
@@ -580,9 +605,9 @@ ThreadPool<T extends AERunnable>
 
 		synchronized( this ){
 
-			long elapsed = SystemTime.getMonotonousTime() - toRelease.worker.run_start_time;
+			long elapsed = SystemTime.getMonotonousTime() - toRelease.worker.getStartTime();
 			if (elapsed > WARN_TIME && LOG_WARNINGS)
-				DebugLight.out(toRelease.worker.getWorkerName() + ": terminated, elapsed = " + elapsed + ", state = " + toRelease.worker.state);
+				DebugLight.out(toRelease.worker.getWorkerName() + ": terminated, elapsed = " + elapsed + ", state = " + toRelease.worker.getState());
 
 			if ( !busy.remove(toRelease.worker)){
 
@@ -618,7 +643,7 @@ ThreadPool<T extends AERunnable>
 
 	}
 
-	public void registerThreadAsChild(threadPoolWorker parent)
+	public void registerThreadAsChild(ThreadPoolTask.Worker parent)
 	{
 		if(tls.get() == null || tls.get() == parent)
 			tls.set(parent);
@@ -626,7 +651,7 @@ ThreadPool<T extends AERunnable>
 			throw new IllegalStateException("another parent is already set for this thread");
 	}
 
-	public void deregisterThreadAsChild(threadPoolWorker parent)
+	public void deregisterThreadAsChild(ThreadPoolTask.Worker parent)
 	{
 		if(tls.get() == parent)
 			tls.set(null);
@@ -635,7 +660,11 @@ ThreadPool<T extends AERunnable>
 	}
 
 
-	class threadPoolWorker extends AEThread2 {
+	class 
+	threadPoolWorker 
+		extends AEThread2
+		implements ThreadPoolTask.Worker
+	{
 		private final String		worker_name;
 		private volatile T			runnable;
 		private long				run_start_time;
@@ -644,13 +673,19 @@ ThreadPool<T extends AERunnable>
 
 		protected threadPoolWorker()
 		{
-			super(NAME_THREADS?(name + " " + (thread_name_index)):name,true);
+			super(NAME_THREADS?(name + " " + (thread_name_index)):name,is_daemon);
 			thread_name_index++;
 			setPriority(thread_priority);
 			worker_name = this.getName();
 			start();
 		}
 
+		protected ThreadPool<T>
+		getOwner()
+		{
+			return( ThreadPool.this );
+		}
+		
 		@Override
 		public void run() {
 			tls.set(threadPoolWorker.this);
@@ -790,6 +825,13 @@ ThreadPool<T extends AERunnable>
 			}
 		}
 
+		@Override
+		public long 
+		getStartTime()
+		{
+			return( run_start_time );
+		}
+		
 		public void setState(String _state) {
 			//System.out.println( "state = " + _state );
 			state = _state;
@@ -799,12 +841,16 @@ ThreadPool<T extends AERunnable>
 			return (state);
 		}
 
-		protected String getWorkerName() {
+		public String getWorkerName() {
 			return (worker_name);
 		}
-
-		protected ThreadPool<T> getOwner() {
-			return (ThreadPool.this);
+		
+		@Override
+		public void 
+		releaseManual(
+			ThreadPoolTask task)
+		{
+			ThreadPool.this.releaseManual(task);
 		}
 
 		protected T getRunnable() {

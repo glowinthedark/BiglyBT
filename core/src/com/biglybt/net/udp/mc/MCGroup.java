@@ -24,12 +24,16 @@ import java.net.InetSocketAddress;
 public interface
 MCGroup
 {
+	public boolean
+	isIPv6();
+	
 	public int
 	getControlPort();
 
 	public void
 	sendToGroup(
-		byte[]	data );
+		byte[]		data,
+		String[]	selected_interfaces );
 
 		/**
 		 * Sends to the group but will replace any occurrence of %AZINTERFACE% in the string with the
@@ -39,7 +43,8 @@ MCGroup
 
 	public void
 	sendToGroup(
-		String	param_data );
+		String		param_data,
+		String[]	selected_interfaces );
 
 	public void
 	sendToMember(

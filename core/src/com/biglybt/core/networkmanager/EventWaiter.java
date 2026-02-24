@@ -19,13 +19,18 @@
 
 package com.biglybt.core.networkmanager;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import com.biglybt.core.util.Debug;
 
 public class
 EventWaiter
 {
+	private final AtomicInteger	counter = new AtomicInteger(0);
+	
 	private boolean	sleeping;
-	private boolean	wakeup_outstanding;
+	
+	private int last_counter = 0;
 
 	public
 	EventWaiter()
@@ -36,14 +41,27 @@ EventWaiter
 	waitForEvent(
 		long	timeout )
 	{
+		int c = counter.get();
+		
+		if ( c != last_counter ){
+						
+			last_counter = c;
+			
+			return( false );
+		}
+		
 		synchronized( this ){
-
-			if ( wakeup_outstanding ){
-
-				wakeup_outstanding	= false;
-
+			
+			c = counter.get();
+			
+			if ( c != last_counter ){
+							
+				last_counter = c;
+				
 				return( false );
 			}
+
+			last_counter = c;
 
 			try{
 				sleeping	= true;
@@ -58,21 +76,19 @@ EventWaiter
 
 				sleeping	= false;
 			}
-
+			
 			return( true );
 		}
 	}
 
 	public void
 	eventOccurred()
-	{
+	{		
 		synchronized( this ){
+			
+			counter.incrementAndGet();
 
-			if ( !sleeping ){
-
-				wakeup_outstanding	= true;
-
-			}else{
+			if ( sleeping ){
 
 				this.notify();
 			}

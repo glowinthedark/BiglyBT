@@ -117,6 +117,8 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 	public static final int VIEW_TYPE_DEFAULT			= 1;
 	public static final int VIEW_TYPE_SHARING			= 2;
 
+	private static final int PF_WELCOME_SHOWN	= 0x0001;
+	
 	public static final String RSS_ITEMS_UNAVAILABLE = "RSS items unavailable until you accept Chat terms and conditions";
 
 	private BuddyPlugin			plugin;
@@ -712,6 +714,42 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 	}
 
+	private boolean
+	getPrivateFlag(
+		String		net,
+		String		key,
+		int			flag )
+	{
+		int flags = getIntOption(net, key, "pflag", 0 );
+		
+		return(( flags & flag ) != 0 );
+	}
+
+	private void
+	setPrivateFlag(
+		String		net,
+		String		key,
+		int			flag,
+		boolean		b )
+	{
+		int flags = getIntOption(net, key, "pflag", 0 );
+		
+		int new_flags = flags;
+		
+		if ( b ){
+			
+			new_flags |= flag;
+		}else{
+			
+			new_flags &= ~flag;
+		}
+		
+		if ( flags != new_flags ){
+			
+			setIntOption(net, key, "pflag", new_flags );
+		}
+	}
+	
 		// auto-mute
 
 	private boolean
@@ -907,7 +945,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 		String		net,
 		String		key,
 		String		name,
-		int		def )
+		int			def )
 	{
 		Object	obj = getGenericOption(net, key, name);
 
@@ -4170,7 +4208,12 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 				
 				if ( key.startsWith( "General: ") || key.startsWith( Constants.APP_NAME + ": General: " )){
 
-					sendLocalMessage( "!*" + MessageText.getString( "azbuddy.dchat.welcome.general" ) + "*!", null, ChatMessage.MT_INFO );
+					if ( !getPrivateFlag( network, key, PF_WELCOME_SHOWN )){
+					
+						setPrivateFlag( network, key, PF_WELCOME_SHOWN, true );
+						
+						sendLocalMessage( "!*" + MessageText.getString( "azbuddy.dchat.welcome.general" ) + "*!", null, ChatMessage.MT_INFO );
+					}
 				}
 			}
 		}
@@ -4769,12 +4812,27 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 
 			if ( remainder_set.size() > 0 ){
 
-					// these are messages not part of any chain so sort based on time
+					// these are messages not part of any chain so sort based on sequence or time
 
-				List<ChatMessage>	remainder = new ArrayList<>(remainder_set);
-
-				Collections.sort(
-						remainder,
+				List<ChatMessage>	with_seq	= new ArrayList<>(remainder_set.size());
+				List<ChatMessage>	without_seq = new ArrayList<>(remainder_set.size());
+			
+				for (ChatMessage m: remainder_set ){
+					
+					if ( m.getSequence() == 0 && m.getPreviousID() == null ){
+						
+						without_seq.add( m );
+						
+					}else{
+					
+						with_seq.add( m );
+					}
+				}
+				
+				if ( !with_seq.isEmpty()){
+				
+					Collections.sort(
+						with_seq,
 						new Comparator<ChatMessage>()
 						{
 							@Override
@@ -4787,7 +4845,7 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 								long t2 = m2.getSequence();
 
 								if ( t1 == t2 ){
-									
+											
 									t1 = m1.getTimeStamp();
 									t2 = m2.getTimeStamp();
 								}
@@ -4803,15 +4861,48 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 								}
 							}
 						});
+				}
+				
+				if ( !without_seq.isEmpty()){
+					
+					Collections.sort(
+						without_seq,
+						new Comparator<ChatMessage>()
+						{
+							@Override
+							public int
+							compare(
+								ChatMessage m1,
+								ChatMessage m2 )
+							{
+								long	t1 = m1.getTimeStamp();
+								long	t2 = m2.getTimeStamp();
+							
+								long l = t1 - t2;
 
+								if ( l < 0 ){
+									return( -1 );
+								}else if ( l > 0 ){
+									return( 1 );
+								}else{
+									return( m1.getUID() - m2.getUID());
+								}
+							}
+						});
+				}
+								
 				if ( result == null ){
 
-					result = remainder;
+					result = with_seq;
 
 				}else{
 
-					result = merge( result, remainder );
+					result = merge( result, with_seq );
 				}
+				
+					// finally merge in any timestamp only messages
+									
+				result = merge( result, without_seq );
 			}
 
 			if ( result == null ){
@@ -4960,11 +5051,27 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 			List<ChatMessage>		list1,
 			List<ChatMessage>		list2 )
 		{
+			if ( list1.isEmpty()){
+				
+				return( list2 );
+				
+			}else if ( list2.isEmpty()){
+				
+				return( list1 );
+			}
+			
 			int	size1 = list1.size();
 			int size2 = list2.size();
 
+			int total = size1 + size2;
+			
 			List<ChatMessage>	result = new ArrayList<>(size1 + size2);
 
+			if ( total == 0 ){
+				
+				return( result );
+			}
+			
 			int	pos1 = 0;
 			int pos2 = 0;
 
@@ -4996,8 +5103,13 @@ BuddyPluginBeta implements DataSourceImporter, AEDiagnosticsEvidenceGenerator {
 					long t1 = m1.getSequence();
 					long t2 = m2.getSequence();
 
-					if ( t1 == t2 ){
-						
+						// if sequence numbers are the same or either message is missing sequence + prev info then
+						// we only have timestamp to use for ordering
+					
+					if (	( t1 == t2 ) ||
+							( t1 == 0 && m1.getPreviousID() == null ) ||
+							( t2 == 0 && m2.getPreviousID() == null )){
+							
 						t1 = m1.getTimeStamp();
 						t2 = m2.getTimeStamp();
 					}

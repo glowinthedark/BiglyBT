@@ -81,8 +81,30 @@ RegExUtil
 		}
 	}
 
+	private static volatile String[] convcache;
+	
 	public static String
 	convertAndOrToExpr(
+		String		str )
+	{
+			// gets called a lot with same arg during filtering
+		
+		String[] cache = convcache;
+		
+		if ( cache != null && cache[0].equals( str )){
+			
+			return( cache[1] );
+		}
+		
+		String result = convertAndOrToExprSupport( str );
+				
+		convcache = new String[]{ str, result };
+		
+		return( result );
+	}
+	
+	private static String
+	convertAndOrToExprSupport(
 		String		str )
 	{
 		str = str.replaceAll("\\s*[|;]\\s*", "|" );
@@ -116,11 +138,19 @@ RegExUtil
 	}
 	
 	public static String
-	splitAndQuote(String s, String splitterRegex) {
-		String[] bits = s.split(splitterRegex);
+	splitAndQuote(
+		String s, 
+		String splitterRegex) 
+	{
+		Pattern p = getCachedPattern( "regexutil: " + splitterRegex , splitterRegex);
+		
+		String[] bits = p.split( s );
+		
 		for (int i = 0; i < bits.length; i++) {
+			
 			bits[i] = Pattern.quote(bits[i]);
 		}
+		
 		return String.join("|", bits);
 	}
 	

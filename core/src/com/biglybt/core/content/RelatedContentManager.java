@@ -29,6 +29,7 @@ import java.lang.ref.WeakReference;
 import java.net.URL;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -417,20 +418,23 @@ RelatedContentManager
 									DHTPlugin dp = (DHTPlugin)dht_pi.getPlugin();
 		
 									public_dht_plugin = dp;
-																														
-									RelatedContentSearcher public_searcher = new RelatedContentSearcher( RelatedContentManager.this, main_transfer_type, public_dht_plugin, true );
-															
-									searchers.add( public_searcher );
-		
-									if ( dp.isEnabled()){
-										
-										public_dht_plugin_bigly = dp.getDHTPlugin( DHTPlugin.NW_BIGLYBT_MAIN );
 											
-										RelatedContentSearcher bigly_searcher = new RelatedContentSearcher( RelatedContentManager.this, bigly_transfer_type, public_dht_plugin_bigly, true );
+									if ( dp != null ){
 										
-										searchers.add( bigly_searcher );
+										RelatedContentSearcher public_searcher = new RelatedContentSearcher( RelatedContentManager.this, main_transfer_type, dp, true );
+																
+										searchers.add( public_searcher );
+			
+										if ( dp.isEnabled()){
+											
+											public_dht_plugin_bigly = dp.getDHTPlugin( DHTPlugin.NW_BIGLYBT_MAIN );
+												
+											RelatedContentSearcher bigly_searcher = new RelatedContentSearcher( RelatedContentManager.this, bigly_transfer_type, public_dht_plugin_bigly, true );
+											
+											searchers.add( bigly_searcher );
+										}
 									}
-		
+									
 									DownloadManager dm = plugin_interface.getDownloadManager();
 		
 									Download[] downloads = dm.getDownloads();
@@ -1353,6 +1357,8 @@ RelatedContentManager
 
 		final Set<String>	my_tags = new HashSet<>();
 
+		ReentrantLock my_tags_lock = new ReentrantLock();
+		
 		try{
 			if ( from_download != null ){
 
@@ -1371,8 +1377,6 @@ RelatedContentManager
 			
 			Debug.out(e);
 		}
-
-		Set<String>	my_tags_original = new HashSet<>( my_tags );
 		
 		long	size = to_info.getSize();
 
@@ -1401,6 +1405,8 @@ RelatedContentManager
 					private int		hits;
 
 					private Set<String>	entries = new HashSet<>();
+
+					private Set<String>	my_tags_original = new HashSet<>( my_tags );
 
 					private Set<String>	discovered_tags = new HashSet<>();
 					
@@ -1444,7 +1450,8 @@ RelatedContentManager
 
 										for ( String tag: r_tags ){
 
-											synchronized( my_tags ){
+											try{
+												my_tags_lock.lock();
 
 												my_tags.remove( tag );
 												
@@ -1452,6 +1459,9 @@ RelatedContentManager
 													
 													discovered_tags.add( tag );
 												}
+											}finally{
+												
+												my_tags_lock.unlock();
 											}
 										}
 									}
@@ -1486,8 +1496,9 @@ RelatedContentManager
 					{
 						if ( from_download != null ){
 							
-							synchronized( my_tags ){
-							
+							try{
+								my_tags_lock.lock();
+						
 								if ( !discovered_tags.isEmpty()){
 									
 									Set<String> interesting = new HashSet<>();
@@ -1530,6 +1541,9 @@ RelatedContentManager
 										}
 									}
 								}
+							}finally{
+								
+								my_tags_lock.unlock();
 							}
 						}
 							// if we have something to say prioritise it somewhat

@@ -21,14 +21,20 @@ import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Device;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.widgets.Shell;
+
+import com.biglybt.core.util.AESemaphore;
 import com.biglybt.core.util.AEThread2;
+import com.biglybt.core.util.AsyncDispatcher;
 import com.biglybt.core.util.Constants;
+import com.biglybt.core.util.Debug;
 import com.biglybt.platform.win32.access.AEWin32Manager;
 import com.biglybt.platform.win32.access.impl.AEWin32AccessInterface;
 import com.biglybt.ui.swt.Utils;
@@ -300,7 +306,99 @@ public class Win32UIEnhancer
 		}
 	}
 
-	public static Image getFileIcon(File file, boolean big) {
+	private static boolean	gfi_active = false;
+	private static int		gfi_consec_fails = 0;
+	private static AsyncDispatcher	gfi_dispatcher		= new AsyncDispatcher( "gfi" );
+	private static List<Image>		gfi_pending_images	= new ArrayList<>();
+	
+	public static Image 
+	getFileIcon(
+		File file, boolean big) 
+	{
+		if ( !Utils.isSWTThread()){
+			
+			Debug.out( "Must be SWT thread" );
+			
+			return( null );
+		}
+		
+		synchronized( Win32UIEnhancer.class ){
+			
+			for ( Image img: gfi_pending_images ){
+
+				img.dispose();
+			}
+			
+			gfi_pending_images.clear();
+			
+			if ( gfi_active || gfi_consec_fails > 3 ){
+				
+				return( null );
+			}
+			
+			gfi_active = true;
+		}
+	
+		AESemaphore sem = new AESemaphore( "gfi" );
+		
+		Image[]		result = { null };
+		
+		gfi_dispatcher.dispatch(()->{
+			
+			Image res = null;
+			
+			try{
+					// user has this hanging for ages so protect against it a bit
+				
+				res = getFileIconSupport( file, big );
+								
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+				
+			}finally{
+				
+				synchronized( Win32UIEnhancer.class ){
+					
+					gfi_active = false;
+					
+					result[0] = res;
+					
+					if ( res != null ){
+						
+						gfi_pending_images.add( res );
+					}
+				}
+				
+				sem.release();
+			}
+		});
+		
+		boolean ok = sem.reserve( 2500 );	//generous...
+		
+		synchronized( Win32UIEnhancer.class ){
+		
+			if ( ok ){
+				
+				gfi_consec_fails = 0;
+				
+			}else{
+				
+				gfi_consec_fails++;
+			}
+			
+			Image img = result[0];
+			
+			if ( img != null ){
+				
+				gfi_pending_images.remove( img );
+			}
+			
+			return( img );
+		}
+	}
+	
+	private static Image getFileIconSupport(File file, boolean big) {
 		try {
   		int flags = SHGFI_ICON;
   		flags |= big ? SHGFI_LARGEICON : SHGFI_SMALLICON;

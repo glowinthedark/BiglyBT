@@ -40,6 +40,7 @@ import com.biglybt.core.util.GeneralUtils;
 import com.biglybt.core.util.UUIDGenerator;
 import com.biglybt.net.upnp.*;
 import com.biglybt.net.upnp.services.UPnPWANConnection;
+import com.biglybt.net.upnp.services.UPnPWANIPv6FirewallControl;
 import com.biglybt.pif.PluginEvent;
 import com.biglybt.pif.PluginEventListener;
 import com.biglybt.pif.PluginInterface;
@@ -183,7 +184,16 @@ DeviceManagerUPnPImpl
 				log(
 					Throwable	e )
 				{
-					Debug.printStackTrace(e);
+					// Debug.printStackTrace(e);
+				}
+				
+				@Override
+				public void
+				log(
+					String		msg,
+					Throwable	e )
+				{
+					// Debug.out( msg, e );
 				}
 
 				@Override
@@ -213,10 +223,11 @@ DeviceManagerUPnPImpl
 		try{
 			upnp = UPnPFactory.getSingleton( adapter, null );
 
-
 			upnp.addRootDeviceListener(
 				new UPnPListener()
 				{
+					private Map<InetAddress,Boolean>	liveness_map = new HashMap<>();
+
 					@Override
 					public boolean
 					deviceDiscovered(
@@ -233,62 +244,10 @@ DeviceManagerUPnPImpl
 					{
 						handleDevice( device, true );
 					}
-				});
-
-			upnp.getSSDP().addListener(
-				new UPnPSSDPListener()
-				{
-					private Map<InetAddress,Boolean>	liveness_map = new HashMap<>();
 
 					@Override
 					public void
-					receivedResult(
-						NetworkInterface	network_interface,
-						InetAddress			local_address,
-						InetAddress			originator,
-						String				USN,
-						URL					location,
-						String				ST,
-						String				AL )
-					{
-					}
-
-					@Override
-					public void
-					receivedNotify(
-						NetworkInterface	network_interface,
-						InetAddress			local_address,
-						InetAddress			originator,
-						String				USN,
-						URL					location,
-						String				NT,
-						String				NTS )
-					{
-						alive( originator, !NTS.contains("byebye"));
-					}
-
-					@Override
-					public String[]
-					receivedSearch(
-						NetworkInterface	network_interface,
-						InetAddress			local_address,
-						InetAddress			originator,
-						String				ST )
-					{
-						alive( originator, true );
-
-						return( null );
-					}
-
-					@Override
-					public void
-					interfaceChanged(
-						NetworkInterface	network_interface )
-					{
-					}
-
-					private void
-					alive(
+					deviceStatusUpdate(
 						InetAddress		address,
 						boolean			alive )
 					{
@@ -693,19 +652,6 @@ DeviceManagerUPnPImpl
 		}
 	}
 
-	protected void
-	injectDiscoveryCache(
-		Map		cache )
-	{
-		try{
-			upnp.injectDiscoveryCache( cache );
-
-		}catch( Throwable e ){
-
-			Debug.out( e );
-		}
-	}
-
 	public UnassociatedDevice[]
 	getUnassociatedDevices()
 	{
@@ -1000,7 +946,8 @@ DeviceManagerUPnPImpl
 
 		List<DeviceUPnPImpl>	new_devices = new ArrayList<>();
 
-		List<UPnPWANConnection>	igd_services = new ArrayList<>();
+		List<UPnPWANConnection>				igd_wan_services = new ArrayList<>();
+		List<UPnPWANIPv6FirewallControl>	igd_ipv6_services = new ArrayList<>();
 
 		for ( UPnPService service: services ){
 
@@ -1011,7 +958,13 @@ DeviceManagerUPnPImpl
 
 				UPnPWANConnection	wan_service = (UPnPWANConnection)service.getSpecificService();
 
-				igd_services.add( wan_service );
+				igd_wan_services.add( wan_service );
+
+			}else if ( 	GeneralUtils.startsWithIgnoreCase( service_type, "urn:schemas-upnp-org:service:WANIPv6FirewallControl:")){
+
+				UPnPWANIPv6FirewallControl	firewall_service = (UPnPWANIPv6FirewallControl)service.getSpecificService();
+
+				igd_ipv6_services.add( firewall_service );
 
 			}else if ( GeneralUtils.startsWithIgnoreCase( service_type, "urn:schemas-upnp-org:service:ContentDirectory:" )){
 
@@ -1019,9 +972,9 @@ DeviceManagerUPnPImpl
 			}
 		}
 
-		if ( igd_services.size() > 0 ){
+		if ( igd_wan_services.size() > 0 || igd_ipv6_services.size() > 0 ){
 
-			new_devices.add( new DeviceInternetGatewayImpl( manager, device, igd_services ));
+			new_devices.add( new DeviceInternetGatewayImpl( manager, device, igd_wan_services, igd_ipv6_services ));
 		}
 
 		if ( GeneralUtils.startsWithIgnoreCase( device.getDeviceType(), "urn:schemas-upnp-org:device:MediaRenderer:" )){

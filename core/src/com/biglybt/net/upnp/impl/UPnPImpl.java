@@ -28,6 +28,8 @@ import java.io.*;
 import java.net.*;
 import java.util.*;
 
+import com.biglybt.core.devices.impl.DeviceManagerImpl;
+import com.biglybt.core.networkmanager.admin.NetworkAdmin;
 import com.biglybt.core.proxy.AEProxySelectorFactory;
 import com.biglybt.core.util.*;
 import com.biglybt.net.upnp.*;
@@ -52,7 +54,7 @@ UPnPImpl
 
 	public static UPnP
 	getSingleton(
-		UPnPAdapter adapter,
+		UPnPAdapter 	adapter,
 		String[]		selected_interfaces )
 
 		throws UPnPException
@@ -62,9 +64,9 @@ UPnPImpl
 
 			if ( singleton == null ){
 
-				singleton = new UPnPImpl( adapter, selected_interfaces );
+				singleton = new UPnPImpl( adapter, selected_interfaces );	
 			}
-
+			
 			return( singleton );
 
 		}finally{
@@ -73,8 +75,8 @@ UPnPImpl
 		}
 	}
 
-	private UPnPAdapter				adapter;
-	private SSDPIGD					ssdp;
+	private final UPnPAdapter				adapter;
+	private final SSDPIGD					ssdp_igd;
 
 	private Map<String,UPnPRootDeviceImpl>			root_locations	= new HashMap<>();
 
@@ -82,8 +84,8 @@ UPnPImpl
 	private List		log_history			= new ArrayList();
 	private List		log_alert_history	= new ArrayList();
 
-	private List<UPnPListener>	rd_listeners		= new ArrayList<>();
-	private AEMonitor			rd_listeners_mon 	= new AEMonitor( "UPnP:L" );
+	private CopyOnWriteList<UPnPListener>	rd_listeners		= new CopyOnWriteList<>();
+	private AEMonitor						rd_listeners_mon 	= new AEMonitor( "UPnP:L" );
 
 	private int		http_calls_ok	= 0;
 	private int		direct_calls_ok	= 0;
@@ -92,7 +94,7 @@ UPnPImpl
 
 	private AsyncDispatcher		async_dispatcher = new AsyncDispatcher();
 
-	private ThreadPool	device_dispatcher	 = new ThreadPool("UPnPDispatcher", 1, true );
+	private ThreadPool<AERunnable>	device_dispatcher	 = new ThreadPool<>("UPnPDispatcher", 1, true );
 	private Set			device_dispatcher_pending	= new HashSet();
 
 	private Map<String,long[]>	failed_urls = new HashMap<>();
@@ -108,50 +110,13 @@ UPnPImpl
 	{
 		adapter	= _adapter;
 
-		ssdp = SSDPIGDFactory.create( this, _selected_interfaces );
+		ssdp_igd = SSDPIGDFactory.create( this, _selected_interfaces );
 
-		ssdp.addListener(this);
+		ssdp_igd.addListener(this);
 
-		ssdp.start();
+		ssdp_igd.start();
 	}
-
-	@Override
-	public UPnPSSDP
-	getSSDP()
-	{
-		return( ssdp.getSSDP());
-	}
-
-	@Override
-	public void
-	injectDiscoveryCache(
-		Map 		cache )
-	{
-		try{
-			String	ni_s	= new String((byte[])cache.get( "ni" ), "UTF-8" );
-			String	la_s 	= new String((byte[])cache.get( "la" ), "UTF-8" );
-			String	usn 	= new String((byte[])cache.get( "usn" ), "UTF-8" );
-			String	loc_s 	= new String((byte[])cache.get( "loc" ), "UTF-8" );
-
-			NetworkInterface	network_interface = NetUtils.getByName( ni_s );
-
-			if ( network_interface == null ){
-
-				return;
-			}
-
-			InetAddress	local_address = InetAddress.getByName( la_s );
-
-			URL location = new URL( loc_s );
-
-			rootDiscovered( network_interface, local_address, usn, location );
-
-		}catch( Throwable e ){
-
-			Debug.out( e );
-		}
-	}
-
+	
 	@Override
 	public void
 	rootDiscovered(
@@ -214,19 +179,18 @@ UPnPImpl
 
 						if ( !old_root_device.getNetworkInterface().getName().equals( network_interface.getName())){
 
-							if ( old_root_device.addAlternativeLocation( location )){
+							old_root_device.addAlternativeLocation( local_address, location );
 
-								log( "Adding alternative location " +location + " to " + usn );
+							return;
+							
+						}else{
+							
+								// check that the device's location is the same
+					
+							if ( old_root_device.checkSameLocation( local_address, location )){
+									
+								return;
 							}
-
-							return;
-						}
-
-							// check that the device's location is the same
-
-						if ( old_root_device.getLocation().equals( location )){
-
-							return;
 						}
 					}
 
@@ -250,12 +214,12 @@ UPnPImpl
 						old_root_device.destroy( true );
 					}
 
-					List	listeners;
+					List<UPnPListener>	listeners;
 
 					try{
 						rd_listeners_mon.enter();
 
-						listeners = new ArrayList( rd_listeners );
+						listeners = new ArrayList<>( rd_listeners.getList());
 
 					}finally{
 
@@ -286,24 +250,61 @@ UPnPImpl
 
 							root_locations.put( usn, new_root_device );
 
-							listeners = new ArrayList( rd_listeners );
+							listeners = new ArrayList<>( rd_listeners.getList());
 
 						}finally{
 
 							rd_listeners_mon.exit();
 						}
 
-						for (int i=0;i<listeners.size();i++){
-
-							try{
-								((UPnPListener)listeners.get(i)).rootDeviceFound( new_root_device );
-
-							}catch( Throwable e ){
-
-								Debug.printStackTrace(e);
+							// We have an issue regarding the same device being discovered via IPv4 and IPv6.
+							// Some operations have a preferred IP family (pinholes being added over IPv6...) but
+							// if we discover it over IPv4 first then it may fail whereas once the IPv6 route is discovered
+							// it will work. Of course we may never discover it over V6, or the V6 discovery might happen
+							// a lot later. The easiest fix is to defer the discovery for a bit in the hope that the
+							// "other" discovery occurs in a timely manner...
+						
+						NetworkAdmin na = NetworkAdmin.getSingleton();
+						
+						if ( na.hasIPV4Potential() && na.hasIPV6Potential()){
+							
+							List<UPnPListener>	f_listeners = listeners;
+							
+							new DelayedEvent(
+									"Delay:rootDeviceFound", 
+									2500,
+									new AERunnable()
+									{
+										@Override
+										public void
+										runSupport()
+										{
+											for (int i=0;i<f_listeners.size();i++){
+												
+												try{
+													((UPnPListener)f_listeners.get(i)).rootDeviceFound( new_root_device );
+					
+												}catch( Throwable e ){
+					
+													Debug.printStackTrace(e);
+												}
+											}
+										}
+									});
+							
+						}else{
+							
+							for (int i=0;i<listeners.size();i++){
+	
+								try{
+									((UPnPListener)listeners.get(i)).rootDeviceFound( new_root_device );
+	
+								}catch( Throwable e ){
+	
+									Debug.printStackTrace(e);
+								}
 							}
 						}
-
 					}catch( UPnPException e ){
 
 						String	message = e.getMessage();
@@ -326,7 +327,7 @@ UPnPImpl
 
 		if ( root_device == null ){
 
-			ssdp.searchNow();
+			ssdp_igd.searchNow();
 		}
 	}
 
@@ -362,13 +363,31 @@ UPnPImpl
 						return;
 					}
 
-					log( "UPnP: root lost: usn=" + usn + ", location=" + root_device.getLocation() + ", ni=" + root_device.getNetworkInterface().getName() + ",local=" + root_device.getLocalAddress().toString());
+					log( "UPnP: root lost: usn=" + usn + ", location=" + root_device.getLocation() + ", ni=" + root_device.getNetworkInterface().getName() + ",local=" + root_device.getLocalAddress(true) + "/" + root_device.getLocalAddress(false));
 
 					root_device.destroy( false );
 				}
 			});
 	}
 
+	@Override
+	public void 
+	deviceStatusUpdate(
+		InetAddress		address, 
+		boolean			alive)
+	{
+		for ( UPnPListener listener: rd_listeners ){
+			
+			try{
+				listener.deviceStatusUpdate(address, alive);
+				
+			}catch( Throwable e ){
+				
+				Debug.out( e );
+			}
+		}
+	}
+	
 	@Override
 	public void
 	interfaceChanged(
@@ -381,7 +400,7 @@ UPnPImpl
 	public void
 	search()
 	{
-		ssdp.searchNow();
+		ssdp_igd.searchNow();
 	}
 
 	@Override
@@ -389,7 +408,7 @@ UPnPImpl
 	search(
 		String[]	STs )
 	{
-		ssdp.searchNow( STs );
+		ssdp_igd.searchNow( STs );
 	}
 
 	@Override
@@ -417,7 +436,7 @@ UPnPImpl
 			((UPnPRootDeviceImpl)roots.get(i)).destroy( true );
 		}
 
-		ssdp.searchNow();
+		ssdp_igd.searchNow();
 	}
 
 	public SimpleXMLParserDocument
@@ -724,9 +743,10 @@ UPnPImpl
 
 	public SimpleXMLParserDocument
 	performSOAPRequest(
-		UPnPService service,
+		UPnPService 	service,
 		String			soap_action,
-		String			request )
+		String			request,
+		InetAddress		bind )
 
 		throws SimpleXMLParserDocumentException, UPnPException, IOException
 	{
@@ -734,18 +754,18 @@ UPnPImpl
 
 		if ( service.getDirectInvocations() || forceDirect()){
 
-			res = performSOAPRequest( service, soap_action, request, false );
+			res = performSOAPRequest( service, soap_action, request, false, bind );
 
 		}else{
 
 			try{
-				res =  performSOAPRequest( service, soap_action, request, true );
+				res =  performSOAPRequest( service, soap_action, request, true, bind );
 
 				http_calls_ok++;
 
 			}catch( IOException e ){
 
-				res = performSOAPRequest( service, soap_action, request, false );
+				res = performSOAPRequest( service, soap_action, request, false, bind );
 
 				direct_calls_ok++;
 
@@ -768,26 +788,47 @@ UPnPImpl
 		UPnPService		service,
 		String			soap_action,
 		String			request,
-		boolean			use_http_connection)
+		boolean			use_http_connection,
+		InetAddress		bind )
 
 		throws SimpleXMLParserDocumentException, UPnPException, IOException
 	{
 		//long	start = SystemTime.getMonotonousTime();
 
-		List<URL>	controls = service.getControlURLs();
+		List<URL>	controls = service.getControlURLs( bind == null || ( bind instanceof Inet4Address ));
 
 		Throwable last_error = null;
 
 		for ( URL control: controls ){
 
+			boolean do_bind = bind != null;
+			
+			if ( do_bind ){
+				
+				do_bind = false;
+				
+					// only implement this for IPv6 as it is unlikely that we have multiple IPv4
+					// addresses whereas with "privacy IPv6" it is likely that we have > 1
+				
+				try{
+					InetAddress ta = InetAddress.getByName( control.getHost());
+					
+					if ( ta instanceof Inet6Address && bind instanceof Inet6Address ){
+							
+						do_bind = true;
+					}
+				}catch( Throwable e ){
+				}
+			}
+			
 			boolean	good_url = true;
 
 			try{
 				adapter.trace( "UPnP:Request: -> " + control + "," + request );
 
-				if ( use_http_connection ){
+				if ( use_http_connection && !do_bind ){
 
-					try{
+					try{							
 						AEProxySelectorFactory.getSelector().startNoProxy();
 
 						TorrentUtils.setTLSDescription( "UPnP Device: " + service.getDevice().getFriendlyName());
@@ -820,6 +861,7 @@ UPnPImpl
 								// gotta retry with M-POST method
 
 							try{
+								
 								HttpURLConnection con2 = (HttpURLConnection)control.openConnection();
 
 								con2.setRequestProperty( "Content-Type", "text/xml; charset=\"utf-8\"" );
@@ -878,13 +920,26 @@ UPnPImpl
 
 						AEProxySelectorFactory.getSelector().endNoProxy();
 					}
-				}else{
+				}	else{
 					final int CONNECT_TIMEOUT 	= 15*1000;
 					final int READ_TIMEOUT		= 30*1000;
 
 					Socket	socket = new Socket( Proxy.NO_PROXY );
 
-					socket.connect( new InetSocketAddress( control.getHost(), control.getPort()), CONNECT_TIMEOUT );
+					InetSocketAddress target = new InetSocketAddress( control.getHost(), control.getPort());
+					
+					if ( do_bind ){
+						
+						try{
+							socket.bind( new InetSocketAddress( bind, 0 ));
+							
+						}catch( Throwable e ){
+								
+							Debug.out( e );
+						}
+					}
+					
+					socket.connect( target, CONNECT_TIMEOUT );
 
 					socket.setSoTimeout( READ_TIMEOUT );
 

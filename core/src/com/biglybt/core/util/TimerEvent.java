@@ -39,7 +39,6 @@ TimerEvent
 
 	private final boolean		absolute;
 	private boolean				cancelled;
-	private boolean				has_run;
 
 	private final long			unique_id;
 
@@ -149,16 +148,10 @@ TimerEvent
 		return( cancelled );
 	}
 
-	protected void
-	setHasRun()
-	{
-		has_run	= true;
-	}
-
 	public boolean
 	hasRun()
 	{
-		return( has_run );
+		return( exec_start != -1 );
 	}
 
 	protected long
@@ -248,16 +241,20 @@ TimerEvent
 		public void
 		runSupport()
 		{
+			long run_start = SystemTime.getMonotonousTime();
+			
 			try{
 				super.runSupport();
 			
 			}finally{
 				
-				long elapsed = SystemTime.getMonotonousTime() - getExecutionStartMonoTime();
+				long exec_start = getExecutionStartMonoTime();
+				
+				long elapsed = SystemTime.getMonotonousTime() - exec_start;
 				
 				if ( elapsed > getSlowEventLimit()){
 				
-					System.out.println( "Timer event '" + getName() + "' took " + elapsed );
+					System.out.println( "Timer event '" + getName() + "' took " + elapsed + " (queue=" + (run_start - exec_start ) + ")" );
 				}
 			}
 		}

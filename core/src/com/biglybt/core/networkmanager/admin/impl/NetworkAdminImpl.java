@@ -71,6 +71,7 @@ import com.biglybt.platform.PlatformManagerFactory;
 import com.biglybt.platform.PlatformManagerPingCallback;
 import com.biglybt.plugin.upnp.UPnPPlugin;
 import com.biglybt.plugin.upnp.UPnPPluginService;
+import com.biglybt.plugin.upnp.UPnPPluginServiceWAN;
 
 public class
 NetworkAdminImpl
@@ -684,7 +685,7 @@ NetworkAdminImpl
 							while (it.hasNext())
 							{
 								NetworkInterface ni = it.next();
-								Enumeration addresses = ni.getInetAddresses();
+								Enumeration addresses = filter(ni.getInetAddresses());
 								while (addresses.hasMoreElements())
 								{
 									InetAddress ia = (InetAddress) addresses.nextElement();
@@ -793,7 +794,7 @@ NetworkAdminImpl
 					
 					str += (str.isEmpty()?"":" / ") +ni.getName() + "=";
 					
-					Enumeration<InetAddress> addresses = ni.getInetAddresses();
+					Enumeration<InetAddress> addresses = filter( ni.getInetAddresses());
 					
 					String a_str = "";
 					
@@ -1233,7 +1234,7 @@ addressLoop:
 				continue;
 			}
 			
-			Enumeration interfaceAddresses = netInterface.getInetAddresses();
+			Enumeration interfaceAddresses = filter( netInterface.getInetAddresses());
 			if(ifaces.length != 2)
 				while(interfaceAddresses.hasMoreElements())
 					addrs.add((InetAddress)interfaceAddresses.nextElement());
@@ -1356,7 +1357,7 @@ addressLoop:
 
 				if ( netInterface != null ){
 
-					Enumeration interfaceAddresses = netInterface.getInetAddresses();
+					Enumeration interfaceAddresses = filter( netInterface.getInetAddresses());
 
 					if ( ifaces.length != 2 ){
 
@@ -1495,7 +1496,7 @@ addressLoop:
 		while (it.hasNext())
 		{
 			NetworkInterface ni = (NetworkInterface) it.next();
-			Enumeration addresses = ni.getInetAddresses();
+			Enumeration addresses = filter( ni.getInetAddresses());
 			if ( only_with_addresses && !addresses.hasMoreElements()){
 				continue;
 			}
@@ -2386,7 +2387,7 @@ addressLoop:
 					
 					for( NetworkInterface iface : old_network_interfaces ){
 						
-						addrs.addAll(Collections.list(iface.getInetAddresses()));
+						addrs.addAll(Collections.list(filter(iface.getInetAddresses())));
 					}
 					
 					synchronized( gdpa_lock ){
@@ -2462,7 +2463,7 @@ addressLoop:
 											
 											for( NetworkInterface iface : old_network_interfaces ){
 												
-												addrs.addAll(Collections.list(iface.getInetAddresses()));
+												addrs.addAll(Collections.list(filter(iface.getInetAddresses())));
 											}
 											
 											List<InetAddress> best = AddressUtils.pickBestGlobalV6Addresses( addrs );
@@ -2820,23 +2821,26 @@ addressLoop:
 
 		    	for ( UPnPPluginService service: services ){
 
-		    		NetworkAdminNATDeviceImpl dev = new NetworkAdminNATDeviceImpl( service );
-
-		    		boolean same = false;
-
-		    		for ( NetworkAdminNATDeviceImpl d: devices ){
-
-		    			if ( d.sameAs( dev )){
-
-		    				same = true;
-
-		    				break;
-		    			}
-		    		}
-
-		    		if ( !same ){
-
-		    			devices.add( dev );
+		    		if ( service instanceof UPnPPluginServiceWAN ){
+		    			
+			    		NetworkAdminNATDeviceImpl dev = new NetworkAdminNATDeviceImpl((UPnPPluginServiceWAN)service );
+	
+			    		boolean same = false;
+	
+			    		for ( NetworkAdminNATDeviceImpl d: devices ){
+	
+			    			if ( d.sameAs( dev )){
+	
+			    				same = true;
+	
+			    				break;
+			    			}
+			    		}
+	
+			    		if ( !same ){
+	
+			    			devices.add( dev );
+			    		}
 		    		}
 		    	}
 		    }
@@ -4514,7 +4518,7 @@ addressLoop:
 
 		for ( NetworkInterface intf: interfaces ){
 
-			Enumeration<InetAddress> addresses = intf.getInetAddresses();
+			Enumeration<InetAddress> addresses = filter(intf.getInetAddresses());
 
 			int	num_addresses = 0;
 
@@ -5071,7 +5075,7 @@ addressLoop:
 		{
 				// BAH NetworkInterface has lots of goodies but is 1.6
 
-			Enumeration	e = ni.getInetAddresses();
+			Enumeration	e = filter(ni.getInetAddresses());
 
 			List	addresses = new ArrayList();
 
@@ -5409,7 +5413,7 @@ addressLoop:
 			address		= _a;
 			last_seen	= _now;
 
-			Enumeration<InetAddress> addresses = _ni.getInetAddresses();
+			Enumeration<InetAddress> addresses = filter(_ni.getInetAddresses());
 
 			int hits = 0;
 
@@ -5462,6 +5466,48 @@ addressLoop:
 			}
 
 			return( result );
+		}
+	}
+	
+	private static volatile boolean	ignore_v4;
+	private static volatile boolean	ignore_v6;
+	
+	static{
+		COConfigurationManager.addAndFireParameterListeners(
+			new String[]{
+				ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES,
+				ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES },
+			(n)->{
+				ignore_v4 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES );
+				ignore_v6 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES );
+			});
+	}
+	
+	
+	static Enumeration<InetAddress>
+	filter(
+		Enumeration<InetAddress> addresses )
+	{
+		if ( ignore_v4 || ignore_v6 ){
+			
+			Vector<InetAddress> result = new Vector<>();
+			
+			while( addresses.hasMoreElements()){
+				
+				InetAddress ia =  addresses.nextElement();
+				
+				if ( 	( ia instanceof Inet4Address && ignore_v4 )||
+						( ia instanceof Inet6Address && ignore_v6 )){
+					
+				}else{
+					
+					result.add( ia );
+				}
+			}
+			return( result.elements());
+			
+		}else{
+			return( addresses );
 		}
 	}
 
