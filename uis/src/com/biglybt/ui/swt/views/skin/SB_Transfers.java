@@ -269,6 +269,130 @@ public class SB_Transfers
 	private boolean	show_tag_tab_views;
 
 	public SB_Transfers(final MultipleDocumentInterfaceSWT mdi, boolean vuze_ui ) {
+		
+		mdi.registerViewTitleInfoFactory(
+			MultipleDocumentInterface.SIDEBAR_HEADER_TRANSFERS + "::Category",
+			(mdientry,ds)->{
+				ViewTitleInfo viewTitleInfo = new ViewTitleInfo(){
+
+					@Override
+					public Object getTitleInfoProperty(int propertyID) {
+						
+						Category category = (Category)ds;
+						
+						if ( category == null ){
+							
+							return( null );
+						}
+						
+						if ( propertyID == TITLE_FACTORY_ID ){
+							
+							return( MultipleDocumentInterface.SIDEBAR_HEADER_TRANSFERS + "::Category" );
+							
+						}else  if (propertyID == TITLE_INDICATOR_TEXT) {
+							
+							if ( category.getType() == Category.TYPE_ALL ){
+								
+								int all = core.getGlobalManager().getDownloadManagers().size();
+								
+								return( String.valueOf( all ));
+								
+							}else if ( category.getType() == Category.TYPE_UNCATEGORIZED ){
+								
+								int all = core.getGlobalManager().getDownloadManagers().size();
+
+								int	num_cat = CategoryManager.getCategorisedDownloadCount();
+								
+								return( String.valueOf( all - num_cat ));
+
+							}else{
+								
+								List<?> dms = category.getDownloadManagers(null);
+								
+								if (dms != null) {
+									return "" + dms.size();
+								}
+							}
+						}else if ( propertyID == TITLE_INDICATOR_COLOR ){
+
+							TagType tag_type = category.getTagType();
+
+							int[] def_color = tag_type.getColorDefault();
+
+							int[] tag_color = category.getColor();
+
+							if ( tag_color != def_color ){
+
+								return( tag_color );
+							}
+
+						}else if ( propertyID == TITLE_INDICATOR_TEXT_TOOLTIP ){
+
+							return( TagUtils.getTagTooltip( category ));
+						}
+						
+						return null;
+					}
+				};
+				
+				return( viewTitleInfo );
+			});
+		
+		mdi.registerViewTitleInfoFactory(
+			MultipleDocumentInterface.SIDEBAR_HEADER_TRANSFERS + "::Tag",
+			(mdientry,ds)->{
+		
+				ViewTitleInfo viewTitleInfo = new ViewTitleInfo(){
+		
+						@Override
+						public Object
+						getTitleInfoProperty(
+							int pid )
+						{
+							Tag tag = (Tag)ds;
+							
+							if ( tag == null ){
+								
+								return( null );
+							}
+							
+							if ( pid == TITLE_FACTORY_ID ){
+								
+								return( MultipleDocumentInterface.SIDEBAR_HEADER_TRANSFERS + "::Tag" );
+
+							}else if ( pid == TITLE_TEXT ) {
+								
+								return( tag.getTagName( true ));
+								
+							}else if ( pid == TITLE_INDICATOR_TEXT ){
+			
+								return( String.valueOf( tag.getTaggedCount()));
+			
+							}else if ( pid == TITLE_INDICATOR_COLOR ){
+			
+								TagType tag_type = tag.getTagType();
+			
+								int[] def_color = tag_type.getColorDefault();
+			
+								int[] tag_color = tag.getColor();
+			
+								if ( tag_color != def_color ){
+			
+									return( tag_color );
+								}
+			
+							}else if ( pid == TITLE_INDICATOR_TEXT_TOOLTIP ){
+			
+								return( TagUtils.getTagTooltip( tag ));
+							}
+			
+							return null;
+						}
+					};
+					
+					return( viewTitleInfo );
+				});
+		
 		statsNoLowNoise = new stats();
 		statsNoLowNoise.includeLowNoise = false;
 		statsWithLowNoise = new stats();
@@ -1027,29 +1151,38 @@ public class SB_Transfers
 				}
 
 				synchronized (statsLock) {
+					
+					Integer _oldState = (Integer)dm.getUserData( DMStateKey );
+					
+					boolean wasStopped, wasQueued, wasSeeding, wasDownloading;
+					
+					if ( _oldState == null ){
+						wasStopped = wasQueued = wasSeeding = wasDownloading = false;
+					}else{
+						int oldState = _oldState;
+						wasStopped		= (oldState & DMS_WasStopped ) != 0;
+						wasQueued		= (oldState & DMS_WasQueued ) != 0;
+						wasSeeding		= (oldState & DMS_WasSeeding ) != 0;
+						wasDownloading	= (oldState & DMS_WasDownloading ) != 0;
+					}
+
 					if (dm.getAssumedComplete()) {
 						stats.numComplete--;
-						Boolean wasDownloadingB = (Boolean) dm.getUserData("wasDownloading");
-						if (wasDownloadingB != null && wasDownloadingB.booleanValue()) {
+						if ( wasDownloading ){
 							stats.numDownloading--;
 						}
 					} else {
 						stats.numIncomplete--;
-						Boolean wasSeedingB = (Boolean) dm.getUserData("wasSeeding");
-						if (wasSeedingB != null && wasSeedingB.booleanValue()) {
+						if ( wasSeeding ){
 							stats.numSeeding--;
 						}
 					}
 
-					Boolean wasStoppedB = (Boolean) dm.getUserData("wasStopped");
-					boolean wasStopped = wasStoppedB != null && wasStoppedB.booleanValue();
 					if (wasStopped) {
 						if (!dm.getAssumedComplete()) {
 							stats.numStoppedIncomplete--;
 						}
 					}
-					Boolean wasQueuedB = (Boolean) dm.getUserData("wasQueued");
-					boolean wasQueued = wasQueuedB != null && wasQueuedB.booleanValue();
 					if (wasQueued) {
 						stats.numQueued--;
 					}
@@ -1090,11 +1223,17 @@ public class SB_Transfers
 						}
 					} else {
 						stats.numIncomplete++;
+						Integer _oldState = (Integer)dm.getUserData( DMStateKey );
+						int oldState = _oldState==null?0:_oldState;
+						int newState = oldState;
 						if (dm_state == DownloadManager.STATE_DOWNLOADING) {
-							dm.setUserData("wasDownloading", Boolean.TRUE);
+							newState |= DMS_WasDownloading;
 							stats.numDownloading++;
 						} else {
-							dm.setUserData("wasDownloading", Boolean.FALSE);
+							newState &= ~DMS_WasDownloading;
+						}
+						if ( newState != oldState ){
+							dm.setUserData( DMStateKey, newState );
 						}
 					}
 					
@@ -1152,6 +1291,13 @@ public class SB_Transfers
 				});
 	}
 	
+	final static String DMStateKey = "SBT:state";
+	final static int	DMS_WasStopped		= 0x0001;
+	final static int	DMS_WasQueued		= 0x0002;
+	final static int	DMS_WasSeeding		= 0x0004;
+	final static int	DMS_WasDownloading	= 0x0008;
+	
+	
 	private void
 	resetStats(
 		GlobalManager				gm,
@@ -1175,9 +1321,14 @@ public class SB_Transfers
 				dm.addListener(listener, false);
 			}
 
+			Integer _oldState = (Integer)dm.getUserData( DMStateKey );
+
+			int oldState = _oldState==null?0:_oldState;
+			int newState = oldState;
+			
 			int dm_state = dm.getState();
 			if (dm_state == DownloadManager.STATE_STOPPED) {
-				dm.setUserData("wasStopped", Boolean.TRUE);
+				newState |= DMS_WasStopped;
 				if (!dm.getAssumedComplete()) {
 					statsWithLowNoise.numStoppedIncomplete++;
 				}
@@ -1186,18 +1337,18 @@ public class SB_Transfers
 						statsNoLowNoise.numStoppedIncomplete++;
 					}
 				}
-			} else {
-				dm.setUserData("wasStopped", Boolean.FALSE);
+			}else{
+				newState &= ~DMS_WasStopped;
 			}
 
 			if (dm_state == DownloadManager.STATE_QUEUED) {
-				dm.setUserData("wasQueued", Boolean.TRUE);
+				newState |= DMS_WasQueued;
 				statsWithLowNoise.numQueued++;
 				if (!lowNoise) {
 					statsNoLowNoise.numQueued++;
 				}
-			} else {
-				dm.setUserData("wasQueued", Boolean.FALSE);
+			}else{
+				newState &= ~DMS_WasQueued;
 			}
 			if (dm.getAssumedComplete()) {
 				statsWithLowNoise.numComplete++;
@@ -1205,13 +1356,13 @@ public class SB_Transfers
 					statsNoLowNoise.numComplete++;
 				}
 				if (dm_state == DownloadManager.STATE_SEEDING) {
-					dm.setUserData("wasSeeding", Boolean.TRUE);
+					newState |= DMS_WasSeeding;
 					statsWithLowNoise.numSeeding++;
 					if (!lowNoise) {
 						statsNoLowNoise.numSeeding++;
 					}
-				} else {
-					dm.setUserData("wasSeeding", Boolean.FALSE);
+				}else{
+					newState &= ~DMS_WasSeeding;
 				}
 			} else {
 				statsWithLowNoise.numIncomplete++;
@@ -1219,13 +1370,19 @@ public class SB_Transfers
 					statsNoLowNoise.numIncomplete++;
 				}
 				if (dm_state == DownloadManager.STATE_DOWNLOADING) {
+					newState |= DMS_WasDownloading;
 					statsWithLowNoise.numDownloading++;
 					if (!lowNoise) {
 						statsNoLowNoise.numDownloading++;
 					}
+				}else{
+					newState &= ~DMS_WasDownloading;
 				}
 			}
 
+			if ( newState != oldState ){
+				dm.setUserData( DMStateKey, newState );
+			}
 			if (!PlatformTorrentUtils.getHasBeenOpened(dm) && dm.getAssumedComplete()) {
 				statsNoLowNoise.numUnOpened++;
 			}
@@ -1333,62 +1490,18 @@ public class SB_Transfers
 			loc_name = MessageText.getString( loc_name );
 		}
 
-		ViewTitleInfo viewTitleInfo = new ViewTitleInfo() {
-
-			@Override
-			public Object getTitleInfoProperty(int propertyID) {
-				if (propertyID == TITLE_INDICATOR_TEXT) {
-					if ( category.getType() == Category.TYPE_ALL ){
-						
-						int all = core.getGlobalManager().getDownloadManagers().size();
-						
-						return( String.valueOf( all ));
-						
-					}else if ( category.getType() == Category.TYPE_UNCATEGORIZED ){
-						
-						int all = core.getGlobalManager().getDownloadManagers().size();
-
-						int	num_cat = CategoryManager.getCategorisedDownloadCount();
-						
-						return( String.valueOf( all - num_cat ));
-
-					}else{
-						
-						List<?> dms = category.getDownloadManagers(null);
-						
-						if (dms != null) {
-							return "" + dms.size();
-						}
-					}
-				}else if ( propertyID == TITLE_INDICATOR_COLOR ){
-
-					TagType tag_type = category.getTagType();
-
-					int[] def_color = tag_type.getColorDefault();
-
-					int[] tag_color = category.getColor();
-
-					if ( tag_color != def_color ){
-
-						return( tag_color );
-					}
-
-				}else if ( propertyID == TITLE_INDICATOR_TEXT_TOOLTIP ){
-
-					return( TagUtils.getTagTooltip( category ));
-				}
-				
-				return null;
-			}
-		};
-
 		String prev_id = getCatPosition( mdi, MultipleDocumentInterface.SIDEBAR_HEADER_TRANSFERS, loc_name );
 		
 		MdiEntry entry = mdi.createEntryFromSkinRef(
 				MultipleDocumentInterface.SIDEBAR_HEADER_TRANSFERS, id, "library",
-				name, viewTitleInfo, category, false, prev_id );
+				name, null, category, false, prev_id );
 		
 		if (entry != null) {
+			
+			ViewTitleInfo viewTitleInfo = mdi.createViewTitleInfo( MultipleDocumentInterface.SIDEBAR_HEADER_TRANSFERS + "::Category", entry, category );
+
+			entry.setViewTitleInfo(viewTitleInfo);
+			
 			entry.setImageLeftID("image.sidebar.library");
 
 			entry.setUserData( CAT_KEY, category );
@@ -1846,44 +1959,6 @@ public class SB_Transfers
 			
 			boolean auto = tag.getTagType().isTagTypeAuto();
 
-			ViewTitleInfo viewTitleInfo =
-				new ViewTitleInfo()
-				{
-					@Override
-					public Object
-					getTitleInfoProperty(
-						int pid )
-					{
-						if ( pid == TITLE_TEXT ) {
-							
-							return( tag.getTagName( true ));
-							
-						}else if ( pid == TITLE_INDICATOR_TEXT ){
-
-							return( String.valueOf( tag.getTaggedCount()));
-
-						}else if ( pid == TITLE_INDICATOR_COLOR ){
-
-							TagType tag_type = tag.getTagType();
-
-							int[] def_color = tag_type.getColorDefault();
-
-							int[] tag_color = tag.getColor();
-
-							if ( tag_color != def_color ){
-
-								return( tag_color );
-							}
-
-						}else if ( pid == TITLE_INDICATOR_TEXT_TOOLTIP ){
-
-							return( TagUtils.getTagTooltip( tag ));
-						}
-
-						return null;
-					}
-				};
-
 			MdiEntry entry;
 
 			boolean closable = auto;
@@ -1895,7 +1970,7 @@ public class SB_Transfers
 				String name = tag.getTagName( true );
 
 				entry = mdi.createEntryFromSkinRef(
-						parent_id, id, "library", name, viewTitleInfo, tag, closable, prev_id );
+						parent_id, id, "library", name, null, tag, closable, prev_id );
 				
 				addGeneralLibraryMenus( mdi, entry, id );
 
@@ -1906,9 +1981,11 @@ public class SB_Transfers
 				builder.setParentEntryID(parent_id);
 				builder.setPreferredAfterID(prev_id).setInitialDatasource(tag);
 				entry = mdi.createEntry(builder, closable);
-
-				entry.setViewTitleInfo( viewTitleInfo );
 			}
+
+			ViewTitleInfo viewTitleInfo = mdi.createViewTitleInfo( MultipleDocumentInterface.SIDEBAR_HEADER_TRANSFERS + "::Tag", entry, tag );
+
+			entry.setViewTitleInfo( viewTitleInfo );
 
 			entry.setUserData( TAG_TAG_OR_GROUP_KEY, tag );
 			
@@ -2535,14 +2612,22 @@ public class SB_Transfers
 		boolean isQueued;
 		boolean isStopped;
 
-		Boolean wasSeedingB = (Boolean) dm.getUserData("wasSeeding");
-		boolean wasSeeding = wasSeedingB != null && wasSeedingB.booleanValue();
-		Boolean wasDownloadingB = (Boolean) dm.getUserData("wasDownloading");
-		boolean wasDownloading = wasDownloadingB != null && wasDownloadingB.booleanValue();
-		Boolean wasStoppedB = (Boolean) dm.getUserData("wasStopped");
-		boolean wasStopped = wasStoppedB != null && wasStoppedB.booleanValue();
-		Boolean wasQueuedB = (Boolean) dm.getUserData("wasQueued");
-		boolean wasQueued = wasQueuedB != null && wasQueuedB.booleanValue();
+		Integer _oldState = (Integer)dm.getUserData( DMStateKey );
+
+		boolean wasStopped, wasQueued, wasSeeding, wasDownloading;
+		
+		int oldState;
+		
+		if ( _oldState == null ){
+			oldState = 0;
+			wasStopped = wasQueued = wasSeeding = wasDownloading = false;
+		}else{
+			oldState = _oldState;
+			wasStopped		= (oldState & DMS_WasStopped ) != 0;
+			wasQueued		= (oldState & DMS_WasQueued ) != 0;
+			wasSeeding		= (oldState & DMS_WasSeeding ) != 0;
+			wasDownloading	= (oldState & DMS_WasDownloading ) != 0;
+		}
 
 		int dm_state = dm.getState();
 
@@ -2559,38 +2644,43 @@ public class SB_Transfers
 
 		boolean lowNoise = PlatformTorrentUtils.isAdvancedViewOnly(dm);
 
+		int newState = oldState;
+		
 		if (isDownloading != wasDownloading) {
 			if (isDownloading) {
+				newState |= DMS_WasDownloading;
 				statsWithLowNoise.numDownloading++;
 				if (!lowNoise) {
 					statsNoLowNoise.numDownloading++;
 				}
 			} else {
+				newState &= ~DMS_WasDownloading;
 				statsWithLowNoise.numDownloading--;
 				if (!lowNoise) {
 					statsNoLowNoise.numDownloading--;
 				}
 			}
-			dm.setUserData("wasDownloading", Boolean.valueOf(isDownloading));
 		}
 
 		if (isSeeding != wasSeeding) {
 			if (isSeeding) {
+				newState |= DMS_WasSeeding;
 				statsWithLowNoise.numSeeding++;
 				if (!lowNoise) {
 					statsNoLowNoise.numSeeding++;
 				}
 			} else {
+				newState &= ~DMS_WasSeeding;
 				statsWithLowNoise.numSeeding--;
 				if (!lowNoise) {
 					statsNoLowNoise.numSeeding--;
 				}
 			}
-			dm.setUserData("wasSeeding", Boolean.valueOf(isSeeding));
 		}
 
 		if (isStopped != wasStopped) {
 			if (isStopped) {
+				newState |= DMS_WasStopped;
 				if (!dm.getAssumedComplete()) {
 					statsWithLowNoise.numStoppedIncomplete++;
 				}
@@ -2600,6 +2690,7 @@ public class SB_Transfers
 					}
 				}
 			} else {
+				newState &= ~DMS_WasStopped;
 				if (!dm.getAssumedComplete()) {
 					statsWithLowNoise.numStoppedIncomplete--;
 				}
@@ -2609,22 +2700,25 @@ public class SB_Transfers
 					}
 				}
 			}
-			dm.setUserData("wasStopped", Boolean.valueOf(isStopped));
 		}
 
 		if (isQueued != wasQueued) {
 			if (isQueued) {
+				newState |= DMS_WasQueued;
 				statsWithLowNoise.numQueued++;
 				if (!lowNoise) {
 					statsNoLowNoise.numQueued++;
 				}
 			} else {
+				newState &= ~DMS_WasQueued;
 				statsWithLowNoise.numQueued--;
 				if (!lowNoise) {
 					statsNoLowNoise.numQueued--;
 				}
 			}
-			dm.setUserData("wasQueued", Boolean.valueOf(isQueued));
+		}
+		if ( newState != oldState ){
+			dm.setUserData( DMStateKey, newState );
 		}
 		return( dm_state );
 	}

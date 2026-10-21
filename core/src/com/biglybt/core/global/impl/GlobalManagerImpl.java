@@ -36,6 +36,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -326,7 +327,7 @@ public class GlobalManagerImpl
 
 		// for non-persistent downloads
 	private final Map<HashWrapper,Map>			saved_download_manager_state	= new HashMap<>();
-	private final Map<HashWrapper,Boolean> 		paused_list_initial 			= new HashMap<>();
+	private final Map<HashWrapper,PauseState> 	paused_state_initial 			= new HashMap<>();
 
 	private Map<LifecycleControlListener,GlobalManagerDownloadWillBeRemovedListener>	lcl_map = new HashMap<>();
 	
@@ -334,9 +335,9 @@ public class GlobalManagerImpl
 
 	private final TorrentFolderWatcher torrent_folder_watcher;
 
-	private final Map<HashWrapper,Boolean>	paused_list = new HashMap<>();
+	private final Map<HashWrapper,PauseState>	paused_state = new HashMap<>();
 
-	private final AEMonitor paused_list_mon = new AEMonitor( "GlobalManager:PL" );
+	private final AEMonitor paused_state_mon = new AEMonitor( "GlobalManager:PL" );
 
 	private final GlobalManagerFileMerger	file_merger;
 
@@ -1045,7 +1046,10 @@ public class GlobalManagerImpl
     file_merger = new GlobalManagerFileMerger( this );
     
     COConfigurationManager.addParameterListener(
-    	ConfigKeys.Transfer.ICFG_SET_FILE_PRIORITY_REM_PIECE,
+    	new String[]{
+    			ConfigKeys.Transfer.ICFG_SET_FILE_PRIORITY_REM_PIECE,
+    			ConfigKeys.Transfer.ICFG_SET_FILE_PRIORITY_REM_PERCENT,
+    	},
     	(n)->{
     		for ( DownloadManager dm: managers_list_cow ){
     			
@@ -1164,11 +1168,11 @@ public class GlobalManagerImpl
 			}
 			
 			try {
-          		paused_list_mon.enter();
+          		paused_state_mon.enter();
           		
-          		Boolean force = paused_list_initial.remove( hw );
+          		PauseState ps = paused_state_initial.remove( hw );
           		
-          		if ( force != null ){
+          		if ( ps != null ){
           			
           			if ( auto_resume_on_start ){
           			
@@ -1179,16 +1183,16 @@ public class GlobalManagerImpl
           				
           				if ( save_download_state != null ){
           				
-          					save_download_state.put( "forceStart", new Long( force?1:0 ));
+          					save_download_state.put( "forceStart", new Long( ps.force_start?1:0 ));
           				}
           			}else{
           			
-          				paused_list.put( hw, force );
+          				paused_state.put( hw, ps );
           			}
           		}
           		
 			}finally{
-				paused_list_mon.exit();
+				paused_state_mon.exit();
 			}
 		}
 
@@ -1338,13 +1342,13 @@ public class GlobalManagerImpl
 					if ( COConfigurationManager.getBooleanParameter( "Default Start Torrents Stopped Auto Pause" )){
 
 			         	try {
-			          		paused_list_mon.enter();
+			          		paused_state_mon.enter();
 
-			          		paused_list.put( manager.getTorrent().getHashWrapper(), false );
+			          		paused_state.put( manager.getTorrent().getHashWrapper(), new PauseState( false, PS_GENERAL ));
 
 				    	}finally{
 
-				    		paused_list_mon.exit();
+				    		paused_state_mon.exit();
 				    	}
 					}
 				}
@@ -2188,7 +2192,7 @@ public class GlobalManagerImpl
 
 	  if ( COConfigurationManager.getBooleanParameter("Pause Downloads On Exit" )){
 
-		  pauseDownloadsInternal( true, true );
+		  pauseDownloadsInternal( true, true, PS_GENERAL );
 
 		  // do this before save-downloads so paused state gets saved
 
@@ -2371,13 +2375,13 @@ public class GlobalManagerImpl
 	    	  	// add first so anyone picking up the ->stopped transition see it is paused
 
 	    	  try{
-	    		  paused_list_mon.enter();
+	    		  paused_state_mon.enter();
 
-	    		  paused_list.put( wrapper, forced );
+	    		  paused_state.put( wrapper, new PauseState( forced, PS_GENERAL ));
 
 	    	  }finally{
 
-	    		  paused_list_mon.exit();
+	    		  paused_state_mon.exit();
 	    	  }
 
 	    	  if ( state != DownloadManager.STATE_STOPPED ){
@@ -2418,17 +2422,17 @@ public class GlobalManagerImpl
 	  boolean state_changed = false;
 	  
 	  try {
-		  paused_list_mon.enter();
+		  paused_state_mon.enter();
 
 		  HashWrapper hw = torrent.getHashWrapper();
 		 
-		  if ( paused_list.containsKey( hw )){
+		  if ( paused_state.containsKey( hw )){
 			  
 			  DownloadManager this_manager = getDownloadManager( hw );
 	
 			  if ( this_manager == dm ){
 					  
-				  paused_list.remove( hw );
+				  paused_state.remove( hw );
 	
 				  state_changed = true;
 					  
@@ -2441,7 +2445,7 @@ public class GlobalManagerImpl
 		  
 	  }finally{
 
-		  paused_list_mon.exit();
+		  paused_state_mon.exit();
 		  
 		  if ( state_changed ){
 			  
@@ -2461,7 +2465,7 @@ public class GlobalManagerImpl
 	  int seconds )
   {
 	try{
-      	paused_list_mon.enter();
+      	paused_state_mon.enter();
 
       	if ( auto_resume_timer != null ){
 
@@ -2484,7 +2488,7 @@ public class GlobalManagerImpl
       			});
 	}finally{
 
-		paused_list_mon.exit();
+		paused_state_mon.exit();
 	}
 
 	pauseDownloads();
@@ -2495,7 +2499,7 @@ public class GlobalManagerImpl
   getPauseDownloadPeriodRemaining()
   {
 	  try{
-	      	paused_list_mon.enter();
+	      	paused_state_mon.enter();
 
 	      	if ( auto_resume_timer != null ){
 
@@ -2505,7 +2509,7 @@ public class GlobalManagerImpl
 	      	}
 	  }finally{
 
-			paused_list_mon.exit();
+		  paused_state_mon.exit();
 	  }
 
 	  return( 0 );
@@ -2514,7 +2518,8 @@ public class GlobalManagerImpl
   @Override
   public void
   pauseDownloads(
-		boolean	pause_force_start )
+		boolean	pause_force_start,
+		int		owner )
   {
 	  try{
 		  NonDaemonTaskRunner.run(
@@ -2522,7 +2527,7 @@ public class GlobalManagerImpl
 				
 				@Override
 				public Object run() throws Throwable{
-					pauseDownloadsInternal( false, pause_force_start );
+					pauseDownloadsInternal( false, pause_force_start, owner );
 					return( null );
 				}
 				
@@ -2538,8 +2543,9 @@ public class GlobalManagerImpl
 
   private void
   pauseDownloadsInternal(
-	boolean	tag_only,
-	boolean	pause_force_start )
+	boolean		tag_only,
+	boolean		pause_force_start,
+	int			owner )
   {
 	List<DownloadManager> managers = sortForStop();
 
@@ -2567,13 +2573,13 @@ public class GlobalManagerImpl
         		// paused
 
           	try {
-          		paused_list_mon.enter();
+          		paused_state_mon.enter();
 
-          		paused_list.put( manager.getTorrent().getHashWrapper(), forced );
+          		paused_state.put( manager.getTorrent().getHashWrapper(), new PauseState( forced, owner ));
 
 	    	}finally{
 
-	    		paused_list_mon.exit();
+	    		paused_state_mon.exit();
 	    	}
 
 	    	if ( !tag_only ){
@@ -2617,17 +2623,17 @@ public class GlobalManagerImpl
 	{
 		TOTorrent torrent = manager.getTorrent();
 		
-		if ( torrent == null || paused_list.size() == 0 ){
-
-			return( false );
-		}
-
 		try {
-			paused_list_mon.enter();
+			paused_state_mon.enter();
+
+			if ( torrent == null || paused_state.isEmpty()){
+
+				return( false );
+			}
 
 			HashWrapper hw =  torrent.getHashWrapper();
 						
-		    if ( paused_list.containsKey( hw )){
+		    if ( paused_state.containsKey( hw )){
 
 		        DownloadManager this_manager = getDownloadManager( hw );
 
@@ -2645,7 +2651,7 @@ public class GlobalManagerImpl
 			
 		}finally{
 
-			paused_list_mon.exit();
+			paused_state_mon.exit();
 		}
 	}
 
@@ -2688,15 +2694,15 @@ public class GlobalManagerImpl
     }
     
     try {
-    	paused_list_mon.enter();
+    	paused_state_mon.enter();
 
     	HashWrapper hw = torrent.getHashWrapper();
 
-    	Boolean forced = paused_list.get( hw );
+    	PauseState ps = paused_state.get( hw );
 
-    	if ( forced != null ){
+    	if ( ps != null ){
 
-    		force = forced;
+    		force = ps.force_start;
 
     		DownloadManager this_manager = getDownloadManager( hw );
 
@@ -2704,7 +2710,7 @@ public class GlobalManagerImpl
 
     			resume_ok	= true;
 
-    			paused_list.remove( hw );
+    			paused_state.remove( hw );
     		}
     	}
 	}catch( Throwable e ){
@@ -2713,7 +2719,7 @@ public class GlobalManagerImpl
 		
 	}finally{
 
-		paused_list_mon.exit();
+		paused_state_mon.exit();
    	}
 
 	if ( resume_ok ){
@@ -2744,19 +2750,19 @@ public class GlobalManagerImpl
 		  return( false );
 	  }
 		try {
-			paused_list_mon.enter();
+			paused_state_mon.enter();
 
 			HashWrapper	hw = torrent.getHashWrapper();
 			
-			if ( paused_list.containsKey( hw )){
+			if ( paused_state.containsKey( hw )){
 
 		        DownloadManager this_manager = getDownloadManager( hw );
 
 		        if ( this_manager == manager ){
 
-		        	Boolean force = paused_list.remove( hw );
+		        	PauseState ps = paused_state.remove( hw );
 
-		        	return( force != null && force );
+		        	return( ps != null && ps.force_start );
 		        }
 		    }
 		}catch( Throwable e ){
@@ -2765,7 +2771,7 @@ public class GlobalManagerImpl
 			
 		}finally{
 
-			paused_list_mon.exit();
+			paused_state_mon.exit();
 	   	}
 
 		return( false );
@@ -2773,9 +2779,16 @@ public class GlobalManagerImpl
 
 
   @Override
-  public void
-  resumeDownloads()
+  public boolean
+  resumeDownloads(
+	 boolean 	is_auto_resume,
+	 int		owner )
   {
+	  if ( is_auto_resume && auto_resume_disabled ){
+
+		  return( false );
+	  }
+
 	  try{
 		  NonDaemonTaskRunner.run(
 			  new NonDaemonTask(){
@@ -2785,7 +2798,7 @@ public class GlobalManagerImpl
 					  auto_resume_disabled = false;
 
 					  try{
-						  paused_list_mon.enter();
+						  paused_state_mon.enter();
 
 						  if ( auto_resume_timer != null ){
 
@@ -2797,18 +2810,24 @@ public class GlobalManagerImpl
 						  // copy the list as the act of resuming entries causes entries to be removed from the
 						  // list and therefore borkerage
 
-						  Map<HashWrapper,Boolean> copy = new HashMap<>(paused_list);
+						  Map<HashWrapper,PauseState> copy = new HashMap<>(paused_state);
 
-						  for( Map.Entry<HashWrapper, Boolean> entry: copy.entrySet()){
+						  List<HashWrapper> removed = new ArrayList<>();
+						  
+						  for( Map.Entry<HashWrapper, PauseState> entry: copy.entrySet()){
 
 							  HashWrapper 	hash 	= entry.getKey();
-							  boolean		force 	= entry.getValue();
+							  PauseState	ps	 	= entry.getValue();
 
 							  DownloadManager manager = getDownloadManager( hash );
 
-							  if( manager != null && manager.getState() == DownloadManager.STATE_STOPPED ) {
+							  if (	manager != null && 
+									manager.getState() == DownloadManager.STATE_STOPPED &&
+									( owner == PS_ANY || owner == ps.owner )){
 
-								  if ( force ){
+								  removed.add( hash );
+								  
+								  if ( ps.force_start ){
 
 									  manager.setForceStart(true);
 
@@ -2818,11 +2837,14 @@ public class GlobalManagerImpl
 								  }
 							  }
 						  }
-						  paused_list.clear();
-
+						  
+						  for ( HashWrapper hw: removed ){
+							 
+							  paused_state.remove( hw );
+						  }
 					  }finally{
 
-						  paused_list_mon.exit();
+						  paused_state_mon.exit();
 					  }
 					  return( null );
 				  }
@@ -2835,27 +2857,14 @@ public class GlobalManagerImpl
 	  }catch( Throwable e ){
 		  Debug.out( e );
 	  }
-  }
 
-  @Override
-  public boolean
-  resumeDownloads(
-	 boolean is_auto_resume)
-  {
-	if ( is_auto_resume && auto_resume_disabled ){
-
-		return( false );
-	}
-
-	resumeDownloads();
-
-	return( true );
+	  return( true );
   }
 
   @Override
   public boolean canResumeDownloads() {
-    try {  paused_list_mon.enter();
-      for( HashWrapper hash: paused_list.keySet()){
+    try {  paused_state_mon.enter();
+      for( HashWrapper hash: paused_state.keySet()){
      
         DownloadManager manager = getDownloadManager( hash );
 
@@ -2864,7 +2873,7 @@ public class GlobalManagerImpl
         }
       }
     }
-    finally {  paused_list_mon.exit();  }
+    finally {  paused_state_mon.exit();  }
 
     return false;
   }
@@ -3024,13 +3033,14 @@ public class GlobalManagerImpl
 
 			  //load pause/resume state
 			  if( pause_data != null ) {
-				  try {  paused_list_mon.enter();
+				  try {  paused_state_mon.enter();
 					  for( int i=0; i < pause_data.size(); i++ ) {
 						  Object	pd = pause_data.get(i);
 	
 						  byte[]		key;
 						  boolean		force;
-	
+						  int			owner = PS_GENERAL;
+						  
 						  if ( pd instanceof byte[]){
 							  // old style, migration purposes
 							  key 	= (byte[])pause_data.get( i );
@@ -3040,19 +3050,25 @@ public class GlobalManagerImpl
 	
 							  key 	= (byte[])m.get("hash");
 							  force 	= ((Long)m.get("force")).intValue() == 1;
+							  
+							  Long l_owner = (Long)m.get( "owner" );
+							  
+							  if ( l_owner != null ){
+								  owner = l_owner.intValue();
+							  }
 						  }
 						  
 						  HashWrapper hw = new HashWrapper( key );
 						  
-						  Boolean b_force = Boolean.valueOf(force);
+						  PauseState ps = new PauseState(force, owner);
 						  
-						  paused_list.put( hw, b_force );
+						  paused_state.put( hw, ps );
 						  
-						  paused_list_initial.put( hw, b_force );
+						  paused_state_initial.put( hw, ps );
 					  }
+				  }finally{
+					  paused_state_mon.exit();  
 				  }
-				  
-				  finally {  paused_list_mon.exit();  }
 			  }
 
 
@@ -3168,25 +3184,26 @@ public class GlobalManagerImpl
 		  map.put("downloads", list);
 
 		  //save pause/resume state
-		  try {  paused_list_mon.enter();
-			  if( !paused_list.isEmpty() ) {
+		  try {  paused_state_mon.enter();
+			  if( !paused_state.isEmpty() ) {
 				  ArrayList pause_data = new ArrayList();
-				  for ( Map.Entry<HashWrapper,Boolean> entry: paused_list.entrySet()){
+				  for ( Map.Entry<HashWrapper,PauseState> entry: paused_state.entrySet()){
 	
 					  HashWrapper 	hash 	= entry.getKey();
-					  Boolean		force 	= entry.getValue();
+					  PauseState	ps		= entry.getValue();
 	
 					  Map	m = new HashMap();
 	
 					  m.put( "hash", hash.getHash());
-					  m.put( "force", new Long(force.booleanValue()?1:0));
+					  m.put( "force", new Long(ps.force_start?1:0));
+					  m.put( "owner", new Long(ps.owner));
 	
 					  pause_data.add( m );
 				  }
 				  map.put( "pause_data", pause_data );
 			  }
 		  }
-		  finally {  paused_list_mon.exit();  }
+		  finally {  paused_state_mon.exit();  }
 
 
 		  FileUtil.writeResilientConfigFile("downloads.config", map );
@@ -3658,8 +3675,6 @@ public class GlobalManagerImpl
 	  moveTo( managers, positions );
   }
   
-  private static final Object MOVE_POS_KEY = new Object();
-
   @Override
   public void
   moveTo(
@@ -3722,6 +3737,8 @@ public class GlobalManagerImpl
 	  
 	  synchronized( managers_lock ){
 
+		  Map<DownloadManager,int[]> dm_map = new IdentityHashMap<>();
+		  
 		  DownloadManager[] dms_cow = managers_list_cow;
 		  
 		  int num_comp 		= 0;
@@ -3742,7 +3759,7 @@ public class GlobalManagerImpl
 			  
 			  int pos = dm.getPosition();
 			  
-			  dm.setUserData( MOVE_POS_KEY, new int[]{ pos, comp?1:0 } );
+			  dm_map.put( dm, new int[]{ pos, comp?1:0 });
 		  }
 		  
 		  	// remove all the old positions
@@ -3752,7 +3769,7 @@ public class GlobalManagerImpl
 			  DownloadManager	manager		= managers.get( i );
 			  int				newPosition = newPositions.get( i );
 
-			  int[] manager_entry = (int[])manager.getUserData( MOVE_POS_KEY );
+			  int[] manager_entry = dm_map.get( manager );
 			  
 			  if ( manager_entry == null ){
 				  
@@ -3776,7 +3793,7 @@ public class GlobalManagerImpl
 			  			  
 			  for ( DownloadManager dm: dms_cow ){
 				  
-				  int[] dm_entry = (int[])dm.getUserData( MOVE_POS_KEY );
+				  int[] dm_entry = dm_map.get( dm );
 				  
 				  boolean dmCompleted = dm_entry[1]==1;
 				  
@@ -3799,13 +3816,13 @@ public class GlobalManagerImpl
 			  DownloadManager	manager		= managers.get( i );
 			  int				newPosition = newPositions.get( i );
 			  		
-			  int[] manager_entry = (int[])manager.getUserData( MOVE_POS_KEY );
+			  int[] manager_entry = dm_map.get( manager );
 
 			  boolean curCompleted = manager_entry[1]==1;
 			  
 			  for ( DownloadManager dm: dms_cow ){
 
-				  int[] dm_entry = (int[])dm.getUserData( MOVE_POS_KEY );
+				  int[] dm_entry = dm_map.get( dm );
 				  
 				  boolean dmCompleted = dm_entry[1]==1;
 					
@@ -3825,7 +3842,7 @@ public class GlobalManagerImpl
 		  
 		  for ( DownloadManager dm: dms_cow ){
 			  
-			  int[] dm_entry = (int[])dm.getUserData( MOVE_POS_KEY );
+			  int[] dm_entry = dm_map.get( dm );
 			  		
 			  int dmPosition = dm_entry[0];
 			  
@@ -5527,7 +5544,10 @@ public class GlobalManagerImpl
 							
 						Long old = (Long)dm.getUserData( ACTIVE_KEY );
 						
-						dm.setUserData( ACTIVE_KEY, total_data );
+						if ( old == null || old != total_data ){
+						
+							dm.setUserData( ACTIVE_KEY, total_data );
+						}
 						
 						boolean is_active =
 							(	stats.getDataReceiveRate() + stats.getDataSendRate() > 0 ||
@@ -5611,7 +5631,7 @@ public class GlobalManagerImpl
 
 		@Override
 		public void
-		filePriorityChanged( DownloadManager download, DiskManagerFileInfo file )
+		filePriorityChanged( DownloadManager download, List<DiskManagerFileInfo> file )
 		{
 		}
 
@@ -5671,6 +5691,21 @@ public class GlobalManagerImpl
 			{
 				throw( new RuntimeException( "Not Supported" ));
 			}
+		}
+	}
+	
+	private static class
+	PauseState
+	{
+		final boolean		force_start;
+		final int			owner;
+		
+		PauseState(
+			boolean	_force,
+			int		_owner )
+		{
+			force_start	= _force;
+			owner			= _owner;
 		}
 	}
 }

@@ -1349,7 +1349,7 @@ public class TorrentUtil
 		
 			// set file priority when pieces remaining
 		
-		MenuItem itemSetFilePriority = new MenuItem(menuFiles, SWT.PUSH);
+		MenuItem itemSetFilePriorityPieces = new MenuItem(menuFiles, SWT.PUSH);
 				
 		String sfp_text = MessageText.getString( "ConfigView.label.set.file.pri.pieces.rem" );
 		
@@ -1368,9 +1368,9 @@ public class TorrentUtil
 			sfp_def = -1;
 		}
 		
-		itemSetFilePriority.setText(sfp_text + "...");
+		itemSetFilePriorityPieces.setText(sfp_text + "...");
 		
-		itemSetFilePriority.addListener(SWT.Selection, new ListenerDMTask(dms) {
+		itemSetFilePriorityPieces.addListener(SWT.Selection, new ListenerDMTask(dms) {
 			@Override
 			public void run(DownloadManager[] dms) {
 				Utils.numberPrompt( "enter.number", "number.of.pieces", sfp_def>0?sfp_def:null, (num)->{
@@ -1381,7 +1381,44 @@ public class TorrentUtil
 			}
 		});
 
-		itemSetFilePriority.setEnabled( dms.length > 0 );
+		itemSetFilePriorityPieces.setEnabled( dms.length > 0 );
+		
+		
+			// set file priority when percent remaining
+		
+		MenuItem itemSetFilePriorityPercent = new MenuItem(menuFiles, SWT.PUSH);
+				
+		String sfpct_text = MessageText.getString( "ConfigView.label.set.file.pri.percent.rem" );
+		
+		int sfpct_def;
+		
+		if ( dms.length == 1 ){
+			
+			sfpct_def = dms[0].getDownloadState().getIntAttribute( DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PERCENT );
+			
+			if ( sfpct_def > 0 ){
+				
+				sfpct_text += " (" + sfpct_def + ")";
+			}
+		}else{
+			
+			sfpct_def = -1;
+		}
+		
+		itemSetFilePriorityPercent.setText(sfpct_text + "...");
+		
+		itemSetFilePriorityPercent.addListener(SWT.Selection, new ListenerDMTask(dms) {
+			@Override
+			public void run(DownloadManager[] dms) {
+				Utils.numberPrompt( "enter.number", "General.percent", sfpct_def>0?sfpct_def:null, 0, 100, (num)->{
+					for ( DownloadManager dm: dms ){
+						dm.getDownloadState().setIntAttribute(DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PERCENT, num);
+					}
+				});
+			}
+		});
+	
+		itemSetFilePriorityPercent.setEnabled( dms.length > 0 );
 		
 			// Advanced -> archive
 
@@ -2948,13 +2985,18 @@ public class TorrentUtil
 							
 							boolean compatible = true;
 							
-							DiskManagerFileInfo[] files = dm.getDiskManagerFileInfoSet().getFiles();
+							DiskManagerFileInfoSet	fs	=	 dm.getDiskManagerFileInfoSet();
 							
-							for ( DiskManagerFileInfo dm_file: files ){
+							DiskManagerFileInfo[]	files			= fs.getFiles();
+							int[]					storage_types	= fs.getStorageTypes();
+							
+							for ( int i=0; i<files.length; i++ ){
+								
+								DiskManagerFileInfo dm_file = files[i];
 								
 								if ( dm_file.getTorrentFile().isPadFile()){
 									
-								}else if ( dm_file.getStorageType() != DiskManagerFileInfo.ST_LINEAR || dm_file.isLinked()){
+								}else if ( storage_types[i] != DiskManagerFileInfo.ST_LINEAR || dm_file.isLinked()){
 									
 									compatible = false;
 									
@@ -3950,6 +3992,53 @@ public class TorrentUtil
 							} catch (Throwable e) {
 
 								Logger.log(new LogAlert(dms[f_i], LogAlert.REPEATABLE,
+										"Download export operation failed", e));
+							}
+						});
+				}
+			}
+		}
+	}
+	
+	public static void 
+	exportFiles(
+		Shell 											shell, 
+		Map<DownloadManager,List<DiskManagerFileInfo>>	map )
+	{
+		if ( map != null && !map.isEmpty()) {
+
+			DirectoryDialog dd = new DirectoryDialog(shell);
+
+			String filter_path = TorrentOpener.getFilterPathExport();
+
+			// If we don't have a decent path, default to the path of the first
+			// torrent.
+			if (filter_path == null || filter_path.trim().length() == 0) {
+				filter_path = new File(map.keySet().iterator().next().getTorrentFileName()).getParent();
+			}
+
+			dd.setFilterPath(filter_path);
+
+			dd.setText(MessageText.getString("MyTorrentsView.menu.exportdownload.dialog"));
+
+			String path = dd.open();
+
+			if (path != null) {
+
+				TorrentOpener.setFilterPathExport(path);
+
+				File target = new File(path);
+
+				for ( Map.Entry<DownloadManager,List<DiskManagerFileInfo>> entry: map.entrySet()){
+					
+					AEThread2.createAndStartDaemon(
+						"Exporter",
+						()->{
+							try{
+								entry.getKey().exportFiles(target, entry.getValue());
+							} catch (Throwable e) {
+
+								Logger.log(new LogAlert(entry.getKey(), LogAlert.REPEATABLE,
 										"Download export operation failed", e));
 							}
 						});
@@ -5210,6 +5299,8 @@ public class TorrentUtil
 				mb.setLeftImage("image.trash");
 				mb.addCheckBox("deletecontent.also.deletetorrent", 2, deleteTorrent);
 
+				mb.setShellMetricsID( "delete.data.shell.metrics" );
+				
 				final int index = i;
 
 				DownloadManager[] current_dms = dms.clone();
@@ -5384,6 +5475,8 @@ public class TorrentUtil
 				mb.setRelatedObject(dm);
 				mb.setLeftImage("image.trash");
 				mb.addCheckBox("deletecontent.also.deletetorrent", 2, deleteTorrent);
+
+				mb.setShellMetricsID( "delete.data.shell.metrics" );
 
 				final int index = i;
 

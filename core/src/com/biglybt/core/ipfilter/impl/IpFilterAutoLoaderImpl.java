@@ -389,7 +389,8 @@ public class IpFilterAutoLoaderImpl
 				// merging all files into zip into one, if there's a case where
 				// a zip file contains multiple ip list files.
 				long largestSize = 0;
-				long largestPos = -1;
+				long largestPos = 1;	// in case of no entry size info assume first entry is largest.... Should really write to file and use ZipFile to access as 
+										// this can use the metadata at the end of the zip stream to ascertain entry size
 				ZipInputStream zip = new ZipInputStream(bin);
 	
 				ZipEntry zipEntry = zip.getNextEntry();
@@ -403,7 +404,7 @@ public class IpFilterAutoLoaderImpl
 					zipEntry = zip.getNextEntry();
 				}
 	
-				if (largestPos < 0) {
+				if (zipPos == 0) {
 					return( isURL );
 				}
 				bin.close();
@@ -599,7 +600,7 @@ public class IpFilterAutoLoaderImpl
 				// merging all files into zip into one, if there's a case where
 				// a zip file contains multiple ip list files.
 				long largestSize = 0;
-				long largestPos = -1;
+				long largestPos = 1;	// see comment above in v4 loader
 				ZipInputStream zip = new ZipInputStream(bin);
 	
 				ZipEntry zipEntry = zip.getNextEntry();
@@ -613,7 +614,7 @@ public class IpFilterAutoLoaderImpl
 					zipEntry = zip.getNextEntry();
 				}
 	
-				if (largestPos < 0) {
+				if (zipPos == 0) {
 					return( isURL );
 				}
 				bin.close();

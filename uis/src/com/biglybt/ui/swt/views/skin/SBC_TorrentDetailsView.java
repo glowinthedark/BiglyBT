@@ -17,6 +17,7 @@
  */
 package com.biglybt.ui.swt.views.skin;
 
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.swt.widgets.Menu;
@@ -198,7 +199,7 @@ public class SBC_TorrentDetailsView
 
 	@Override
 	public void filePriorityChanged(DownloadManager download,
-	                                com.biglybt.core.disk.DiskManagerFileInfo file) {
+	                                List<com.biglybt.core.disk.DiskManagerFileInfo> file) {
 	}
 
 	@Override

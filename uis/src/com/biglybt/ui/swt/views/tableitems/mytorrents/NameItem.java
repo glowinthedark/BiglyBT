@@ -162,10 +162,19 @@ public class NameItem extends CoreTableColumnSWT implements
 				if (fileInfo != null) {
 					// Don't ever dispose of PathIcon, it's cached and may be used elsewhere
 					TOTorrent torrent = dm.getTorrent();
-					Image icon = ImageRepository.getPathIcon(
-							fileInfo.getFile(false).getName(), false, torrent != null
-									&& !torrent.isSimpleTorrent());
-					((TableCellSWT) cell).setIcon(icon);
+					ImageRepository.PathIcon pi = ImageRepository.getPathIcon(
+							fileInfo.getFile(true).getPath(), true, false, torrent != null
+									&& !torrent.isSimpleTorrent(),
+							fileInfo.getDownloaded() == fileInfo.getLength(),
+							(result)->{
+									// the icon arrived after this cell had already
+									// painted; the name hasn't changed so nothing
+									// would ask for it again. invalidate and let the
+									// table repaint, as ColumnThumbAndName does for
+									// its thumbnails
+								cell.invalidate();
+							});
+					((TableCellSWT) cell).setIcon( pi.image);
 				}
 			}
 		}

@@ -393,24 +393,36 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 			return;
 		}
 		for ( TableSelectionListener l: listenersSelection) {
-			if (enter) {
-				l.mouseEnter(row);
-			} else {
-				l.mouseExit(row);
+			try{
+				if (enter) {
+					l.mouseEnter(row);
+				} else {
+					l.mouseExit(row);
+				}
+			}catch( Throwable e ){
+				Debug.out( e );
 			}
 		}
 	}
 
 	protected void triggerFocusChangedListeners(TableRowCore row) {
 		for ( TableSelectionListener l: listenersSelection) {
-			l.focusChanged(row);
+			try{
+				l.focusChanged(row);
+			}catch( Throwable e ){
+				Debug.out( e );
+			}
 		}
 	}
 
 	protected void triggerFocusRequested()
 	{
 		for ( TableSelectionListener l: listenersSelection) {
-			l.focusRequested();
+			try{
+				l.focusRequested();
+			}catch( Throwable e ){
+				Debug.out( e );
+			}
 		}
 	}
 	/**
@@ -418,7 +430,11 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 	 */
 	protected void triggerTableRefreshListeners() {
 		for (TableRefreshListener l: listenersRefresh ){
-			l.tableRefresh();
+			try{
+				l.tableRefresh();
+			}catch( Throwable e ){
+				Debug.out( e );
+			}
 		}
 	}
 
@@ -461,7 +477,11 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 				for (Iterator iter = listenersCountChange.iterator(); iter.hasNext();) {
 					TableCountChangeListener l = (TableCountChangeListener) iter.next();
 					for (TableRowCore row : rows) {
-						l.rowAdded(row);
+						try{
+							l.rowAdded(row);
+						}catch( Throwable e ){
+							Debug.out( e );
+						}
 					}
 				}
 			}
@@ -471,7 +491,11 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 	protected void triggerListenerRowRemoved(TableRowCore row) {
 		for (Iterator iter = listenersCountChange.iterator(); iter.hasNext();) {
 			TableCountChangeListener l = (TableCountChangeListener) iter.next();
-			l.rowRemoved(row);
+			try{
+				l.rowRemoved(row);
+			}catch( Throwable e ){
+				Debug.out( e );
+			}
 		}
 	}
 
@@ -692,7 +716,7 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 	}
 
 	@SuppressWarnings("unchecked")
-	public boolean refilter() {
+	public boolean refilter( boolean auto ){
 		if (filter == null) {
 			return false;
 		}
@@ -780,8 +804,12 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 			redrawTable();
 		}
 
-		processDataSourceQueue(true);
-		return changed;
+			// only refocus if changed, it is annoying to have an auto-refilter bring a row
+			// back into view if it has been scrolled out of view
+		
+		processDataSourceQueue( !auto || changed);
+		
+		return( changed );
 	}
 
 	public boolean
@@ -1078,9 +1106,18 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 
 	// @see TableView#dataSourceExists(java.lang.Object)
 	@Override
-	public boolean dataSourceExists(DATASOURCETYPE dataSource) {
+	public boolean
+	hasDataSourceBeenAdded(
+		DATASOURCETYPE dataSource, 
+		boolean include_filtered )
+	{
 		synchronized (rows_sync) {
-			return mapDataSourceToRow.containsKey(dataSource) || dataSourcesToAdd.containsKey(dataSource);
+			if ( include_filtered ){
+				return listUnfilteredDataSources.containsKey(dataSource) || dataSourcesToAdd.containsKey(dataSource);
+
+			}else{
+				return mapDataSourceToRow.containsKey(dataSource) || dataSourcesToAdd.containsKey(dataSource);
+			}
 		}
 	}
 
@@ -1762,19 +1799,8 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 				}
 				if (hasSortValueChanged) {
 					lLastSortedOn = SystemTime.getCurrentTime();
-					if (sortColumns.size() == 1) {
-						sortedRows.sort(sortColumns.get(0));
-					} else {
-						sortedRows.sort((o1, o2) -> {
-							for (TableColumnCore sortColumn : sortColumns) {
-								int compare = sortColumn.compare(o1, o2);
-								if (compare != 0) {
-									return compare;
-								}
-							}
-							return 0;
-						});
-					}
+					
+					safeSort();
 					
 					for ( TableRowCore r: sortedRows ){
 						// TODO: Change to sortColumn list
@@ -2084,22 +2110,7 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 						
 						synchronized( rows_sync ){
 								
-							if ( numSortCols == 1 ){
-		
-								sortedRows.sort(sortColumns.get(0));
-							
-							}else{
-								
-								sortedRows.sort((o1, o2) -> {
-									for (TableColumnCore sortColumn : sortColumns) {
-										int compare = sortColumn.compare(o1, o2);
-										if (compare != 0) {
-											return compare;
-										}
-									}
-									return 0;
-								});
-							}
+							safeSort();
 						}
 					}
 				}
@@ -2138,6 +2149,38 @@ public abstract class TableViewImpl<DATASOURCETYPE>
 
 	}
 
+	private void
+	safeSort()
+	{
+			// unfortunately the comparables aren't stable and can result in TimSort throwing a wobbly and
+			// 'general contract violated' exception. We don't really care so...
+	
+		for ( int z=0;z<10;z++){
+			try{
+				if ( sortColumns.size() == 1 ){
+					
+					sortedRows.sort(sortColumns.get(0));
+				
+				}else{
+					
+					sortedRows.sort((o1, o2) -> {
+						for (TableColumnCore sortColumn : sortColumns) {
+							int compare = sortColumn.compare(o1, o2);
+							if (compare != 0) {
+								return compare;
+							}
+						}
+						return 0;
+					});
+				}
+				
+				break;
+				
+			}catch( IllegalArgumentException e ){		
+			}
+		}
+	}
+	
 	// @see TableStructureModificationListener#cellInvalidate(TableColumnCore, java.lang.Object)
 	@Override
 	public void cellInvalidate(TableColumnCore tableColumn,

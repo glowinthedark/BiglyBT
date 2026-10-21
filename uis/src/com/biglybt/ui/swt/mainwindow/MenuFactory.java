@@ -1396,7 +1396,11 @@ public class MenuFactory
 				BufferedInputStream bis = new BufferedInputStream( new FileInputStream( str ));
 
 				try{
-					Map map = BDecoder.decode( bis );
+					BDecoder decoder = new BDecoder();
+					
+			    	decoder.setForceUTF8Keys( true );
+			    	
+					Map map = decoder.decodeStream( bis );
 
 					if ( map == null ){
 
@@ -1512,7 +1516,11 @@ public class MenuFactory
 								}
 
 								try{
-									byte[] bytes = BEncoder.encode( map );
+									BEncoder encoder = new BEncoder();
+									
+									encoder.setForceUTF8Keys( true );
+									
+									byte[] bytes = encoder.encodeMap( map );
 
 									FileUtil.writeBytesAsFile( str2, bytes );
 
@@ -2539,12 +2547,16 @@ public class MenuFactory
 													for ( String e: errors ){
 														
 														str += (str.isEmpty()?"":"\n\n") + e;
-													}
-														
+													}								
+
 													MessageBoxShell mb = new MessageBoxShell(
 															SWT.ICON_ERROR | SWT.OK,
 															"window.update.failed", new String[]{ str });
 
+													mb.setUseTextBox( true );
+													
+													mb.setSize( 400,  -1, -1, 600 );
+													
 													mb.open(null);												
 												}
 											}

@@ -25,6 +25,7 @@ import com.biglybt.core.download.DownloadManager;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.DirectByteBuffer;
 import com.biglybt.core.util.FileUtil;
+import com.biglybt.core.util.StringInterner.FileKey;
 
 /**
  * @author Olivier
@@ -172,9 +173,21 @@ DiskManagerFileInfo
 
 	public DownloadManager	getDownloadManager();
 
+	public default boolean
+	isMetadataDownload()
+	{
+		DownloadManager dm = getDownloadManager();
+		
+		return( dm != null && dm.isMetadataDownload());
+	}
+	
 	public DiskManager getDiskManager();
 
 	public File getFile( boolean follow_link );
+	
+	public FileKey getFileKey( boolean follow_link );
+	
+	public String getFileName( boolean follow_link );
 
 	public TOTorrentFile
 	getTorrentFile();

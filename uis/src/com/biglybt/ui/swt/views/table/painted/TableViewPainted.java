@@ -198,6 +198,10 @@ public class TableViewPainted
 	private int rowMinHeight;
 
 	private volatile boolean												selectionIsFromDrag;
+	
+		// SCLEnabler is used to defer content selection events during a drag-selection
+		// action until after the drag has completed
+	
 	private volatile SelectedContentManager.SelectedContentListenersEnabler SCLEnabler;
 
 	private class
@@ -3041,6 +3045,16 @@ public class TableViewPainted
 	  				if ( REDUCE_GC_CREATION ){
 	  				
 	  					canvasImageGC	= new GC( canvasImage );
+	  					
+	  						// without this we get occasional white background flashes when initialising
+	  						// the view
+	  					
+	  					if ( Utils.isDarkAppearanceNative()){
+	  					
+	  						canvasImageGC.setBackground(TablePaintedUtils.getColour(cTable.getDisplay(), SWT.COLOR_LIST_BACKGROUND));
+	  					
+	  						canvasImageGC.fillRectangle(canvasImage.getBounds());
+	  					}
 	  				}
 	  			}else{
 	  				
@@ -3215,7 +3229,7 @@ public class TableViewPainted
 				}
 			} else {
 				if (view != null) {
-					view.triggerEvent(UISWTViewEvent.TYPE_FOCUSLOST, null);
+					view.triggerEvent(UISWTViewEvent.TYPE_HIDDEN, null);
 				}
 			}
 		}

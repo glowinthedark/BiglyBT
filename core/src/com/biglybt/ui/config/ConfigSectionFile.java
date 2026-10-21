@@ -100,11 +100,19 @@ public class ConfigSectionFile
 		BooleanParameterImpl paramShowSep = new BooleanParameterImpl(BCFG_UI_ADDTORRENT_OPENOPTIONS_SEP,
 			"ConfigView.section.file.showopentorrentoptions.sep");
 		paramShowSep.setAllowedUiTypes(UIInstance.UIT_SWT);
+		paramShowSep.setIndent(1,true);
 		add(paramShowSep, listDefaultDir);
+
+		BooleanParameterImpl paramKeepOntop = new BooleanParameterImpl(BCFG_UI_ADDTORRENT_OPENOPTIONS_ONTOP,
+				"ConfigView.section.file.showopentorrentoptions.ontop");
+		paramKeepOntop.setAllowedUiTypes(UIInstance.UIT_SWT);
+		paramKeepOntop.setIndent(1,true);
+		add(paramKeepOntop, listDefaultDir);
 
 		BooleanParameterImpl paramAlwaysSidebar = new BooleanParameterImpl(BCFG_UI_ADDTORRENT_OPENOPTIONS_ALWAYS_SIDEBAR,
 				"ConfigView.section.file.showopentorrentoptions.always.sidebar");
 		paramAlwaysSidebar.setAllowedUiTypes(UIInstance.UIT_SWT);
+		paramAlwaysSidebar.setIndent(1,true);
 		add(paramAlwaysSidebar, listDefaultDir);
 
 		paramShowSep.addDisabledOnSelection( paramAlwaysSidebar );
@@ -112,6 +120,7 @@ public class ConfigSectionFile
 		IntParameterImpl autoClose = new IntParameterImpl(
 				ICFG_UI_ADDTORRENT_OPENOPTIONS_AUTO_CLOSE_SECS,
 				"ConfigView.label.showopentorrentoptions.autoclose");
+		autoClose.setIndent(1,true);
 		add( autoClose, Parameter.MODE_INTERMEDIATE, listDefaultDir);
 
 		
@@ -621,6 +630,13 @@ public class ConfigSectionFile
 				Integer.MAX_VALUE);
 		add(paramAutoSkipMinSize, Parameter.MODE_INTERMEDIATE, listIgnoredFiles);
 
+			// hide padding files
+		
+		BooleanParameterImpl hide_pad =new BooleanParameterImpl(BCFG_HIDE_PADDING_FILES,
+				"ConfigView.label.hide.pad.files");
+		
+		add(hide_pad, Parameter.MODE_INTERMEDIATE, listIgnoredFiles);	
+		
 		// torrent create/delete ignore files
 
 		StringParameterImpl ignoreCreateDelete = new StringParameterImpl(

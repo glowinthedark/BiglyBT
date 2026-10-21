@@ -41,6 +41,8 @@ DownloadManagerState
 	public static final long   FAS_DEFAULT					= 0;
 	public static final long   FAS_ZERO_NEW					= 1;
 	public static final long   FAS_ZERO_NEW_STOP			= 2;
+	public static final long   FAS_SPARSE					= 3;
+	public static final long   FAS_SPARSE_ZERO_LENGTH		= 4;
 	
 	public static final String AT_VERSION					= "version";
 	public static final String AT_CATEGORY					= "category";
@@ -100,6 +102,7 @@ DownloadManagerState
 	public static final String AT_PLUGIN_OPTIONS			= "pluginoptions";	// Map
 	public static final String AT_PO_ENABLE_ANNOUNCE		= "enableannounce";		// boolean, def=true
 	public static final String AT_SET_FILE_PRIORITY_REM_PIECE	= "sfp.rp";		// int
+	public static final String AT_SET_FILE_PRIORITY_REM_PERCENT	= "sfp.rpct";	// int
 	public static final String AT_LAST_SCRAPE_TIME			= "lastscrape";		// long
 	public static final String AT_SKIPPED_FILESET_SIZE		= "skipfss";		// long
 	public static final String AT_SKIPPED_BUT_DOWNLOADED	= "skipbdl";		// long

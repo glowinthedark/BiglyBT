@@ -1022,7 +1022,7 @@ DownloadImpl
 
 	@Override
 	public void
-	filePriorityChanged( DownloadManager download, com.biglybt.core.disk.DiskManagerFileInfo file )
+	filePriorityChanged( DownloadManager download, List<com.biglybt.core.disk.DiskManagerFileInfo> files )
 	{
 	}
 
@@ -2501,7 +2501,7 @@ DownloadImpl
 		}
 		this.setForceStart(false);
 
-		int state = this.getState();
+		int state = download_manager.getState();
 		if (state == DownloadManager.STATE_STOPPED ||	state == DownloadManager.STATE_QUEUED) {
 			download_manager.setStateWaiting();
 		}

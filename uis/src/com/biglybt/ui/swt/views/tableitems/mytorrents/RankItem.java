@@ -289,7 +289,14 @@ public class RankItem
 	TableView<?> 	tv,
 	boolean			test )
   {
-	  String lines[] = ClipboardCopy.copyFromClipboard().split( "\n" );
+	  String clip = ClipboardCopy.copyFromClipboard();
+	  
+	  if ( clip == null ){
+		  
+		  return( false );
+	  }
+			  
+	  String lines[] = clip.split( "\n" );
 	  
 	  if ( lines.length == 0 ){
 		  
@@ -486,7 +493,7 @@ public class RankItem
 					}
 					@Override
 					public void
-					filePriorityChanged( DownloadManager download, com.biglybt.core.disk.DiskManagerFileInfo file )
+					filePriorityChanged( DownloadManager download, List<com.biglybt.core.disk.DiskManagerFileInfo> file )
 					{
 					}
     		 };

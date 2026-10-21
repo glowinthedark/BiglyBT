@@ -1639,8 +1639,13 @@ public class TrackerStatus {
 
 		int handler_port = UDPNetworkManager.getSingleton().getUDPNonDataListeningPortNumber();
 
-		List<InetSocketAddress>	url_addresses = UrlUtils.getURLAddresses( reqUrl );
+		List<InetSocketAddress>	url_addresses = UrlUtils.getAllByName( reqUrl );
 
+		if ( url_addresses.isEmpty()){
+			
+			throw( new Exception( "Host has no addresses" ));
+		}
+		
 		Throwable last_error = null;
 
 		boolean ipv6_enabled =  NetworkAdmin.getSingleton().isIPV6Enabled();

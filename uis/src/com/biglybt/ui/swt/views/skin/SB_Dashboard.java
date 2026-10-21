@@ -31,7 +31,9 @@ import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.TextTransfer;
 import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.events.*;
+import org.eclipse.swt.graphics.Cursor;
 import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FormLayout;
@@ -43,6 +45,7 @@ import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.*;
 import com.biglybt.pifimpl.local.PluginInitializer;
+import com.biglybt.ui.UIFunctionsManager;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfo;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfoListener;
 import com.biglybt.ui.common.viewtitleinfo.ViewTitleInfoManager;
@@ -52,8 +55,10 @@ import com.biglybt.ui.swt.Messages;
 import com.biglybt.ui.swt.SimpleTextEntryWindow;
 import com.biglybt.ui.swt.Utils;
 import com.biglybt.ui.swt.components.shell.ShellFactory;
+import com.biglybt.ui.swt.imageloader.ImageLoader;
 import com.biglybt.ui.swt.mainwindow.Colors;
 import com.biglybt.ui.swt.mdi.BaseMdiEntry;
+import com.biglybt.ui.swt.mdi.MdiEntryVitalityImageSWT;
 import com.biglybt.ui.swt.mdi.MultipleDocumentInterfaceSWT;
 import com.biglybt.ui.swt.pif.UISWTInstance;
 import com.biglybt.ui.swt.pif.UISWTView;
@@ -71,6 +76,7 @@ import com.biglybt.ui.swt.skin.SWTSkinUtils;
 import com.biglybt.ui.swt.views.IViewAlwaysInitialize;
 import com.biglybt.ui.swt.views.ViewManagerSWT;
 import com.biglybt.ui.swt.views.skin.sidebar.SideBar;
+import com.biglybt.ui.swt.views.skin.sidebar.SideBarEntrySWT;
 import com.biglybt.ui.swt.widgets.TabFolderRenderer;
 import com.biglybt.ui.swt.widgets.TabFolderRenderer.Adapter;
 import com.biglybt.ui.swt.widgets.TabFolderRenderer.TabbedEntry;
@@ -93,9 +99,9 @@ public class SB_Dashboard
 			// examples are bencoded - grab from stdout when using right-click "export to clipboard" (actual export is json)
 			
 		{ "dashboard.example.1", "d5:itemsld4:_uidi173e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Library8:title_id15:sidebar.Libraryed4:_uidi175e12:control_typei0e11:data_source17:TransferStatsView14:event_listenerd4:name43:com.biglybt.ui.swt.views.stats.ActivityViewe2:id9:SpeedView3:mdi6:tabbed7:skin_id25:com.biglybt.ui.skin.skin35:title8:Activity8:title_id20:SpeedView.title.fulled4:_uidi177e12:control_typei0e14:event_listenerd4:name56:com.aelitis.azureus.plugins.view3d.Plugin3D$ViewListener9:plugin_id6:3dview11:plugin_name7:3D Viewe2:id23:view3d.most.active.name3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title21:3D View (Most Active)8:title_id23:view3d.most.active.nameee6:layout35:173,173,177;173,173,177;175,175,1758:use_tabsi0e7:weights15:686,309;678,321e" },
- 		{ "dashboard.example.2", "d5:itemsld4:_uidi178e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Library8:title_id15:sidebar.Libraryed4:_uidi181e12:control_typei0e11:data_sourced6:exportd4:anoni1e4:h_cmi1e5:h_dlnl3:I2Pe2:id16:UHQOFCLPP5YEIFRO7:versioni2e2:voi1ee8:exporter50:com.biglybt.core.subs.impl.SubscriptionManagerImple14:event_listenerd4:name49:com.biglybt.ui.swt.subscriptions.SubscriptionViewe2:id111:Subscription_042F84BA33D7C69F5F0BBDF56771D065E56ECE405EF157C8B14389477F6260F62062DFBF5EC5FA2E4904AC0C361F8243923:mdi7:sidebar9:parent_id13:Subscriptions7:skin_id25:com.biglybt.ui.skin.skin35:title23:Anon - Shares: Receiveded4:_uidi182e12:control_typei0e11:data_sourced6:exportd2:dn12:Shares: Sent3:key27:Dashboard: Anonymous Shares7:network3:I2P2:vti2ee8:exporter44:com.biglybt.plugin.net.buddy.BuddyPluginBetae14:event_listenerd4:name41:com.biglybt.plugin.net.buddy.swt.ChatViewe2:id53:Chat_I2P:IRQXG2DCN5QXEZB2EBAW433OPFWW65LTEBJWQYLSMVZQ3:mdi7:sidebar9:parent_id12:ChatOverview7:skin_id25:com.biglybt.ui.skin.skin35:title19:Anon - Shares: Sentee6:layout35:178,182,182;178,181,181;178,181,1818:use_tabsi0e7:weights15:713,284;200,200e" },
-		{ "dashboard.example.3", "d5:itemsld4:_uidi183e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Library8:title_id15:sidebar.Libraryed4:_uidi184e12:control_typei0e14:event_listenerd4:name39:com.biglybt.ui.swt.views.PeersSuperViewe2:id12:AllPeersView3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin35:title9:All Peers8:title_id23:AllPeersView.title.fulled4:_uidi185e12:control_typei0e2:id8:Activity3:mdi7:sidebar9:parent_id11:header.vuze7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref8:activity5:title13:Notifications8:title_id16:sidebar.Activityed4:_uidi192e12:control_typei0e2:id12:ChatOverview3:mdi7:sidebar9:parent_id16:header.discovery7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref9:chatsview5:title13:Chat Overview8:title_id18:chats.view.headinged4:_uidi193e12:control_typei0e2:id14:RelatedContent3:mdi7:sidebar9:parent_id16:header.discovery7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:rcmview5:title17:Swarm Discoveries8:title_id25:RelatedContent.title.fulled4:_uidi194e12:control_typei0e14:event_listenerd4:name35:com.biglybt.ui.swt.views.ConfigViewe2:id10:ConfigView3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title7:Options8:title_id21:ConfigView.title.fulled4:_uidi195e12:control_typei0e14:event_listenerd4:name40:com.biglybt.ui.swt.views.stats.StatsViewe2:id9:StatsView3:mdi7:sidebar9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title10:Statistics8:title_id16:Stats.title.fullee6:layout195:183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,195;183,184,185,192,193,194,1958:use_tabsi1e7:weights0:e" },
- 	};
+ 		{ "dashboard.example.2", "d5:itemsld4:_uidi178e12:control_typei0e2:id7:Library3:mdi7:sidebar9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Library8:title_id15:sidebar.Libraryed4:_uidi181e12:control_typei0e11:data_sourced6:exportd4:anoni1e4:h_cmi1e5:h_dlnl3:I2Pe2:id16:UHQOFCLPP5YEIFRO7:versioni2e2:voi1ee8:exporter50:com.biglybt.core.subs.impl.SubscriptionManagerImple14:event_listenerd4:name49:com.biglybt.ui.swt.subscriptions.SubscriptionViewe2:id111:Subscription_042F84BA33D7C69F5F0BBDF56771D065E56ECE405EF157C8B14389477F6260F62062DFBF5EC5FA2E4904AC0C361F8243923:mdi7:sidebar9:parent_id13:Subscriptions7:skin_id25:com.biglybt.ui.skin.skin35:title23:Anon - Shares: Receiveded4:_uidi182e12:control_typei0e11:data_sourced6:exportd2:dn12:Shares: Sent3:key27:Dashboard: Anonymous Shares7:network3:I2P2:vti2ee8:exporter44:com.biglybt.plugin.net.buddy.BuddyPluginBetae14:event_listenerd4:name48:com.biglybt.ui.swt.plugin.net.buddy.swt.ChatViewe2:id53:Chat_I2P:IRQXG2DCN5QXEZB2EBAW433OPFWW65LTEBJWQYLSMVZQ3:mdi7:sidebar9:parent_id12:ChatOverview7:skin_id25:com.biglybt.ui.skin.skin35:title19:Anon - Shares: Sentee6:layout35:178,182,182;178,181,181;178,181,1818:use_tabsi0e7:weights15:713,284;200,200e" },
+		{ "dashboard.example.3", "d5:itemsld4:_uidi213e12:control_typei0e2:id7:Library3:mdi7:sidebar17:mdi.image_left_id21:image.sidebar.library9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:library5:title7:Library8:title_id15:sidebar.Libraryed4:_uidi214e12:control_typei0e14:event_listenerd4:name39:com.biglybt.ui.swt.views.PeersSuperViewe2:id12:AllPeersView3:mdi7:sidebar17:mdi.image_left_id22:image.sidebar.allpeers11:mdi.vti_fid12:AllPeersView9:parent_id16:header.transfers7:skin_id25:com.biglybt.ui.skin.skin35:title9:All Peers8:title_id23:AllPeersView.title.fulled4:_uidi215e12:control_typei0e2:id8:Activity3:mdi7:sidebar17:mdi.image_left_id22:image.sidebar.activity9:parent_id11:header.vuze7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref8:activity5:title13:Notifications8:title_id16:sidebar.Activityed4:_uidi216e12:control_typei0e2:id12:ChatOverview3:mdi7:sidebar17:mdi.image_left_id27:image.sidebar.chat-overview9:parent_id16:header.discovery7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref9:chatsview5:title13:Chat Overview8:title_id23:mdi.entry.chatsoverviewed4:_uidi217e12:control_typei0e2:id14:RelatedContent3:mdi7:sidebar17:mdi.image_left_id17:image.sidebar.rcm9:parent_id16:header.discovery7:skin_id25:com.biglybt.ui.skin.skin38:skin_ref7:rcmview5:title17:Swarm Discoveries8:title_id25:RelatedContent.title.fulled4:_uidi218e12:control_typei0e14:event_listenerd4:name35:com.biglybt.ui.swt.views.ConfigViewe2:id10:ConfigView3:mdi7:sidebar17:mdi.image_left_id17:image.sidebar.cog9:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title7:Options8:title_id21:ConfigView.title.fulled4:_uidi219e12:control_typei0e11:data_source17:TransferStatsView14:event_listenerd4:name40:com.biglybt.ui.swt.views.stats.StatsViewe2:id9:StatsView3:mdi7:sidebar17:mdi.image_left_id20:image.sidebar.stats29:parent_id14:header.plugins7:skin_id25:com.biglybt.ui.skin.skin35:title10:Statistics8:title_id16:Stats.title.fullee6:layout195:213,214,215,216,217,218,219;213,214,215,216,217,218,219;213,214,215,216,217,218,219;213,214,215,216,217,218,219;213,214,215,216,217,218,219;213,214,215,216,217,218,219;213,214,215,216,217,218,2198:use_tabsi1e7:weights0:e" },
+	};
 	
 	private DashboardInstance	main_dashboard = new DashboardInstance();
 	
@@ -195,9 +201,7 @@ public class SB_Dashboard
 									map.put( "data_source", key );
 									map.put( "control_type", 0L );
 									
-									main_dashboard.addItem( map );
-									
-									main_dashboard.fireChanged();
+									main_dashboard.addItem( map, true );
 								}
 							}});
 					}
@@ -244,10 +248,15 @@ public class SB_Dashboard
 										main_dashboard.importDashboard( entry[1], false );
 										
 										SideBar sidebar = (SideBar) SkinViewManager.getByClass(SideBar.class);
-	
-										if ( sidebar != null && sidebar.isVisible()) {
 											
-											sidebar.flipSideBarVisibility();
+										if ( sidebar != null ){
+											
+											sidebar.loadEntryByID( MultipleDocumentInterface.SIDEBAR_HEADER_DASHBOARD, true );
+
+											if ( sidebar.isVisible()) {
+											
+												sidebar.flipSideBarVisibility();
+											}
 										}
 									}
 								});
@@ -536,6 +545,22 @@ public class SB_Dashboard
 				}
 			});
 		
+		SimpleTimer.addPeriodicEvent(
+				"dashboard:vti.refresh",
+				1000,
+				(ev)->{			
+					if ( bigly_ui ){
+						
+						main_dashboard.refresh( null );
+					
+						sidebar_dashboard.refresh( null );
+					
+						rightbar_dashboard.refresh( null );
+					}
+					
+					topbar_dashboard.refresh( null );
+				});
+		
 		MessageText.addListener((l1,l2)->{
 			if ( bigly_ui ){
 				
@@ -556,9 +581,7 @@ public class SB_Dashboard
 	{
 		Map<String,Object> map = entry.exportStandAlone();
 				
-		main_dashboard.addItem( map );
-		
-		main_dashboard.fireChanged();
+		main_dashboard.addItem( map, true );
 	}
 	
 	public void
@@ -574,9 +597,7 @@ public class SB_Dashboard
 	{
 		Map<String,Object> map = entry.exportStandAlone();
 		
-		sidebar_dashboard.addItem( map );
-		
-		sidebar_dashboard.fireChanged();
+		sidebar_dashboard.addItem( map, true );
 	}
 
 	public DashboardInstance
@@ -591,9 +612,7 @@ public class SB_Dashboard
 	{
 		Map<String,Object> map = entry.exportStandAlone();
 				
-		rightbar_dashboard.addItem( map );
-		
-		rightbar_dashboard.fireChanged();
+		rightbar_dashboard.addItem( map, true );
 	}
 
 	public DashboardInstance
@@ -608,9 +627,7 @@ public class SB_Dashboard
 	{
 		Map<String,Object> map = entry.exportStandAlone();
 				
-		topbar_dashboard.addItem( map );
-		
-		topbar_dashboard.fireChanged();
+		topbar_dashboard.addItem( map, true );
 	}
 
 	public DashboardInstance
@@ -665,9 +682,7 @@ public class SB_Dashboard
 			items.add( map );
 		}
 				
-		topbar_dashboard.addItems( items );
-		
-		topbar_dashboard.fireChanged();
+		topbar_dashboard.addItems( items, true );
 	}
 	
 	public void
@@ -786,7 +801,8 @@ public class SB_Dashboard
 		private final String	config_prefix;
 		private final boolean	use_tabs_default;
 		
-		Composite main_composite;
+		private Composite			main_composite;
+		private List<CTabFolder>	tab_folders = new ArrayList<>();
 		
 		private CopyOnWriteList<DashboardItem>		items = new CopyOnWriteList<>();
 		
@@ -802,6 +818,8 @@ public class SB_Dashboard
 			config_prefix = "dashboard";
 			
 			use_tabs_default = false;
+			
+			init();
 		}
 		
 		private
@@ -812,6 +830,13 @@ public class SB_Dashboard
 			config_prefix = "dashboard." + _id;
 			
 			use_tabs_default = _use_tabs_default;
+			
+			init();
+		}
+		
+		private void
+		init()
+		{
 		}
 		
 		private void
@@ -1036,7 +1061,7 @@ public class SB_Dashboard
 			map.put( "data_source", starting_url );
 			map.put( "control_type", 0L );
 			
-			addItem( map );
+			addItem( map, false );
 		}
 		
 		private int
@@ -1053,19 +1078,23 @@ public class SB_Dashboard
 		
 		private void
 		addItem(
-			Map		map )
+			Map			map,
+			boolean		fire_if_changed )
 		{
 			List<Map>	list = new ArrayList<>(1);
 			
 			list.add( map );
 			
-			addItems( list );
+			addItems( list, fire_if_changed );
 		}
 		
 		private void
 		addItems(
-			List<Map>	item_list )
+			List<Map>	item_list,
+			boolean		fire_if_changed )
 		{
+			List<DashboardItem> new_ditems = new ArrayList<>();
+			
 			synchronized( items ) {
 
 				int[][] initial_layout = getDashboardLayout();
@@ -1078,12 +1107,28 @@ public class SB_Dashboard
 					
 					items.add( item );
 					
+					new_ditems.add( item );
+					
 					layout = ensureUIDInLayout( layout, item.getUID());
 				}
 				
 				if ( layout != initial_layout ) {
 					
 					setDashboardLayout( layout, items.size(), false );
+				}
+			}
+			
+			if ( fire_if_changed ){
+				
+					// quick hack to append to tab folder without entire rebuild
+				
+				if ( getUseTabs() && tab_folders.size() == 1 && !new_ditems.isEmpty()){
+					
+					setupTabItems( tab_folders.get(0), new_ditems );
+					
+				}else{
+				
+					fireChanged();
 				}
 			}
 		}
@@ -1173,6 +1218,8 @@ public class SB_Dashboard
 					
 				item.remove( false );
 			}
+			
+			tab_folders.clear();
 		}
 		
 		private boolean
@@ -1298,6 +1345,10 @@ public class SB_Dashboard
 		setupTabFolder(
 			CTabFolder	tf )
 		{
+			tab_folders.add( tf );
+			
+			tf.addDisposeListener((ev)->{ tab_folders.remove( tf ); });
+			
 			tf.setUnselectedCloseVisible( false );
 			
 			tf.addCTabFolder2Listener(new CTabFolder2Adapter() {
@@ -1346,7 +1397,92 @@ public class SB_Dashboard
 							return( null );
 						}
 					});
+			
+			tf.addMouseMoveListener(e -> {
+				TabFolderRenderer.TabbedEntryVitalityImage vitalityImage = getVitalityImageAtPos(tf, e.x, e.y);
+				String tooltip = null;
+				Cursor cursor = null;
+
+				if (vitalityImage != null && vitalityImage.isVisible()) {
+					if (vitalityImage.hasListeners()) {
+						cursor = e.display.getSystemCursor(SWT.CURSOR_HAND);
+					}
+					tooltip = vitalityImage.getToolTip();
+				}
+
+				if (tf.getCursor() != cursor) {
+					tf.setCursor(cursor);
+				}
+				CTabItem item = tf.getItem(new Point(e.x, e.y));
+				if (item != null && item.getToolTipText() != tooltip) {
+					item.setToolTipText(tooltip);
+				}
+			});
+			
+			Utils.addSafeMouseUpListener(tf,
+					e -> {
+						Widget widget = e.widget;
+						if ( widget.isDisposed()){
+							return;
+						}
+						widget.setData("downedVI", getVitalityImageAtPos(tf,e.x, e.y));
+					},
+					e -> {
+						Widget widget = e.widget;
+						if ( widget.isDisposed()){
+							return;
+						}
+						MdiEntryVitalityImageSWT vi = (MdiEntryVitalityImageSWT) widget.getData(
+								"downedVI");
+						widget.setData("downedVI", null);
+						if (e.button != 1) {
+							return;
+						}
+
+						if (vi != null && vi.hasListeners()) {
+							TabFolderRenderer.TabbedEntryVitalityImage viUp = getVitalityImageAtPos(tf,e.x, e.y);
+							if (vi != viUp) {
+								// Case: 
+								// 1) Mouse down on VitalityImage
+								// 2) Move mouse outside bounds
+								// 3) Mouse up within tabFolder (up outside tabfolder already eaten)
+								return;
+							}
+							vi.triggerClickedListeners(e.x, e.y);
+							return;
+						}
+					});
 		}
+		
+		private TabFolderRenderer.TabbedEntryVitalityImage 
+		getVitalityImageAtPos(
+			CTabFolder	tf,
+			int			x, 
+			int			y ) 
+		{
+			CTabItem ti = tf.getItem(new Point(x, y));
+			if (ti == null) {
+				return null;
+			}
+			DashboardItem item = (DashboardItem)ti.getData("sb:dashboarditem");
+			if (item == null) {
+				return null;
+			}
+			List<TabFolderRenderer.TabbedEntryVitalityImage> vitalityImages = item.getTabbedEntryVitalityImages();
+			
+			for (TabFolderRenderer.TabbedEntryVitalityImage vitalityImage : vitalityImages) {
+				if (!vitalityImage.isVisible()) {
+					continue;
+				}
+				Rectangle hitArea = vitalityImage.getHitArea();
+				if (hitArea != null && hitArea.contains(x, y)) {
+					return vitalityImage;
+				}
+			}
+
+			return null;
+		}
+
 		
 		private void
 		setupTabItem(
@@ -1368,14 +1504,60 @@ public class SB_Dashboard
 		}
 		
 		private void
+		setupTabItems(
+			CTabFolder			tf,
+			List<DashboardItem>	items )
+		{
+			Utils.execSWTThread(()->{
+				
+				CTabItem tab_item = null;
+				
+				int index = getAddNewHorizontal()?-1:0;
+				
+				for ( DashboardItem item: items ){
+					
+					tab_item = index==-1?new CTabItem( tf, SWT.NULL ):new CTabItem( tf, SWT.NULL, index++ );
+					
+					Composite tab_composite = new Composite( tf, SWT.NULL );
+					
+					tab_composite.setLayout( new FormLayout());
+					
+					tab_item.setControl( tab_composite );
+					
+					tab_composite.setLayoutData( Utils.getFilledFormData());
+					
+					build( tab_item, tab_composite, item, true );
+					
+					List<DashboardItem> temp = new ArrayList<>();
+					
+					temp.add( item );
+					
+					setupTabItem( tab_item, temp );
+				}
+				
+				if ( tab_item != null ){
+					
+					tf.setSelection( tab_item );
+				}
+				
+				writeConfig();
+			});
+		}
+		
+		private void
 		refreshTabFolder(
 			DashboardItem	di )
 		{
 			Utils.execSWTThread(()->{
 				
-				TabFolderRenderer renderer = (TabFolderRenderer)di.getTabbedEntryItem().getParent().getRenderer();
+				CTabFolder tf = di.getTabbedEntryItem().getParent();
 				
-				renderer.redraw( di );
+				if ( tf != null ){
+				
+					TabFolderRenderer renderer = (TabFolderRenderer)tf.getRenderer();
+				
+					renderer.redraw( di );
+				}
 			});
 		}
 		
@@ -1719,6 +1901,8 @@ public class SB_Dashboard
 			Composite		dashboard_composite )
 		{
 			main_composite = dashboard_composite;
+			
+			tab_folders.clear();
 			
 			try{
 				building++;
@@ -2424,7 +2608,7 @@ public class SB_Dashboard
 									
 									g.layout( true, true );
 									
-									item.setCurrentTab( parent_tab_item );
+									item.setCurrentTab( parent_tab_item, obj );
 								}
 							}else{
 								
@@ -2532,7 +2716,7 @@ public class SB_Dashboard
 				
 				c.setLayoutData( Utils.getFilledFormData());
 					
-				item.setCurrentTab( parent_tab_item );
+				item.setCurrentTab( parent_tab_item, imported );
 
 				c.addListener(
 					SWT.Show,
@@ -2542,7 +2726,7 @@ public class SB_Dashboard
 						public void handleEvent(Event arg0){
 							g.layout( true, true );
 							
-							item.setCurrentTab( parent_tab_item );
+							item.setCurrentTab( parent_tab_item, imported );
 						}
 					});
 			}catch( Throwable e ) {
@@ -2956,12 +3140,15 @@ public class SB_Dashboard
 		
 		public class
 		DashboardItem
-			implements TabFolderRenderer.TabbedEntry
+			implements TabFolderRenderer.TabbedEntry, MultipleDocumentInterface.VTIMdiHelper
 		{
 			private Map<String,Object>		map;
 			
 			private CTabItem		item;
 			private ViewTitleInfo	title_info;
+			private boolean			title_info_ours;
+			
+			private CopyOnWriteList<TabFolderRenderer.TabbedEntryVitalityImage>	vitality_images = new CopyOnWriteList<>();
 			
 			private
 			DashboardItem(
@@ -3042,7 +3229,7 @@ public class SB_Dashboard
 					}
 				}
 				
-				return( title );
+				return( title.length() <= 32? title: ( title.substring(0,32) + "..." ));
 			}
 			
 			public Map<String,Object>
@@ -3053,51 +3240,92 @@ public class SB_Dashboard
 			
 			public void
 			setCurrentTab(
-				CTabItem		_item )
+				CTabItem				_item,
+				SWTSkinObjectContainer	_soc )
 			{
 				item	= _item;
 				
-				title_info = null;
+				title_info		= null;
+				title_info_ours	= false;
 				
 				if ( item == null ){
 					
 					return;
 				}
 				
-				Control[] parent = new Control[]{ item.getControl()};
-				
-				LinkedList<Control[]> controls = new LinkedList<>();
-				
-				controls.add( parent );
-				
-				while( !controls.isEmpty()){
-				
-					Control[] cs = controls.removeFirst();
+				if ( _soc != null ){
 					
-					for ( Control c: cs ){
+					if ( title_info == null ){
 						
-						UISWTView view = (UISWTView)c.getData( "UISWTView" );
+						String vti_fid = (String)_soc.getData( "mdi.vti_fid" );
 						
-						if ( view instanceof UISWTViewCore ){
-								
-							title_info = ((UISWTViewCore)view).getViewTitleInfo();
+						if ( vti_fid != null ){
 							
-							if ( title_info != null ){
+							MultipleDocumentInterface mdi = UIFunctionsManager.getUIFunctions().getMDI();
+							
+							Object ds = _soc.getData( "imported.data.source" );
+							
+							title_info = mdi.createViewTitleInfo(vti_fid, this, ds );
+							
+							title_info_ours = true;
+						}
+					}
+					
+					String image_id = (String)_soc.getData( "mdi.image_left_id" );
+					
+					if ( image_id != null ){
+						
+						Image img = ImageLoader.getInstance().getImage( image_id );
+						
+						if ( img != null ){
+							
+							_item.setImage( img );
+							
+							_item.addDisposeListener((ev)->{
+								
+								ImageLoader.getInstance().releaseImage( image_id );
+							});
+						}
+					}
+				}
+				
+				if ( title_info == null ){
+					
+					Control[] parent = new Control[]{ item.getControl()};
+					
+					LinkedList<Control[]> controls = new LinkedList<>();
+					
+					controls.add( parent );
+					
+					while( !controls.isEmpty()){
+					
+						Control[] cs = controls.removeFirst();
+						
+						for ( Control c: cs ){
+							
+							UISWTView view = (UISWTView)c.getData( "UISWTView" );
+							
+							if ( view instanceof UISWTViewCore ){
+									
+								title_info = ((UISWTViewCore)view).getViewTitleInfo();
+								
+								if ( title_info != null ){
+									
+									break;
+								}
+							}
+							
+							if ( c instanceof ViewTitleInfo ){
+								
+								title_info = (ViewTitleInfo)c;
 								
 								break;
 							}
-						}
-						
-						if ( c instanceof ViewTitleInfo ){
 							
-							title_info = (ViewTitleInfo)c;
-							
-							break;
-						}
-						
-						if ( c instanceof Composite ){
-							
-							controls.add(((Composite)c).getChildren());
+							if ( c instanceof Composite ){
+								
+								controls.add(((Composite)c).getChildren());
+							}
 						}
 					}
 				}
@@ -3108,10 +3336,39 @@ public class SB_Dashboard
 			refresh(
 				ViewTitleInfo		info )
 			{
-				if ( info == title_info ){
+				if ( info == null ){
+					
+					if ( title_info_ours ){
+						
+						refreshTabFolder( this );
+					}
+				}else if ( info == title_info ){
 					
 					refreshTabFolder( this );
 				}
+			}
+			
+			@Override
+			public void 
+			redraw()
+			{
+				refreshTabFolder( this );
+			}
+			
+			@Override
+			public void 
+			setViewTitleInfo(
+				ViewTitleInfo vti)
+			{
+				title_info		= vti;
+				title_info_ours	= false;
+			}
+			
+			@Override
+			public void 
+			addListener(
+				MdiEntryDropListener l)
+			{
 			}
 			
 			@Override
@@ -3127,10 +3384,21 @@ public class SB_Dashboard
 				return( title_info );
 			}
 			
+			public MdiEntryVitalityImage 
+			addVitalityImage(
+				String imageID)
+			{
+				MdiEntryVitalityImageSWT vi = new MdiEntryVitalityImageSWT( null, imageID );
+				
+				vitality_images.add( vi );
+				
+				return( vi );
+			}
+			
 			public List<TabFolderRenderer.TabbedEntryVitalityImage> 
 			getTabbedEntryVitalityImages()
 			{
-				return( new ArrayList<>());
+				return( new ArrayList<>( vitality_images.getList()));
 			};
 			
 			@Override
@@ -3155,10 +3423,19 @@ public class SB_Dashboard
 						setDashboardLayout( layout, items.size(), true );
 					}			
 				}
+					
+				for ( TabFolderRenderer.TabbedEntryVitalityImage i: vitality_images ){
+					
+					((MdiEntryVitalityImageSWT)i).dispose();
+				}
 				
 				if ( items.size() == 0 || !already_disposed ){
 				
 					fireChanged();
+					
+				}else{
+					
+					writeConfig();
 				}
 			}
 		}		

@@ -87,7 +87,7 @@ public class PathNameItem extends CoreTableColumnSWT implements
 	{
 		final DiskManagerFileInfo fileInfo = (DiskManagerFileInfo) cell.getDataSource();
 		
-		String file_name = (fileInfo == null) ? "" : fileInfo.getFile(true).getName();
+		String file_name = (fileInfo == null) ? "" : fileInfo.getFileName(true);
 		
 		if (file_name == null){
 			file_name = "";
@@ -109,20 +109,21 @@ public class PathNameItem extends CoreTableColumnSWT implements
 		//setText returns true only if the text is updated
 		if (cell.setText(fk) || !cell.isValid()) {
 			if (bShowIcon && !sortOnlyRefresh) {
-				Image icon = null;
+				ImageRepository.PathIcon pi = null;
 
 				final TableCellSWT _cell = (TableCellSWT)cell;
 
 				if (fileInfo == null) {
-					icon = null;
+					pi = null;
 				} else {
 
 					// Don't ever dispose of PathIcon, it's cached and may be used elsewhere
 
 					if ( Utils.isSWTThread()){
 
-						icon = ImageRepository.getPathIcon(fileInfo.getFile(true).getPath(),
-								cell.getHeight() > 32, false);
+						pi = ImageRepository.getPathIcon(fileInfo.getFile(true).getPath(),
+								true, cell.getHeight() > 32, false,
+								fileInfo.getDownloaded() == fileInfo.getLength(), null);
 					}else{
 							// happens rarely (seen of filtering of file-view rows
 							// when a new row is added )
@@ -134,10 +135,11 @@ public class PathNameItem extends CoreTableColumnSWT implements
 								public void
 								run()
 								{
-									Image icon = ImageRepository.getPathIcon(fileInfo.getFile(true).getPath(),
-											_cell.getHeight() > 32, false);
+									ImageRepository.PathIcon pi = ImageRepository.getPathIcon(fileInfo.getFile(true).getPath(),
+													true, _cell.getHeight() > 32, false,
+													fileInfo.getDownloaded() == fileInfo.getLength(), null);
 
-									_cell.setIcon(icon);
+									_cell.setIcon( pi.image );
 
 									_cell.redraw();
 								}
@@ -148,8 +150,8 @@ public class PathNameItem extends CoreTableColumnSWT implements
 				// cheat for core, since we really know it's a TabeCellImpl and want to use
 				// those special functions not available to Plugins
 
-				if ( icon != null ){
-					_cell.setIcon(icon);
+				if ( pi != null && pi.image != null  ){
+					_cell.setIcon( pi.image );
 				}
 			}
 		}

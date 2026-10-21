@@ -213,6 +213,37 @@ public class MainMDISetup
 			}
 			);
 
+		mdi.registerViewTitleInfoFactory(
+			SIDEBAR_SECTION_ALLPEERS,
+			(mdientry,ds)->{
+				PeerControlScheduler scheduler = PeerControlSchedulerFactory.getSingleton(0);
+
+				ViewTitleInfo title_info =
+					new ViewTitleInfo()
+					{
+						@Override
+						public Object
+						getTitleInfoProperty(
+							int propertyID)
+						{
+							if ( propertyID == TITLE_FACTORY_ID ){
+								
+								return( SIDEBAR_SECTION_ALLPEERS );
+								
+							}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+								
+								int[] counts = scheduler.getPeerCount();
+								
+								return( counts[0] + " | " + counts[1] );
+							}
+							
+							return( null );
+						}
+					};
+						
+					return( title_info );
+			});
+		
 		mdi.registerEntry(SIDEBAR_SECTION_ALLPEERS,
 				id -> {
 					UISWTViewBuilderCore builder = new UISWTViewBuilderCore(id, null,
@@ -223,28 +254,11 @@ public class MainMDISetup
 					MdiEntry entry = mdi.createEntry(builder, true);
 
 					PeerControlScheduler scheduler = PeerControlSchedulerFactory.getSingleton(0);
-
-					ViewTitleInfo title_info =
-							new ViewTitleInfo()
-							{
-								@Override
-								public Object
-								getTitleInfoProperty(
-									int propertyID)
-								{
-									if ( propertyID == TITLE_INDICATOR_TEXT ){
-										
-										int[] counts = scheduler.getPeerCount();
-										
-										return( counts[0] + " | " + counts[1] );
-									}
-									
-									return( null );
-								}
-							};
 							
-					entry.setViewTitleInfo( title_info );
+					ViewTitleInfo title_info  = mdi.createViewTitleInfo( SIDEBAR_SECTION_ALLPEERS, entry, null );
 
+					entry.setViewTitleInfo( title_info );
+					
 					entry.setImageLeftID("image.sidebar.allpeers");
 					
 					final TimerEventPeriodic	timer =
@@ -296,6 +310,54 @@ public class MainMDISetup
 				});
 
 		
+			// all pieces
+		
+		mdi.registerViewTitleInfoFactory(
+				SIDEBAR_SECTION_ALLPIECES,
+				(mdientry,ds)->{
+					ViewTitleInfo vti =	new ViewTitleInfo()
+						{
+							PeerControlScheduler scheduler = PeerControlSchedulerFactory.getSingleton(0);
+						
+							@Override
+							public Object
+							getTitleInfoProperty(
+								int propertyID)
+							{
+								if ( propertyID == TITLE_FACTORY_ID ){
+
+									return( SIDEBAR_SECTION_ALLPIECES );
+									
+								}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+									
+									int[] counts = scheduler.getPieceCount();
+									
+									if ( mdientry instanceof MdiEntrySWT ){
+										
+										UISWTViewEventListener listener = ((MdiEntrySWT)mdientry).getEventListener();
+										
+										if ( listener instanceof PiecesViewBase ){
+											
+											int count = ((PiecesViewBase)listener).getUploadingPieceCount();
+											
+											if ( count >= 0 ){
+											
+												counts[1] = count;
+											}
+										}
+									}
+									
+									return( counts[0] + " | " + counts[1] );
+								}
+
+
+								return null;
+							}
+						};	
+						
+					return( vti );
+				});
+		
 		mdi.registerEntry(SIDEBAR_SECTION_ALLPIECES,
 				id -> {
 					UISWTViewBuilderCore builder = new UISWTViewBuilderCore(id, null, PiecesSuperView.class);
@@ -308,36 +370,7 @@ public class MainMDISetup
 
 					PeerControlScheduler scheduler = PeerControlSchedulerFactory.getSingleton(0);
 
-					ViewTitleInfo title_info =
-							new ViewTitleInfo()
-							{
-								@Override
-								public Object
-								getTitleInfoProperty(
-									int propertyID)
-								{
-									if ( propertyID == TITLE_INDICATOR_TEXT ){
-										
-										int[] counts = scheduler.getPieceCount();
-										
-										UISWTViewEventListener listener = entry.getEventListener();
-										
-										if ( listener instanceof PiecesViewBase ){
-											
-											int count = ((PiecesViewBase)listener).getUploadingPieceCount();
-											
-											if ( count >= 0 ){
-											
-												counts[1] = count;
-											}
-										}
-										
-										return( counts[0] + " | " + counts[1] );
-									}
-									
-									return( null );
-								}
-							};
+					ViewTitleInfo title_info = mdi.createViewTitleInfo( SIDEBAR_SECTION_ALLPIECES, entry, null );
 							
 					entry.setViewTitleInfo( title_info );
 
@@ -402,6 +435,43 @@ public class MainMDISetup
 					return( entry );
 				});
 		
+			// all blocks
+		
+		mdi.registerViewTitleInfoFactory(
+				SIDEBAR_SECTION_ALLBLOCKS,
+				(mdientry,ds)->{
+					ViewTitleInfo vti =	new ViewTitleInfo()
+						{
+							PeerControlScheduler scheduler = PeerControlSchedulerFactory.getSingleton(0);
+						
+							@Override
+							public Object
+							getTitleInfoProperty(
+								int propertyID)
+							{
+								if ( propertyID == TITLE_FACTORY_ID ){
+
+									return( SIDEBAR_SECTION_ALLBLOCKS );
+									
+								}else if ( propertyID == TITLE_TEXT ){
+									
+									return( MessageText.getString( "MainWindow.menu.view.allblocks" ));
+									
+								}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+									
+									int[] counts = scheduler.getPieceCount();
+									
+									return( "" + counts[0] );
+								}
+
+
+								return null;
+							}
+						};	
+						
+					return( vti );
+				});
+		
 		mdi.registerEntry(
 				SIDEBAR_SECTION_ALLBLOCKS,
 				id -> {
@@ -417,28 +487,7 @@ public class MainMDISetup
 
 					PeerControlScheduler scheduler = PeerControlSchedulerFactory.getSingleton(0);
 
-					ViewTitleInfo title_info =
-							new ViewTitleInfo()
-							{
-								@Override
-								public Object
-								getTitleInfoProperty(
-									int propertyID)
-								{
-									if ( propertyID == TITLE_TEXT ){
-										
-										return( MessageText.getString( "MainWindow.menu.view.allblocks" ));
-										
-									}else if ( propertyID == TITLE_INDICATOR_TEXT ){
-										
-										int[] counts = scheduler.getPieceCount();
-										
-										return( "" + counts[0] );
-									}
-									
-									return( null );
-								}
-							};
+					ViewTitleInfo title_info = mdi.createViewTitleInfo( SIDEBAR_SECTION_ALLBLOCKS, entry, null );
 							
 					entry.setViewTitleInfo( title_info );
 
@@ -495,6 +544,51 @@ public class MainMDISetup
 					return mdi.createEntry(builder, true);
 				});
 
+			// tags overview
+		
+		mdi.registerViewTitleInfoFactory(
+				SIDEBAR_SECTION_TAGS,
+				(mdientry,ds)->{
+					ViewTitleInfo2 title_info =
+							new ViewTitleInfo2()
+							{
+								TagManager tm = TagManagerFactory.getTagManager();
+
+								@Override
+								public Object
+								getTitleInfoProperty(
+									int propertyID)
+								{
+									if ( propertyID == TITLE_FACTORY_ID ){
+										
+										return( SIDEBAR_SECTION_TAGS );
+										
+									}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+										
+										int num = 0;
+										
+										for ( TagType tt: tm.getTagTypes()){
+											
+											num += tt.getTagCount();
+										}
+										
+										return( String.valueOf( num ));
+									}
+									
+									return( null );
+								}
+																
+								public VTIMdiHelper	
+								getLinkedMdiEntry()
+								{
+									return( mdientry );
+								}
+							};
+
+						
+					return( title_info );
+				});
+		
 		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_TAGS,
 				new MdiEntryCreationListener() {
 					@Override
@@ -509,36 +603,8 @@ public class MainMDISetup
 
 						TagManager tm = TagManagerFactory.getTagManager();
 
-						ViewTitleInfo2 title_info =
-							new ViewTitleInfo2()
-							{
-								@Override
-								public Object
-								getTitleInfoProperty(
-									int propertyID)
-								{
-									if ( propertyID == TITLE_INDICATOR_TEXT ){
-										
-										int num = 0;
-										
-										for ( TagType tt: tm.getTagTypes()){
-											
-											num += tt.getTagCount();
-										}
-										
-										return( String.valueOf( num ));
-									}
-									
-									return( null );
-								}
-								
-								public void titleInfoLinked(MultipleDocumentInterface mdi, MdiEntry mdiEntry){}
-								
-								public MdiEntry	getLinkedMdiEntry(){
-									return( entry );
-								}
-							};
-
+						ViewTitleInfo title_info = mdi.createViewTitleInfo(SIDEBAR_SECTION_TAGS, entry, null );
+						
 						entry.setViewTitleInfo( title_info );
 												
 						TagTypeListener ttl = 
@@ -606,6 +672,7 @@ public class MainMDISetup
 						return entry;
 					}
 				});
+		
 		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_TAG_DISCOVERY,
 				new MdiEntryCreationListener() {
 					@Override
@@ -818,31 +885,47 @@ public class MainMDISetup
 				});
 		}
 		
-		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_ARCHIVED_DOWNLOADS,
+			// archived downloads
+		
+		mdi.registerViewTitleInfoFactory(
+				SIDEBAR_SECTION_ARCHIVED_DOWNLOADS,
+				(mdientry,ds)->{
+					ViewTitleInfo vti =	new ViewTitleInfo()
+						{
+							com.biglybt.pif.download.DownloadManager download_manager = PluginInitializer.getDefaultInterface().getDownloadManager();
+						
+							@Override
+							public Object
+							getTitleInfoProperty(
+								int propertyID)
+							{
+								if ( propertyID == TITLE_FACTORY_ID ){
+
+									return( SIDEBAR_SECTION_ARCHIVED_DOWNLOADS );
+									
+								}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+
+									int num = download_manager.getDownloadStubCount();
+
+									return( String.valueOf( num ) );
+								}
+
+
+								return null;
+							}
+						};	
+						
+					return( vti );
+				});
+		
+		mdi.registerEntry(SIDEBAR_SECTION_ARCHIVED_DOWNLOADS,
 				new MdiEntryCreationListener() {
 					@Override
 					public MdiEntry createMDiEntry(String id) {
 
-						final com.biglybt.pif.download.DownloadManager download_manager = PluginInitializer.getDefaultInterface().getDownloadManager();
+						com.biglybt.pif.download.DownloadManager download_manager = PluginInitializer.getDefaultInterface().getDownloadManager();
 
-						final ViewTitleInfo title_info =
-							new ViewTitleInfo()
-							{
-								@Override
-								public Object
-								getTitleInfoProperty(
-									int propertyID)
-								{
-									if ( propertyID == TITLE_INDICATOR_TEXT ){
-
-										int num = download_manager.getDownloadStubCount();
-
-										return( String.valueOf( num ) );
-									}
-
-									return null;
-								}
-							};
+						ViewTitleInfo title_info = mdi.createViewTitleInfo( SIDEBAR_SECTION_ARCHIVED_DOWNLOADS, null, null );
 
 						MdiEntry entry = mdi.createEntryFromSkinRef(
 								SIDEBAR_HEADER_TRANSFERS,
@@ -975,42 +1058,56 @@ public class MainMDISetup
 
 			// download history
 
+		mdi.registerViewTitleInfoFactory(
+				SIDEBAR_SECTION_DOWNLOAD_HISTORY,
+				(mdientry,ds)->{
+					ViewTitleInfo vti =	new ViewTitleInfo()
+						{
+							DownloadHistoryManager history_manager = (DownloadHistoryManager) CoreFactory.getSingleton().getGlobalManager().getDownloadHistoryManager();
+
+						
+							@Override
+							public Object
+							getTitleInfoProperty(
+								int propertyID)
+							{
+								if ( propertyID == TITLE_FACTORY_ID ){
+
+									return( SIDEBAR_SECTION_DOWNLOAD_HISTORY );
+									
+								}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+
+									if ( history_manager == null ){
+
+										return( null );
+
+									}else if ( history_manager.isEnabled()){
+
+										int num = history_manager.getHistoryCount();
+
+										return( String.valueOf( num ));
+
+									}else{
+
+										return( MessageText.getString( "label.disabled" ));
+									}
+								}
+
+								return null;
+							}
+						};	
+						
+					return( vti );
+				});
+		
 		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_DOWNLOAD_HISTORY,
 				new MdiEntryCreationListener() {
 					@Override
 					public MdiEntry createMDiEntry(String id) {
 
-						final DownloadHistoryManager history_manager = (DownloadHistoryManager) CoreFactory.getSingleton().getGlobalManager().getDownloadHistoryManager();
+						DownloadHistoryManager history_manager = (DownloadHistoryManager) CoreFactory.getSingleton().getGlobalManager().getDownloadHistoryManager();
 
-						final ViewTitleInfo title_info =
-							new ViewTitleInfo()
-							{
-								@Override
-								public Object
-								getTitleInfoProperty(
-									int propertyID)
-								{
-									if ( propertyID == TITLE_INDICATOR_TEXT ){
-
-										if ( history_manager == null ){
-
-											return( null );
-
-										}else if ( history_manager.isEnabled()){
-
-											int num = history_manager.getHistoryCount();
-
-											return( String.valueOf( num ));
-
-										}else{
-
-											return( MessageText.getString( "label.disabled" ));
-										}
-									}
-
-									return null;
-								}
-							};
+						ViewTitleInfo title_info = mdi.createViewTitleInfo( SIDEBAR_SECTION_DOWNLOAD_HISTORY, null, null );
 
 						MdiEntry entry = mdi.createEntryFromSkinRef(
 								SIDEBAR_HEADER_TRANSFERS,
@@ -1056,6 +1153,34 @@ public class MainMDISetup
 		
 		// all trackers
 
+	mdi.registerViewTitleInfoFactory(
+			SIDEBAR_SECTION_ALL_TRACKERS,
+			(mdientry,ds)->{
+				ViewTitleInfo vti =	new ViewTitleInfo()
+					{
+						AllTrackers	all_trackers = AllTrackersManager.getAllTrackers();
+					
+						@Override
+						public Object
+						getTitleInfoProperty(
+							int propertyID)
+						{
+							if ( propertyID == TITLE_FACTORY_ID ){
+
+								return( SIDEBAR_SECTION_ALL_TRACKERS );
+								
+							}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+
+								return( String.valueOf( all_trackers.getTrackerCount()));
+							}
+
+							return null;
+						}
+					};	
+					
+				return( vti );
+			});
+	
 	mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_ALL_TRACKERS,
 			new MdiEntryCreationListener() {
 				@Override
@@ -1063,22 +1188,7 @@ public class MainMDISetup
 
 					AllTrackers	all_trackers = AllTrackersManager.getAllTrackers();
 					
-					final ViewTitleInfo title_info =
-						new ViewTitleInfo()
-						{
-							@Override
-							public Object
-							getTitleInfoProperty(
-								int propertyID)
-							{
-								if ( propertyID == TITLE_INDICATOR_TEXT ){
-
-									return( String.valueOf( all_trackers.getTrackerCount()));
-								}
-
-								return null;
-							}
-						};
+					ViewTitleInfo title_info = mdi.createViewTitleInfo( SIDEBAR_SECTION_ALL_TRACKERS, null, null );
 
 					MdiEntry entry = mdi.createEntryFromSkinRef(
 							SIDEBAR_HEADER_TRANSFERS,
@@ -1138,6 +1248,49 @@ public class MainMDISetup
 					return entry;
 				});
 
+		mdi.registerViewTitleInfoFactory(
+				SIDEBAR_SECTION_MY_SHARES,
+				(mdientry,ds)->{
+					ViewTitleInfo title_info =
+						new ViewTitleInfo()
+						{
+							final ShareManager sm;
+							
+							{
+								ShareManager temp;
+								
+								try{
+									temp = CoreFactory.getSingleton().getPluginManager().getDefaultPluginInterface().getShareManager();
+									
+								}catch( Throwable e ){
+									
+									temp = null;
+								}
+								
+								sm = temp;
+							}
+						
+							@Override
+							public Object
+							getTitleInfoProperty(
+								int propertyID)
+							{
+								if ( propertyID == TITLE_FACTORY_ID ){
+									
+									return( SIDEBAR_SECTION_MY_SHARES );
+									
+								}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+	
+									return( sm==null?null:String.valueOf( sm.getShareCount()));
+								}
+	
+								return null;
+							}
+						};
+							
+					return( title_info );
+				});
+		
 		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_MY_SHARES,
 				id -> {
 					final ShareManager sm;
@@ -1155,24 +1308,6 @@ public class MainMDISetup
 						
 						sm = temp;
 					}
-	
-					ViewTitleInfo title_info =
-							new ViewTitleInfo()
-							{
-								
-								@Override
-								public Object
-								getTitleInfoProperty(
-									int propertyID)
-								{
-									if ( propertyID == TITLE_INDICATOR_TEXT ){
-
-										return( sm==null?null:String.valueOf( sm.getShareCount()));
-									}
-
-									return null;
-								}
-							};
 
 					UISWTViewBuilderCore builder = new UISWTViewBuilderCore(id, null,
 							MySharesView.class).setParentEntryID(
@@ -1180,6 +1315,8 @@ public class MainMDISetup
 											SB_Transfers.getSectionPosition(mdi, id));
 					MdiEntry entry = mdi.createEntry(builder, true);
 
+					ViewTitleInfo title_info = mdi.createViewTitleInfo( SIDEBAR_SECTION_MY_SHARES, entry, null );
+					
 					entry.setViewTitleInfo( title_info );
 					
 					entry.setImageLeftID("image.sidebar.myshares");
@@ -1227,10 +1364,37 @@ public class MainMDISetup
 					return entry;
 				});
 
-		mdi.registerEntry(MultipleDocumentInterface.SIDEBAR_SECTION_MY_TRACKER,
+		TRHost trackerHost = CoreFactory.getSingleton().getTrackerHost();
+
+		mdi.registerViewTitleInfoFactory(
+				SIDEBAR_SECTION_MY_TRACKER,
+				(mdientry,ds)->{
+					ViewTitleInfo title_info =
+						new ViewTitleInfo()
+						{
+							@Override
+							public Object
+							getTitleInfoProperty(
+								int propertyID)
+							{
+								if ( propertyID == TITLE_FACTORY_ID ){
+									
+									return( SIDEBAR_SECTION_MY_TRACKER );
+									
+								}else if ( propertyID == TITLE_INDICATOR_TEXT ){
+	
+									return( String.valueOf( trackerHost.getTorrentCount()));
+								}
+	
+								return null;
+							}
+						};
+							
+					return( title_info );
+				});
+		
+		mdi.registerEntry(SIDEBAR_SECTION_MY_TRACKER,
 				id -> {
-					
-					TRHost trackerHost = CoreFactory.getSingleton().getTrackerHost();
 					
 					UISWTViewBuilderCore builder = new UISWTViewBuilderCore(id, null,
 							MyTrackerView.class).setParentEntryID(
@@ -1240,23 +1404,7 @@ public class MainMDISetup
 
 					entry.setImageLeftID("image.sidebar.mytracker");
 
-					ViewTitleInfo title_info =
-							new ViewTitleInfo()
-							{
-								
-								@Override
-								public Object
-								getTitleInfoProperty(
-									int propertyID)
-								{
-									if ( propertyID == TITLE_INDICATOR_TEXT ){
-
-										return( String.valueOf( trackerHost.getTorrentCount()));
-									}
-
-									return null;
-								}
-							};
+					ViewTitleInfo title_info = mdi.createViewTitleInfo( SIDEBAR_SECTION_MY_TRACKER, entry, null );
 					
 					entry.setViewTitleInfo( title_info );
 
@@ -1376,8 +1524,6 @@ public class MainMDISetup
 		try{
 			if ( !COConfigurationManager.getBooleanParameter( "my.tracker.view.auto.open.done", false )){
 	
-				// Load Tracker View on first host of file
-				TRHost trackerHost = CoreFactory.getSingleton().getTrackerHost();
 				trackerHostListener = new TRHostListener() {
 					boolean done = false;
 		

@@ -146,6 +146,13 @@ DiskManagerFileInfoImpl
 	{
 		return( diskManager.getDownloadState().getFileLink( file_index, file ));
 	}
+	
+	@Override
+	public long 
+	getFileAllocationStrategy()
+	{
+		return( diskManager.getDownloadState().getLongAttribute( DownloadManagerState.AT_FILE_ALLOC_STRATEGY ));
+	}
 
   @Override
   public void
@@ -254,9 +261,45 @@ DiskManagerFileInfoImpl
 		
 		return res == null ? file : res;
 	}
+  
+  	@Override
+	public String 
+	getFileName(
+		boolean follow_link)
+  	{
+  		if ( follow_link ){
+  			
+  			FileKey	res = diskManager.getDownloadState().getFileLink(file_index, null );
+  			
+  			if ( res != null ){
+  				
+  				return( res.getName());
+  			}
+  		}
+  			
+  		return( relative_file.getName());
+	}
 
   	@Override
-	  public TOTorrentFile
+	public FileKey 
+	getFileKey(
+		boolean follow_link)
+  	{
+  		if ( follow_link ){
+  			
+  			FileKey	res = diskManager.getDownloadState().getFileLink( file_index, null );
+  			
+  			if ( res != null ){
+  				
+  				return( res );
+  			}
+  		}
+  		
+  		return( new FileKey( root_dir, relative_file ));
+	}
+  	
+  	@Override
+	public TOTorrentFile
 	getTorrentFile()
 	{
 		return( torrent_file );

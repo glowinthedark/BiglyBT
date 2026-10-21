@@ -1984,36 +1984,41 @@ public class UrlUtils
 	getIPV4Fallback(
 		URL	url )
 	{
-		try{
-			InetAddress[] addresses = AddressUtils.getAllByName( url.getHost());
-
-			if ( addresses.length > 0 ){
-
-				InetAddress	ipv4	= null;
-				InetAddress	ipv6	= null;
-
-				for ( InetAddress a: addresses ){
-
-					if ( a instanceof Inet4Address ){
-
-						ipv4 = a;
-
-					}else{
-
-						ipv6 = a;
+		String host =  url.getHost();
+		
+		if ( AENetworkClassifier.categoriseAddress(host) == AENetworkClassifier.AT_PUBLIC ){
+			
+			try{
+				List<InetAddress> addresses = getAllByName(host );
+	
+				if ( !addresses.isEmpty()){
+	
+					InetAddress	ipv4	= null;
+					InetAddress	ipv6	= null;
+	
+					for ( InetAddress a: addresses ){
+	
+						if ( a instanceof Inet4Address ){
+	
+							ipv4 = a;
+	
+						}else{
+	
+							ipv6 = a;
+						}
+					}
+	
+					if ( ipv4 != null && ipv6 != null ){
+	
+						url = UrlUtils.setHost( url, ipv4.getHostAddress());
+	
+						return( url );
 					}
 				}
-
-				if ( ipv4 != null && ipv6 != null ){
-
-					url = UrlUtils.setHost( url, ipv4.getHostAddress());
-
-					return( url );
-				}
+			}catch( Throwable f ){
 			}
-		}catch( Throwable f ){
 		}
-
+		
 		return( null );
 	}
 
@@ -2563,8 +2568,24 @@ public class UrlUtils
 		throw( last_error );
 	}
 	
+	private static final int MAX_URL_ADDRESS_CACHE		= 512;
+	private static final int URL_ADDRESS_CACHE_TIMEOUT	= 2*60*1000;
+
+	private static Map<String,Object[]> url_address_cache =
+		new LinkedHashMap<String,Object[]>(MAX_URL_ADDRESS_CACHE,0.75f,true)
+		{
+			@Override
+			protected boolean
+			removeEldestEntry(
+		   		Map.Entry<String,Object[]> eldest)
+			{
+				return size() > MAX_URL_ADDRESS_CACHE;
+			}
+		};
+
+		
 	public static List<InetSocketAddress>
-	getURLAddresses(
+	getAllByName(
 		URL		url )
 	{
 		String	host	= url.getHost();
@@ -2576,21 +2597,58 @@ public class UrlUtils
 		}
 		
 		List<InetAddress> addresses = null;
+		
+		long now = SystemTime.getMonotonousTime();
+		
+		synchronized( url_address_cache ){
 			
-		try{
-			addresses = DNSUtils.getSingleton().getAllByName( host );
+			Object[] entry = url_address_cache.get( host );
+			
+			if ( entry != null ){
 				
-		}catch( Throwable e ){
+				long time = (Long)entry[0];
 				
-			try{
-				addresses = Arrays.asList( InetAddress.getAllByName( host ));
-					
-			}catch( Throwable f ){
+				if ( now - time < URL_ADDRESS_CACHE_TIMEOUT ){
+										
+					addresses = (List<InetAddress>)entry[1];
+				}
 			}
 		}
 		
 		List<InetSocketAddress> result = new ArrayList<>();
-		
+
+		if ( addresses == null ){
+			
+			if ( AENetworkClassifier.categoriseAddress( host ) == AENetworkClassifier.AT_PUBLIC ){
+				
+				try{
+					addresses = DNSUtils.getSingleton().getAllByName( host );
+						
+				}catch( Throwable e ){
+						
+					try{
+						addresses = Arrays.asList( InetAddress.getAllByName( host ));
+							
+					}catch( Throwable f ){
+						
+						addresses = Collections.emptyList();
+					}
+				}
+			}else{
+				
+				addresses = new ArrayList<>(1);
+				
+				result.add( InetSocketAddress.createUnresolved(host, port));
+				
+				return( result );
+			}
+			
+			synchronized( url_address_cache ){
+				
+				url_address_cache.put( host, new Object[]{ now + RandomUtils.nextInt( 20*1000 ), addresses });
+			}
+		}
+				
 		if ( addresses == null ){
 			
 			result.add( new InetSocketAddress( host, port ));
@@ -2604,5 +2662,57 @@ public class UrlUtils
 		}
 		
 		return( result );
+	}
+	
+	public static List<InetAddress>
+	getAllByName(
+		String		host )
+	
+		throws UnknownHostException
+	{	
+		List<InetAddress> addresses = null;
+		
+		long now = SystemTime.getMonotonousTime();
+		
+		synchronized( url_address_cache ){
+			
+			Object[] entry = url_address_cache.get( host );
+			
+			if ( entry != null ){
+				
+				long time = (Long)entry[0];
+				
+				if ( now - time < URL_ADDRESS_CACHE_TIMEOUT ){
+										
+					addresses = (List<InetAddress>)entry[1];
+				}
+			}
+		}
+		
+		if ( addresses == null ){
+			
+			if ( AENetworkClassifier.categoriseAddress( host ) == AENetworkClassifier.AT_PUBLIC ){
+				
+				try{
+					addresses = DNSUtils.getSingleton().getAllByName( host );
+						
+				}catch( Throwable e ){
+						
+					addresses = Arrays.asList( InetAddress.getAllByName( host ));
+				}
+			
+				synchronized( url_address_cache ){
+				
+					url_address_cache.put( host, new Object[]{ now + RandomUtils.nextInt( 20*1000 ), addresses });
+				}
+			}
+		}
+				
+		if ( addresses == null ){
+			
+			throw( new UnknownHostException( host ));	
+		}
+		
+		return( addresses );
 	}
 }

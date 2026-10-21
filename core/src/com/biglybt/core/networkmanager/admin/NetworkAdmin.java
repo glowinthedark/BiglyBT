@@ -21,6 +21,7 @@
 package com.biglybt.core.networkmanager.admin;
 
 import java.io.IOException;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.channels.UnsupportedAddressTypeException;
@@ -33,8 +34,6 @@ import com.biglybt.core.util.IndentWriter;
 public abstract class
 NetworkAdmin
 {
-	private static NetworkAdmin	singleton;
-
 	public static final String PR_NETWORK_INTERFACES			= "Network Interfaces";
 	public static final String PR_DEFAULT_BIND_ADDRESS			= "Default Bind IP";
 	public static final String PR_ADDITIONAL_SERVICE_ADDRESS	= "Additional Service Address";
@@ -55,15 +54,10 @@ NetworkAdmin
 	
 	public static final String 		DNS_SPI_TEST_HOST	= "http://dns.test.client.biglybittorrent.com/";
 	
-	public static synchronized NetworkAdmin
+	public static NetworkAdmin
 	getSingleton()
 	{
-		if ( singleton == null ){
-
-			singleton = new NetworkAdminImpl();
-		}
-
-		return( singleton );
+		return( NetworkAdminImpl.getSingleton());
 	}
 
 	public InetAddress getSingleHomedServiceBindAddress() {return getSingleHomedServiceBindAddress(IP_PROTOCOL_VERSION_AUTO);}
@@ -147,6 +141,13 @@ NetworkAdmin
 	public abstract String
 	getBindStatus();
 
+	public abstract boolean
+	isIgnoredBindAddress(
+		InetAddress		ia );
+	
+	public abstract List<Inet6Address>
+	getIgnoredTemporaryIPv6();
+	
 	public abstract NetworkAdminNetworkInterface[]
 	getInterfaces();
 
@@ -246,6 +247,7 @@ NetworkAdmin
 	public abstract boolean
 	canTraceRoute();
 
+	/*
 	public abstract void
 	getRoutes(
 		final InetAddress					target,
@@ -253,7 +255,9 @@ NetworkAdmin
 		final NetworkAdminRoutesListener	listener )
 
 		throws NetworkAdminException;
-
+	*/
+	
+	/*
 	public abstract boolean
 	canPing();
 
@@ -264,7 +268,8 @@ NetworkAdmin
 		final NetworkAdminRoutesListener	listener )
 
 		throws NetworkAdminException;
-
+	*/
+	
 	public abstract boolean
 	isRecentPublicIPAddress(
 		InetAddress	address );

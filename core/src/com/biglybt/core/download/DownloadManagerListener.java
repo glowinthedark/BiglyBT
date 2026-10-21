@@ -20,7 +20,10 @@
 
 package com.biglybt.core.download;
 
+import java.util.List;
+
 import com.biglybt.core.disk.DiskManagerFileInfo;
+import com.biglybt.core.util.Debug;
 
 /**
  * @author parg
@@ -54,8 +57,22 @@ DownloadManagerListener
   public void
   positionChanged(DownloadManager download, int oldPosition, int newPosition);
 
-  public void
-  filePriorityChanged( DownloadManager download, DiskManagerFileInfo file );
+  public default void
+  filePriorityChanged( DownloadManager download, DiskManagerFileInfo file )
+  {
+  }
+  
+  public default void
+  filePriorityChanged( DownloadManager download, List<DiskManagerFileInfo> files )
+  {
+	  for ( DiskManagerFileInfo file: files ){
+		  try{
+			  filePriorityChanged( download, file ); 
+		  }catch( Throwable e ){
+			  Debug.out( e );
+		  }
+	  }
+  }
   
   /**
    * 

@@ -1723,6 +1723,40 @@ public class FileUtil {
     }
     */
 
+    public static long
+    getFileCreationTime(
+    	File		file )
+    {
+    	long result = 0;
+    	
+    	try{
+			BasicFileAttributeView from_attributes_view 	= Files.getFileAttributeView( file.toPath(), BasicFileAttributeView.class);
+
+			BasicFileAttributes from_attributes = from_attributes_view.readAttributes();
+
+			result = from_attributes.creationTime().toMillis();
+			
+		}catch( Throwable e ){
+		}
+    	
+    	if ( result <= 0 || result == Long.MAX_VALUE ){
+    		
+    		result = 0;
+    		
+    		if ( file.exists()){
+    			
+    				// fallback to this as nothing else to use...
+    			
+    			try{
+    				result = file.lastModified();
+    				
+    			}catch( Throwable e ){
+    			}
+    		}
+    	}
+    	return( result );
+    }
+    
     public static boolean 
     copyFileWithDates( 
     	File 	from_file, 
@@ -4064,7 +4098,7 @@ public class FileUtil {
 		}
 	}
 	
-	private static AsyncDispatcher fot_dispatcher = new AsyncDispatcher( "FOT" );
+	private static ThreadPool<AERunnable> fot_dispatcher = new ThreadPool<>( "FOT", 8 );
 	
 	private static <T> T
 	runFileOpWithTimeoutEx(
@@ -4246,7 +4280,7 @@ public class FileUtil {
 			
 			Object[] result = { null };
 			
-			fot_dispatcher.dispatch(()->{
+			fot_dispatcher.run(AERunnable.create(()->{
 				
 				try{
 					
@@ -4267,7 +4301,7 @@ public class FileUtil {
 				
 					sem.release();
 				}
-			});
+			}));
 			
 			if ( sem.reserve( strict_timeout )){
 				
@@ -4560,10 +4594,12 @@ public class FileUtil {
 	public static FileAccessor
 	newFileAccessor(
 		File			file,
-		String			access_mode)
+		String			access_mode,
+		boolean			explicit_sparse )
+	
 		throws FileNotFoundException
 	{
-		return fileHandling.newFileAccessor(file, access_mode);
+		return fileHandling.newFileAccessor(file, access_mode, explicit_sparse);
 	}
 
 	/**
@@ -4653,12 +4689,12 @@ public class FileUtil {
 		}
 
 		@Override
-		public FileAccessor newFileAccessor(File file, String access_mode)
+		public FileAccessor newFileAccessor(File file, String access_mode, boolean explicit_sparse)
 			throws FileNotFoundException {
 			if (file instanceof FileHack) {
 				file = ((FileHack) file).getHackTarget();
 			}
-			return super.newFileAccessor(file, access_mode);
+			return super.newFileAccessor(file, access_mode, explicit_sparse);
 		}
 	}
 	

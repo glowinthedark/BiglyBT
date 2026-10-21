@@ -40,6 +40,7 @@ import com.biglybt.core.tracker.client.TRTrackerAnnouncer;
 import com.biglybt.core.tracker.client.TRTrackerScraperResponse;
 import com.biglybt.core.util.FileUtil;
 import com.biglybt.core.util.IndentWriter;
+import com.biglybt.core.util.StringInterner.FileKey;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.download.Download.SeedingRank;
 import com.biglybt.pif.download.DownloadAnnounceResult;
@@ -369,6 +370,9 @@ DownloadManager
     public File
     getSaveLocation();
 
+    public FileKey
+    getSaveLocationFileKey();
+    
 		/**
 		 * @deprecated Use setTorrentSaveDir(FileUtil.newFile(sPath), false)
 		 * @implNote Remove once xmwebui stops using this method
@@ -460,6 +464,12 @@ DownloadManager
     	boolean		expected_to_be_allocated,
     	boolean		test_only );
 
+    public default boolean
+    isMetadataDownload()
+    {
+    	return( getDownloadState().getFlag( DownloadManagerState.FLAG_METADATA_DOWNLOAD ));
+    }
+    
     /**
      * Download must be stopped - used at start-of-day to recover error state
      * @param errorType
@@ -647,10 +657,19 @@ DownloadManager
 
         throws DownloadManagerException;
 
+    /**
+     * 
+     * @param parent_dir
+     * @param selected_files	files to copy, null->all
+     * @param progress
+     * @throws DownloadManagerException
+     */
+    
     public void
     copyDataFiles(
-    	File				parent_dir,
-    	ProgressCallback	progress )
+    	File						parent_dir,
+    	List<DiskManagerFileInfo>	selected_files,
+    	ProgressCallback			progress )
 
     	throws DownloadManagerException;
 
@@ -924,7 +943,24 @@ DownloadManager
     canExportDownload();
     
     public void
-    exportDownload( File parent_dir ) throws DownloadManagerException;
+    exportDownload( 
+    	File parent_dir ) 
+    		
+    	throws DownloadManagerException;
+    
+    /**
+     * Copys the complete files, ignores incomplete files
+     * @param parent_dir
+     * @param files
+     * @throws DownloadManagerException
+     */
+    
+    public void
+    exportFiles( 
+    	File						parent_dir,
+    	List<DiskManagerFileInfo>	files )
+    			
+    	throws DownloadManagerException;
     
     public default void
     fireGlobalManagerEvent(

@@ -29,9 +29,11 @@ import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.events.*;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.*;
 
+import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.util.*;
 import com.biglybt.pifimpl.local.ui.menus.MenuItemImpl;
@@ -51,6 +53,7 @@ import com.biglybt.ui.swt.views.table.utils.TableColumnSWTUtils;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.ui.menus.MenuManager;
 import com.biglybt.pif.ui.tables.*;
+import com.biglybt.pif.ui.tables.TableColumn;
 
 public abstract class TableViewSWT_Common
 	implements MouseListener, MouseMoveListener, MouseTrackListener, SelectionListener, KeyListener, MenuDetectListener
@@ -60,8 +63,16 @@ public abstract class TableViewSWT_Common
 	private long lCancelSelectionTriggeredOn = -1;
 	private long lastSelectionTriggeredOn = -1;
 
-	private static final int ASYOUTYPE_UPDATEDELAY = 300;
+	private static int ASYOUTYPE_UPDATEDELAY = 300;
 
+	static{
+		COConfigurationManager.addAndFireParameterListener(
+				"Filter Debounce ms",
+				(n)->{
+					ASYOUTYPE_UPDATEDELAY = COConfigurationManager.getIntParameter(n);
+				});
+	}
+	
 	private List<TableViewSWTMenuFillListener> listenersMenuFill = new ArrayList<>(
 			1);
 
@@ -243,7 +254,7 @@ public abstract class TableViewSWT_Common
 		}
 	}
 
-	TableRowCore lastClickRow;
+	TableRow lastClickRow;
 
 	@Override
 	public void mouseDown(MouseEvent e) {
@@ -287,11 +298,11 @@ public abstract class TableViewSWT_Common
 					}
 				}
 				if (tc.hasInplaceEditorListener() && e.button == 1
-						&& lastClickRow == cell.getTableRowCore()) {
-					tv.editCell(tv.getTableColumnByOffset(e.x), cell.getTableRowCore().getIndex());
+						&& lastClickRow == cell.getTableRow()) {
+					tv.editCell(tv.getTableColumnByOffset(e.x), cell.getTableRow().getIndex());
 				}
 				if (e.button == 1) {
-					lastClickRow = cell.getTableRowCore();
+					lastClickRow = cell.getTableRow();
 				}
 			} else if (row != null) {
 				TableRowMouseEvent event = createMouseEvent(row, e,
@@ -924,6 +935,8 @@ public abstract class TableViewSWT_Common
  				}
  				TableRowCore[] rows = tv.getSelectedRows();
  				for (TableRowCore row : rows) {
+ 					row.setShown( true, true );
+					row.refresh( true, true );
  					if (row != rows[0]) {
  						sToClipboard += "\n";
  					}
@@ -1236,6 +1249,108 @@ public abstract class TableViewSWT_Common
 				});
 			}
 				
+				// alignment
+			
+			
+			final MenuItem itemAlign = new MenuItem(menu, SWT.CASCADE);
+			Messages.setLanguageText(itemAlign, "label.alignment"); 
+
+			Menu menuAlign = new Menu(menu.getShell(), SWT.DROP_DOWN);
+			itemAlign.setMenu(menuAlign);
+			
+				// left
+			
+			MenuItem itemAlignLeft = new MenuItem(menuAlign, SWT.RADIO);
+			Messages.setLanguageText(itemAlignLeft, "label.left");
+			itemAlignLeft.addListener(SWT.Selection, (e)->{
+				column.setAlignment( TableColumn.ALIGN_LEAD );
+				column.invalidateCells();
+			});
+			
+				// centre
+				
+			MenuItem itemAlignCentre = new MenuItem(menuAlign, SWT.RADIO);
+			Messages.setLanguageText(itemAlignCentre, "label.center");
+			itemAlignCentre.addListener(SWT.Selection, (e)->{
+				column.setAlignment( TableColumn.ALIGN_CENTER );
+				column.invalidateCells();
+			});
+
+				// right
+				
+			MenuItem itemAlignRight = new MenuItem(menuAlign, SWT.RADIO);
+			Messages.setLanguageText(itemAlignRight, "label.right");
+			itemAlignRight.addListener(SWT.Selection, (e)->{
+				column.setAlignment( TableColumn.ALIGN_TRAIL );
+				column.invalidateCells();
+			});
+
+				// def
+			
+			MenuItem itemAlignDefault = new MenuItem(menuAlign, SWT.PUSH);
+			Messages.setLanguageText(itemAlignDefault, "label.default");
+			itemAlignDefault.addListener(SWT.Selection, (e)->{
+				column.reset( false, true, false, false );
+				column.invalidateCells();
+			});
+			
+			int align = column.getAlignment();
+			
+			itemAlignLeft.setSelection( align==TableColumn.ALIGN_LEAD );
+			itemAlignCentre.setSelection( align==TableColumn.ALIGN_CENTER );
+			itemAlignRight.setSelection( align==TableColumn.ALIGN_TRAIL );
+			
+				// colors
+						
+			final MenuItem itemColour = new MenuItem(menu, SWT.CASCADE);
+			Messages.setLanguageText(itemColour, "label.color"); 
+	
+			Menu menuColour = new Menu(menu.getShell(), SWT.DROP_DOWN);
+			itemColour.setMenu(menuColour);
+			
+				// fg
+			
+			MenuItem itemColorFG = new MenuItem(menuColour, SWT.PUSH);
+			Messages.setLanguageText(itemColorFG, "label.foreground.color");
+			itemColorFG.addListener(SWT.Selection, (e)->{
+				int[] existing = column.getForegroundColor();
+				RGB rgb = Utils.showColorDialog( Utils.getDisplay().getActiveShell(), existing==null?null:new RGB(existing[0],existing[1],existing[2]));
+				if ( rgb != null ){
+					column.setForegroundColor(new int[]{rgb.red,rgb.green,rgb.blue});
+					column.invalidateCells();
+						// need this to force column to update :(
+					TableStructureEventDispatcher.getInstance(tv.getTableID()).tableStructureChanged(false, null);
+				}
+			});
+			
+				// bg
+			
+			MenuItem itemColorBG = new MenuItem(menuColour, SWT.PUSH);
+			Messages.setLanguageText(itemColorBG, "label.background.color");
+			itemColorBG.addListener(SWT.Selection, (e)->{
+				int[] existing = column.getBackgroundColor();
+				RGB rgb = Utils.showColorDialog( Utils.getDisplay().getActiveShell(), existing==null?null:new RGB(existing[0],existing[1],existing[2]));
+				if ( rgb != null ){
+					column.setBackgroundColor(new int[]{rgb.red,rgb.green,rgb.blue});
+					column.invalidateCells();
+						// need this to force column to update :(
+					TableStructureEventDispatcher.getInstance(tv.getTableID()).tableStructureChanged(false, null);
+				}
+			});
+
+				// def
+			
+			MenuItem itemColourDefault = new MenuItem(menuColour, SWT.PUSH);
+			Messages.setLanguageText(itemColourDefault, "label.default");
+			itemColourDefault.addListener(SWT.Selection, (e)->{
+				column.reset( false, false, true, true );
+				column.invalidateCells();
+				TableStructureEventDispatcher.getInstance(tv.getTableID()).tableStructureChanged(false, null);
+			});
+			
+				// size to preferred
+			
+			
 			final MenuItem itemPrefSize = new MenuItem(menu, SWT.PUSH);
 			Messages.setLanguageText(itemPrefSize, "table.columns.pref.size");
 			itemPrefSize.addListener(SWT.Selection, e -> Utils.execSWTThread(() -> {

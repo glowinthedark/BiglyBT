@@ -6846,6 +6846,13 @@ SubscriptionManagerImpl
 					}
 
 					@Override
+					public void 
+					setupComplete(
+						long	added_time )
+					{
+					}
+					
+					@Override
 					public void
 					reportContributor(
 						InetSocketAddress	address )

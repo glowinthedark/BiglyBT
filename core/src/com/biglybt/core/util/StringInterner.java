@@ -1091,6 +1091,14 @@ StringInterner
 			this( fk, tail, false );
 		}
 		
+		public
+		FileKey(
+			File	file,
+			FileKey	tail )
+		{
+			this( file, tail.toString(), false );
+		}
+		
 		protected
 		FileKey(
 			FileKey	fk,
@@ -1220,16 +1228,99 @@ StringInterner
 			*/
 		}
 		
+		protected
+		FileKey(
+			String[]	from_comps,
+			int			start,
+			int			length )
+		{
+			this( from_comps, start, length, false );
+		}
+		
+		protected
+		FileKey(
+			String[]	from_comps,
+			int			start,
+			int			length,
+			boolean		is_dir )
+		{
+			if ( TRACK_FILE_KEYS ){
+				
+				file_key_map.put( new WeakReference<FileKey>( this, file_key_ref_queue ), "" );
+			}
+						
+			comps = new String[ length ];
+			
+			int hc = 0;
+			
+			int from_index = start;
+			for ( int i=0;i<length;i++){
+				String name = from_comps[ from_index];
+				hc += name.hashCode();
+				if ( from_index > 0 || is_dir ){
+					name = intern(name);
+				}
+				comps[i] = name;
+				from_index++;
+			}
+			
+			hash_code = hc;
+		}
+		
 		public File
 		getFile()
 		{
 			return( FileUtil.newFile( toString()));
 		}
 		
+		public String
+		getName()
+		{
+			if ( comps.length == 0 ){
+				
+				return( "" );
+			}
+			
+			return( comps[ 0 ] );
+		}
+		
 		public boolean
 		isEmpty()
 		{
 			return( comps.length == 0 );
+		}
+		
+		public FileKey
+		removePrefix(
+			FileKey	prefix )
+		{
+			String[] prefix_comps = prefix.comps;
+			
+			int length		= comps.length;
+			int pf_length	= prefix_comps.length;
+			
+			if ( length < pf_length ){
+				
+				return( null );
+			}
+			
+			int p1 = length-1;
+			int p2 = pf_length-1;
+			
+			for ( int i=0;i<pf_length;i++){
+				
+				if ( !comps[p1--].equals(prefix_comps[p2--] )){
+					
+					return( null );
+				}
+			}
+			
+			if ( pf_length == length ){
+				
+				return( EMPTY_FILE );
+			}
+			
+			return( isFile()?new FileKey( comps, 0, length - pf_length ):new DirKey( comps, 0, length - pf_length ));
 		}
 		
 		public String
@@ -1347,6 +1438,15 @@ StringInterner
 			String	str )
 		{
 			super( dir, str, true );
+		}
+		
+		protected
+		DirKey(
+			String[]	from_comps,
+			int			start,
+			int			length )
+		{
+			super( from_comps, start, length, true );
 		}
 		
 		@Override

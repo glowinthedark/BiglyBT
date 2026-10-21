@@ -842,15 +842,16 @@ public class OpenTorrentOptionsWindow
 		try{
 			if ( dlg == null ){
 
-				boolean	separate_dialogs = COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_SEP );
+				boolean	separate_dialogs	= COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_SEP );
+				boolean	ontop				= COConfigurationManager.getBooleanParameter( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_ONTOP );
 
 					// if we only have one dialog then we can make it independent and 
 					// minimizable - user requested feature
 				
-				if ( separate_dialogs ){
+				if ( separate_dialogs || ontop ){
 					
 					dlg = new SkinnedDialog("skin3_dlg_opentorrent_options", "shell",
-							SWT.RESIZE | SWT.MAX | SWT.DIALOG_TRIM);
+							SWT.RESIZE | SWT.MAX | SWT.MIN | SWT.DIALOG_TRIM);
 
 				}else{
 					
@@ -2521,7 +2522,7 @@ public class OpenTorrentOptionsWindow
 
 						if ( !text.equals( toText )){
 
-							cmbDataDir.setText( toText );
+							cmbDataDirsetText( toText );
 						}
 					}
 				}
@@ -2789,6 +2790,10 @@ public class OpenTorrentOptionsWindow
 		private void
 		layout()
 		{
+			/*
+			 * Don't appear to need this anymore (famous last words...)
+			 * It is very costly to do the layouts so let's hope
+			 
 			SWTSkinObjectExpandItem so = (SWTSkinObjectExpandItem)skin.getSkinObject("expanditem-saveto");
 
 			if ( so != null ){
@@ -2802,6 +2807,7 @@ public class OpenTorrentOptionsWindow
 					item.relayout();
 				}
 			}
+			*/
 		}
 
 		private void
@@ -5194,7 +5200,7 @@ public class OpenTorrentOptionsWindow
 											public void
 											widgetSelected(SelectionEvent e) {
 
-												cmbDataDir.setText( str );
+												cmbDataDirsetText( str );
 											}
 										});
 								}
@@ -5243,7 +5249,7 @@ public class OpenTorrentOptionsWindow
 			for (String s : dirList) {
 				
 				if (torrentOptions == null || !s.equals(torrentOptions.getParentDir())) {
-					cmbDataDir.add(s);
+					cmbDataDiradd(s);
 				}
 			}
 
@@ -5274,7 +5280,7 @@ public class OpenTorrentOptionsWindow
 					sSavePath = dDialog.open();
 
 					if (sSavePath != null) {
-						cmbDataDir.setText(sSavePath);
+						cmbDataDirsetText(sSavePath);
 					}
 				}
 			});
@@ -8033,6 +8039,45 @@ public class OpenTorrentOptionsWindow
 			}
 		}
 
+		private void
+		cmbDataDiradd(
+			String		item )
+		{
+			String[] existing = cmbDataDir.getItems();
+			
+			for ( String e: existing ){
+				
+				if ( e.equals( item )){
+					
+					return;
+				}
+			}
+			
+			cmbDataDir.add( item );
+		}
+		
+		private void
+		cmbDataDirsetText(
+			String		text )
+		{
+			cmbDataDir.setText( text );
+			
+				// ensure that the text is one of the items otherwise expanding the combo to show
+				// the available items will cause the existing text value to be lost
+			
+			String[] existing = cmbDataDir.getItems();
+			
+			for ( String e: existing ){
+				
+				if ( e.equals( text )){
+					
+					return;
+				}
+			}
+			
+			cmbDataDir.add(text, 0);
+		}
+		
 		private void updateDataDirCombo() {
 
 			if (cmbDataDir == null) {
@@ -8065,17 +8110,17 @@ public class OpenTorrentOptionsWindow
 
 					if ( not_same ){
 
-						cmbDataDir.setText( COConfigurationManager.getStringParameter(PARAM_DEFSAVEPATH));
+						cmbDataDirsetText( COConfigurationManager.getStringParameter(PARAM_DEFSAVEPATH));
 
 					}else{
 
 							// prev_parent can be null when we're tearing down the dialog...
 
-						cmbDataDir.setText( prev_parent==null?"":prev_parent );
+						cmbDataDirsetText( prev_parent==null?"":prev_parent );
 					}
 				}else{
 
-					cmbDataDir.setText( torrentOptions.getParentDir());
+					cmbDataDirsetText( torrentOptions.getParentDir());
 				}
 
 			}finally{
@@ -8089,7 +8134,7 @@ public class OpenTorrentOptionsWindow
 			String	path )
 		{
 			if ( cmbDataDir != null ){
-				cmbDataDir.setText( path );
+				cmbDataDirsetText( path );
 			}
 		}
 
@@ -8407,10 +8452,20 @@ public class OpenTorrentOptionsWindow
 
 						boolean filesTooBig = part.bytesToConsume > part.freeSpace.freeSpace;
 
+						long space = part.freeSpace.freeSpace;
+						
+						String freeSpace;
+						
+						if ( space < 0 ){
+							freeSpace = "?";
+						}else{
+							freeSpace = DisplayFormatters.formatByteCountToKiBEtc(space);
+						}
+						
 						String s = MessageText.getString("v3.MainWindow.xofx",
 								new String[] {
 							DisplayFormatters.formatByteCountToKiBEtc(part.bytesToConsume),
-							DisplayFormatters.formatByteCountToKiBEtc(part.freeSpace.freeSpace)
+							freeSpace
 						});
 
 						File root = part.root;
@@ -8582,16 +8637,41 @@ public class OpenTorrentOptionsWindow
 			}
 
 			TorrentOpenFileOptions[] files = torrentOptions.getFiles();
+			
+				// try to minimise the File::exists calls as might be over a network
+			
+			Set<String> missing_parents = new HashSet<>();
+			Set<String> valid_parents 	= new HashSet<>();
+			
 			for (int j = 0; j < files.length; j++) {
 				TorrentOpenFileOptions fileInfo = files[j];
-				if (fileInfo.getDestFileFullName().exists()) {
-					sExistingFiles += fileInfo.getOriginalFullName() + " - "
-							+ torrentOptions.getTorrentName() + "\n";
-					iNumExistingFiles++;
-					if (iNumExistingFiles > 5) {
-						// this has the potential effect of adding 5 files from the first
-						// torrent and then 1 file from each of the remaining torrents
-						break;
+				File f = fileInfo.getDestFileFullName();
+				String parent = f.getParent();
+				if ( parent == null || !missing_parents.contains( parent )){
+					if (f.exists()){
+						sExistingFiles += fileInfo.getOriginalFullName() + " - "
+								+ torrentOptions.getTorrentName() + "\n";
+						iNumExistingFiles++;
+						if (iNumExistingFiles > 5) {
+							// this has the potential effect of adding 5 files from the first
+							// torrent and then 1 file from each of the remaining torrents
+							break;
+						}
+					}else{
+						File pf = f.getParentFile();
+						while( pf != null ){
+							String path = pf.getPath();
+							if ( valid_parents.contains( path )){
+								break;
+							}
+							if ( pf.exists()){
+								valid_parents.add( path );
+								break;
+							}else{
+								missing_parents.add( path );
+								pf = pf.getParentFile();
+							}
+						}
 					}
 				}
 			}

@@ -29,6 +29,7 @@ import java.io.*;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URL;
 import java.util.*;
 import java.util.zip.GZIPOutputStream;
@@ -2497,8 +2498,16 @@ WebPlugin
 		
 		if ( bind_ip.isAnyLocalAddress()){
 
-			address = NetworkAdmin.getSingleton().getLoopbackAddress();
-			
+			InetAddress bip = NetworkAdmin.getSingleton().getSingleHomedServiceBindAddress();
+
+			if ( bip == null || bip.isAnyLocalAddress()){
+
+				address = NetworkAdmin.getSingleton().getLoopbackAddress();
+
+			}else{
+
+				address = bip;
+			}			
 		}else{
 
 			address = bind_ip;
@@ -3097,7 +3106,8 @@ WebPlugin
 			if ( redirect != null ){
 
 				try{
-					URL target = new URL( redirect );
+					URI target = new URI( redirect );	// https://github.com/BiglySoftware/BiglyBT/issues/3747
+														// URI validation is stronger than URL so it catches this
 
 					String	host = target.getHost();
 
@@ -3155,7 +3165,8 @@ WebPlugin
 			if ( redirect != null ){
 
 				try{
-					URL target = new URL( redirect );
+					URI target = new URI( redirect );	// https://github.com/BiglySoftware/BiglyBT/issues/3747
+														// URI validation is stronger than URL so it catches this
 
 					String	host = target.getHost();
 

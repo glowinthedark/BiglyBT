@@ -21,7 +21,9 @@
 package com.biglybt.core.speedmanager;
 
 import java.io.File;
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.util.*;
 import java.util.function.Predicate;
@@ -339,7 +341,7 @@ SpeedLimitHandler
 						"Pausing all downloads due to pause_all rule" );
 			}
 
-			gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads ));
+			gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads, GlobalManager.PS_SPEED_LIMIT_HANDLER ));
 
 			rule_pause_all_active = true;
 
@@ -356,7 +358,7 @@ SpeedLimitHandler
 								"Resuming all downloads as pause_all rule no longer applies" );
 					}
 
-					gm_dispatcher.dispatch(()->gm.resumeDownloads( true ));
+					gm_dispatcher.dispatch(()->gm.resumeDownloads( true, GlobalManager.PS_SPEED_LIMIT_HANDLER ));
 				}
 			}
 
@@ -381,7 +383,7 @@ SpeedLimitHandler
 					"Pausing all downloads as network limit exceeded" );
 			}
 
-			gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads ));
+			gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads, GlobalManager.PS_SPEED_LIMIT_HANDLER ));
 
 			net_limit_pause_all_active = true;
 
@@ -398,7 +400,7 @@ SpeedLimitHandler
 							"Resuming all downloads as network limit no longer exceeded" );
 					}
 
-					gm.resumeDownloads( true );
+					gm.resumeDownloads( true, GlobalManager.PS_SPEED_LIMIT_HANDLER );
 				}
 			}
 
@@ -3755,7 +3757,7 @@ SpeedLimitHandler
 
 						if ( gm.canPauseDownloads( pause_forced_downloads )){
 
-							gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads ));
+							gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads, GlobalManager.PS_SPEED_LIMIT_HANDLER ));
 						}
 					}
 				}
@@ -3801,7 +3803,7 @@ SpeedLimitHandler
 
 			if ( gm.canPauseDownloads( pause_forced_downloads )){
 
-				gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads ));
+				gm_dispatcher.dispatch(()->gm.pauseDownloads( pause_forced_downloads, GlobalManager.PS_SPEED_LIMIT_HANDLER ));
 			}
 		}
 	}
@@ -5913,6 +5915,8 @@ SpeedLimitHandler
 			getStats(
 				String		id )
 			{
+				TagFeatureRateLimit current_tag_rl = tag_rl;
+				
 				if ( tag_type == ip_set_tag_type ){
 
 						// need to re-resolve this
@@ -5921,28 +5925,30 @@ SpeedLimitHandler
 
 					if ( t != tag_rl ){
 
-						tag_rl = t;
+						current_tag_rl = tag_rl = t;
 					}
-
 				}
 					// currently protocol/data isn't separated so lump it all in as data
 
-				long[] up 	= tag_rl.getTagUploadTotal();
-				long[] down = tag_rl.getTagDownloadTotal();
-
 				long[] result = new long[4];
 
-				if ( up != null ){
-
-					result[LongTermStats.ST_DATA_UPLOAD] = up[0];
-
+				if ( current_tag_rl != null ){
+					
+					long[] up 	= current_tag_rl.getTagUploadTotal();
+					long[] down = current_tag_rl.getTagDownloadTotal();
+	
+					if ( up != null ){
+	
+						result[LongTermStats.ST_DATA_UPLOAD] = up[0];
+					}
+					
+					if ( down != null ){
+	
+						result[LongTermStats.ST_DATA_DOWNLOAD] = down[0];
+	
+					}
 				}
-				if ( down != null ){
-
-					result[LongTermStats.ST_DATA_DOWNLOAD] = down[0];
-
-				}
-
+				
 				return( result );
 			}
 		}
@@ -6568,6 +6574,195 @@ SpeedLimitHandler
 				super.setColor(rgb);
 				
 				COConfigurationManager.setRGBParameter( "speed.limit.handler.ipset_n." + getTagID() + ".color", rgb, null );
+			}
+			
+			@Override
+			public boolean 
+			matches(
+				Download				download_maybe_null,
+				InetSocketAddress		address )
+			{
+				long[][]	ranges	= getRanges();
+				Set<String>	ccs		= getCountryCodes();
+				Set<String> nets	= getNetworks();
+
+				boolean has_ccs		= false;
+				boolean has_nets	= false;
+				
+				if ( ccs.size() > 0 ){
+
+					has_ccs = true;
+				}
+
+				if ( nets.size() > 0 ){
+
+					has_nets = true;
+				}
+
+				boolean is_inverse = isInverse();
+
+				Set<String>	category_or_tags = null;
+				
+				if ( getCategoriesOrTags() != null ){
+
+					if ( download_maybe_null == null ){
+						
+							// can't test in the absence of a download 
+						
+						return( is_inverse );
+					}
+					
+					category_or_tags = new HashSet<>();
+
+					String cat = download_maybe_null.getAttribute( category_attribute );
+
+					if ( cat != null && cat.length() > 0 ){
+
+						category_or_tags.add( cat );
+					}
+
+					TagManager tm = TagManagerFactory.getTagManager();
+					
+					List<Tag> tags = tm.getTagsForTaggable( TagType.TT_DOWNLOAD_MANUAL, PluginCoreUtils.unwrap( download_maybe_null ));
+
+					for ( Tag t: tags ){
+
+						category_or_tags.add( t.getTagName( true ));
+					}
+				}
+
+				String net = AENetworkClassifier.categoriseAddress( address );
+				
+				long	l_address = 0;
+
+					// TODO ipv6 support?
+				
+				if ( net == AENetworkClassifier.AT_PUBLIC &&  address.getAddress() instanceof Inet4Address ){
+
+					byte[] bytes = address.getAddress().getAddress();
+
+					if ( bytes != null ){
+
+						l_address = ((long)((bytes[0]<<24)&0xff000000 | (bytes[1] << 16)&0x00ff0000 | (bytes[2] << 8)&0x0000ff00 | bytes[3]&0x000000ff))&0xffffffffL;
+					}
+				}
+
+				if ( l_address != 0 ){
+
+					if ( ranges.length > 0 ){
+
+						Set<String> set_cats_or_tags = getCategoriesOrTags();
+
+						if ( set_cats_or_tags == null || new HashSet<>(set_cats_or_tags).removeAll( category_or_tags )){
+
+							boolean	hit = false;
+
+							for ( long[] range: ranges ){
+
+								if ( l_address >= range[0] && l_address <= range[1] ){
+
+									hit	= true;
+
+									if ( is_inverse ){
+
+										return( false );
+									}
+
+									break;
+								}
+							}
+
+							if ( !is_inverse && !hit ){
+
+								return( false );
+							}
+						}
+					}
+				}
+
+				String	peer_cc 	= null;
+				String 	peer_net	= null;
+
+				if ( has_ccs ){
+
+					String[] details = PeerUtils.getCountryDetails( address );
+
+					if ( details != null && details.length > 0 ){
+
+						peer_cc = details[0];
+						
+					}else{
+						
+						peer_cc = "??";
+					}
+				}
+
+				if ( has_nets ){
+
+					peer_net = net;
+				}
+							
+				if ( peer_cc != null && has_ccs ){
+
+					Set<String> set_cats_or_tags = getCategoriesOrTags();
+
+					if ( set_cats_or_tags == null || new HashSet<>(set_cats_or_tags).removeAll( category_or_tags )){
+
+						boolean	hit = ccs.contains( peer_cc );
+
+						if ( hit == is_inverse ){
+
+							return( false );
+						}
+					}
+				}
+
+				if ( peer_net != null && has_nets ){
+
+					String	pub_peer_net 	= null;
+					String	pub_lan			= null;
+
+					if ( peer_net == AENetworkClassifier.AT_PUBLIC ){
+
+						pub_peer_net = address.getAddress() instanceof Inet4Address?NET_IPV4:NET_IPV6;
+
+						if ( AddressUtils.isLANLocalAddress(address, true ) == AddressUtils.LAN_LOCAL_YES ){
+
+							pub_lan = NET_LAN;
+
+						}else{
+
+							pub_lan = NET_WAN;
+						}
+					}					
+
+					Set<String> set_cats_or_tags = getCategoriesOrTags();
+
+					if ( set_cats_or_tags == null || new HashSet<>(set_cats_or_tags).removeAll( category_or_tags )){
+
+						boolean	hit = nets.contains( peer_net );
+
+						if ( !hit ){
+
+							if ( pub_peer_net != null ){
+
+								hit = nets.contains( pub_peer_net );
+							}
+
+							if ( !hit && pub_lan != null ){
+
+								hit = nets.contains( pub_lan );
+							}
+						}
+
+						if ( hit == is_inverse ){
+
+							return( false );
+						}
+					}
+				}
+				
+				return( true );
 			}
 			
 			private void

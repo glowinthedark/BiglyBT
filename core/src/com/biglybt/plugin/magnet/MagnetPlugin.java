@@ -135,12 +135,13 @@ MagnetPlugin
 	// private BooleanParameter 	secondary_lookup; removed
 	private BooleanParameter 	md_lookup;
 	private IntParameter	 	md_lookup_delay;
+	private BooleanParameter	md_start_stopped;
 	private StringParameter 	md_extra_trackers;
 	private IntParameter	 	timeout_param;
 	private StringListParameter	sources_param;
 	private IntParameter	 	sources_extra_param;
 	private BooleanParameter	magnet_recovery;
-	private IntParameter	 	magnet_recovery_concurrency;
+	// private IntParameter	 	magnet_recovery_concurrency;
 	private BooleanParameter	magnet_rename;
 	private DirectoryParameter	storage_folder;
 
@@ -188,7 +189,10 @@ MagnetPlugin
 
 		md_lookup 			= config.addBooleanParameter2( "MagnetPlugin.use.md.download", "MagnetPlugin.use.md.download", true );
 		md_lookup_delay		= config.addIntParameter2( "MagnetPlugin.use.md.download.delay", "MagnetPlugin.use.md.download.delay", MD_LOOKUP_DELAY_SECS_DEFAULT );
+		md_start_stopped	= config.addBooleanParameter2( "MagnetPlugin.use.md.start.stopped", "ConfigView.label.startwatchedtorrentsstopped", false );
 
+		md_start_stopped.setIndent(1, true );
+		
 		String et_default = "";
 		
 		for ( String etd: MD_EXTRA_TRACKERS ){
@@ -200,6 +204,7 @@ MagnetPlugin
 		md_extra_trackers.setMultiLine( 3 );
 		
 		md_lookup.addEnabledOnSelection( md_lookup_delay );
+		md_lookup.addEnabledOnSelection( md_start_stopped );
 		md_lookup.addEnabledOnSelection( md_extra_trackers );
 
 		timeout_param		= config.addIntParameter2( "MagnetPlugin.timeout.secs", "MagnetPlugin.timeout.secs", PLUGIN_DOWNLOAD_TIMEOUT_SECS_DEFAULT );
@@ -210,12 +215,14 @@ MagnetPlugin
 				
 		magnet_recovery		= config.addBooleanParameter2( "MagnetPlugin.recover.magnets", "MagnetPlugin.recover.magnets", true );
 		
+		/*
 		magnet_recovery_concurrency	= config.addIntParameter2( "MagnetPlugin.recover.magnets.conc", "MagnetPlugin.recover.magnets.conc", 32, 8, 512 );
 
 		magnet_recovery_concurrency.setIndent( 1, true );
 		
 		magnet_recovery.addEnabledOnSelection( magnet_recovery_concurrency );
-
+		*/
+		
 		magnet_rename = config.addBooleanParameter2( "MagnetPlugin.rename.using.dn", "MagnetPlugin.rename.using.dn", false );
 		
 		BooleanParameter rename_ext = config.addBooleanParameter2( "MagnetPlugin.rename.using.dn.only.with.ext", "MagnetPlugin.rename.using.dn.only.with.ext", false );	
@@ -674,6 +681,13 @@ MagnetPlugin
 							
 							@Override
 							public void 
+							setupComplete(
+								long	added_time )
+							{
+							}
+							
+							@Override
+							public void 
 							failed(
 								MagnetURIHandlerException error )
 							{
@@ -694,8 +708,8 @@ MagnetPlugin
 								sem.release();
 							}
 						};
-						
-					recoverableDownload( muh_listener, hash, args, sources, Collections.emptyList(), Collections.emptyMap(), timeout, SystemTime.getCurrentTime(), false, dl_listener );
+					
+					recoverableDownload( muh_listener, hash, args, sources, Collections.emptyList(), Collections.emptyMap(), timeout, SystemTime.getCurrentTimeUnique(), false, dl_listener );
 		
 					sem.reserve();
 					
@@ -989,11 +1003,15 @@ MagnetPlugin
 		
 		if ( recover && !active.isEmpty()){
 		
+			/*
 			int conc = magnet_recovery_concurrency.getValue();
 			
 			if ( conc < 1 ){
 				conc = 1;
 			}
+			*/
+			
+			int conc = 1;	// switched to single concurrency and no delay
 			
 			ThreadPool<AERunnable> tp = new ThreadPool<AERunnable>( "Magnet Recovery", conc, true );
 			
@@ -1002,31 +1020,43 @@ MagnetPlugin
 			Collections.sort(
 				sorted,
 				(m1, m2)->{
-					Long t1 = (Long)m1.get("added" );
-					Long t2 = (Long)m2.get("added" );
+					Number p1 = (Number)m1.get( "position" );
+					Number p2 = (Number)m2.get( "position" );
 					
-					if ( t1 == t2 ){
-						return(0);
-					}else if ( t1 == null ){
+					if ( p1 == null && p2 == null ){
+					
+						Long t1 = (Long)m1.get("added" );
+						Long t2 = (Long)m2.get("added" );
+						
+						if ( t1 == t2 ){
+							return(0);
+						}else if ( t1 == null ){
+							return( -1 );
+						}else if ( t2 == null ){
+							return( 1 );
+						}else{
+							long diff = t1 - t2;
+							
+							if ( diff < 0 ){
+								return( -1 );
+							}else if ( diff == 0 ){
+								return( 0 );
+							}else{
+								return( 1 );
+							}
+						}
+					}else if ( p1 == null ){
 						return( -1 );
-					}else if ( t2 == null ){
+					}else if ( p2 == null ){
 						return( 1 );
 					}else{
-						long diff = t1 - t2;
-						
-						if ( diff < 0 ){
-							return( -1 );
-						}else if ( diff == 0 ){
-							return( 0 );
-						}else{
-							return( 1 );
-						}
+						return( p1.intValue() - p2.intValue());
 					}
 				});
 			
 			for ( Map map: sorted ){
 					
-				//System.out.println( "Recovering: " + map );
+				// System.out.println( "Recovering: " + map );
 					
 				byte[]	hash = (byte[])map.get( "hash" );
 				
@@ -1058,6 +1088,16 @@ MagnetPlugin
 				try{
 
 					active_hashes.add( ByteFormatter.encodeString( hash ));
+					
+					Number start_state = (Number)map.get( "ss" );
+					
+					if ( start_state != null ){
+						
+						synchronized( download_start_states ){
+							
+							download_start_states.put( hash, start_state.intValue());
+						}
+					}
 					
 					String args = MapUtils.getMapString( map, "args", "" );
 					
@@ -1119,14 +1159,26 @@ MagnetPlugin
 							public void
 							runSupport()
 							{
+								AESemaphore sem = new AESemaphore( "recovwait" );
+								
 								DownloadAsyncListener dl_listener =
 									new DownloadAsyncListener(){
 										
 										@Override
 										public void 
+										setupComplete(
+											long	added_time )
+										{
+											sem.release();
+										}
+									
+										@Override
+										public void 
 										failed(
 											MagnetURIHandlerException error )
 										{
+											sem.release();
+											
 											if ( !error.isManuallyCancelled()){
 											
 												Debug.out( error );
@@ -1138,6 +1190,8 @@ MagnetPlugin
 										complete(
 											byte[] result )
 										{
+											sem.release();
+											
 											if ( result != null ){
 												
 												try{
@@ -1210,15 +1264,25 @@ MagnetPlugin
 									};
 								
 								recoverableDownload( null, hash, args, f_sources, f_tags, other_metadata, timeout, added_time, true, dl_listener );
+								
+								if ( !sem.reserve(5000)){
+									
+									Debug.out( "Timeout waiting for magnet recovery to complete" );
+								}
+								
+								synchronized( download_start_states ){
+									
+									download_start_states.remove( hash );
+								}
 							}
 						});
-					
-						// we want the metadata downloads to be added in the correct order. as the thread pool
-						// will fire things off concurrently we add this hack to give things a chance to 
-						// end up correct...
-					
-					Thread.sleep(500);
-					
+						
+							// we want the metadata downloads to be added in the correct order. as the thread pool
+							// will fire things off concurrently we add this hack to give things a chance to 
+							// end up correct...
+						
+							//Thread.sleep(500);
+									
 				}catch( Throwable e ){
 					
 					Debug.out( e );
@@ -1340,6 +1404,45 @@ MagnetPlugin
 									do_update = true;
 								}
 								
+								int position = download.getPosition();
+								
+								Number existing_position = (Number)map.get( "position" );
+								
+								if ( existing_position == null || existing_position.intValue() != position ){
+									
+									map.put( "position", position );
+									
+									do_update = true;
+								}
+																
+								int ss;
+								
+								if ( download.isForceStart()){
+									
+									ss = SS_FORCE_START;
+									
+								}else{
+									
+									int state = download.getState();
+
+									if ( state == Download.ST_STOPPED ){
+										
+										ss = SS_STOPPED;
+										
+									}else{
+										
+										ss = SS_START;
+									}
+								}
+								
+								Number existing_ss = (Number)map.get( "ss" );
+								
+								if ( existing_ss == null || existing_ss.intValue() != ss ){
+									
+									map.put( "ss", ss );
+									
+									do_update = true;
+								}
 							}
 						}catch( Throwable e ){
 							
@@ -1474,6 +1577,52 @@ MagnetPlugin
 					
 					@Override
 					public void 
+					setupComplete(
+						long	added_time )
+					{
+						_dl_listener.setupComplete( added_time );
+						
+						if ( !is_recovering && added_time > 0 ){
+							
+							boolean changed = false;
+							
+							synchronized( download_activities ){
+								
+								Map active = COConfigurationManager.getMapParameter( "MagnetPlugin.active.magnets", new HashMap());
+								
+								Map map = (Map)active.get( hash_str );
+								
+								if ( map != null ){
+									
+									Long added = (Long)map.get( "added" );
+									
+									if ( added != null && added != added_time ){
+										
+										map.put( "added", added_time );
+										
+										Map other_metadata = (Map)map.get( "other_metadata" );
+										
+										if ( other_metadata != null ){
+										
+											other_metadata.put( "added_time", added_time );
+										}
+										
+										COConfigurationManager.setParameter( "MagnetPlugin.active.magnets", active );
+										
+										changed = true;
+									}
+								}
+							}
+							
+							if ( changed ){
+							
+								COConfigurationManager.setDirty();
+							}
+						}
+					}
+					
+					@Override
+					public void 
 					failed(
 						MagnetURIHandlerException error )
 					{
@@ -1502,14 +1651,16 @@ MagnetPlugin
 				};
 				
 			downloadAsync(
-				muh_listener == null ? null : new MagnetPluginProgressListener()
+				new MagnetPluginProgressListener()
 				{
 					@Override
 					public void
 					reportSize(
-							long	size )
+						long	size )
 					{
-						muh_listener.reportSize( size );
+						if ( muh_listener != null ){
+							muh_listener.reportSize( size );
+						}
 					}
 
 					@Override
@@ -1517,7 +1668,9 @@ MagnetPlugin
 					reportActivity(
 							String	str )
 					{
-						muh_listener.reportActivity( str );
+						if ( muh_listener != null ){
+							muh_listener.reportActivity( str );
+						}
 					}
 
 					@Override
@@ -1525,9 +1678,19 @@ MagnetPlugin
 					reportCompleteness(
 							int		percent )
 					{
-						muh_listener.reportCompleteness( percent );
+						if ( muh_listener != null ){
+							muh_listener.reportCompleteness( percent );
+						}
 					}
 
+					@Override
+					public void 
+					setupComplete(
+						long added_time )
+					{
+						dl_listener.setupComplete( added_time );
+					}
+					
 					@Override
 					public void
 					reportContributor(
@@ -1539,14 +1702,22 @@ MagnetPlugin
 					public boolean
 					cancelled()
 					{
-						return( muh_listener.cancelled());
+						if ( muh_listener != null ){
+							return( muh_listener.cancelled());
+						}else{
+							return( false );
+						}
 					}
 
 					@Override
 					public boolean
 					verbose()
 					{
-						return( muh_listener.verbose());
+						if ( muh_listener != null ){
+							return( muh_listener.verbose());
+						}else{
+							return( false );
+						}
 					}
 				},
 				hash,
@@ -1657,6 +1828,13 @@ MagnetPlugin
 		DownloadAsyncListener dl_listener =
 			new DownloadAsyncListener(){
 				
+				@Override
+				public void 
+				setupComplete(
+					long	added_time)
+				{
+				}
+			
 				@Override
 				public void 
 				failed(
@@ -2061,12 +2239,45 @@ MagnetPlugin
 		dm.setUserData( DM_DN_CHANGED, "" );
 	}
 	
+	protected int
+	getMDDownloadStartState(
+		DownloadManager		dm )
+	{
+		synchronized( download_start_states ){
+
+			try{
+				Integer state = download_start_states.remove( dm.getTorrent().getHash());
+				
+				if ( state != null ){
+					
+					return( state );
+				}
+			}catch( Throwable e ){
+			}
+				
+			return( md_start_stopped!=null&&md_start_stopped.getValue()?SS_STOPPED:SS_FORCE_START );
+		}
+	}
+	
 	protected Map<String,Object>
 	getInitialMetadata(
 		DownloadManager		dm,
 		Map<String,Object>	existing_md )
 	{
 		Map<String,Object> latest = TorrentUtils.getInitialMetadata( dm, dm.getUserData( DM_DN_CHANGED ) != null );
+		
+		try{
+			byte[] thumb = (byte[])latest.get( "thumbnail" );
+			
+			if ( MagnetPluginMDDownloader.isMagnetThumbnail( thumb )){
+				
+				latest.remove( "thumbnail");
+				latest.remove( "thumbnail_type" );
+			}
+		}catch( Throwable e ){
+			
+			Debug.out( e );
+		}
 		
 		if ( existing_md == null ){
 			
@@ -2139,8 +2350,14 @@ MagnetPlugin
 		return( update );
 	}
 	
-	private static ByteArrayHashMap<DownloadActivity>	download_activities = new ByteArrayHashMap<>();
-
+	private static ByteArrayHashMap<DownloadActivity>	download_activities 	= new ByteArrayHashMap<>();
+	
+	protected static final int SS_FORCE_START	= 1;
+	protected static final int SS_START			= 2;
+	protected static final int SS_STOPPED		= 3;
+	
+	private static ByteArrayHashMap<Integer>			download_start_states	= new ByteArrayHashMap<>();
+	
 	private static class
 	DownloadActivity
 	{
@@ -2150,6 +2367,11 @@ MagnetPlugin
 		private MagnetURIHandlerException	error;
 
 		private List<DownloadResultListener>		listeners = new ArrayList<>(2);
+		
+		protected
+		DownloadActivity()
+		{
+		}
 		
 		public void
 		addListener(
@@ -2245,6 +2467,15 @@ MagnetPlugin
 				}
 			}
 		}
+		
+		protected boolean
+		isComplete()
+		{
+			synchronized( this ){
+				
+				return( result_set );
+			}
+		}
 	}
 
 	private void
@@ -2289,13 +2520,36 @@ MagnetPlugin
 	 				new DownloadResultListener()
 	 				{
 		 				@Override
-		 				public void complete(DownloadResult result){
-		 					f_activity.setResult( result );
+		 				public void 
+		 				complete(
+		 					DownloadResult result)
+		 				{
+		 					try{
+		 						f_activity.setResult( result );
+		 					}finally{
+		 						done();
+		 					}
 		 				}
+		 				
 		 				@Override
-	 					public void failed(MagnetURIHandlerException error){
-		 					f_activity.setResult(error);
+	 					public void 
+	 					failed(
+	 						MagnetURIHandlerException error)
+		 				{
+		 					try{
+		 						f_activity.setResult(error);
+		 					}finally{
+		 						done();
+		 					}
 	 					}
+		 				private void
+		 				done()
+		 				{
+		 					synchronized( download_activities ){
+		 		 				
+	 		 					download_activities.remove( hash );
+		 		 			}
+		 				}
 	 				};
 
 	 			_downloadSupport( listener, hash, args, sources, tags, initial_metadata, timeout, flags, result_listener );
@@ -2308,7 +2562,10 @@ MagnetPlugin
 
 	 			synchronized( download_activities ){
 
-	 				download_activities.remove( hash );
+	 				if ( activity.isComplete()){
+	 				
+	 					download_activities.remove( hash );
+	 				}
 	 			}
 	 		}
  		}
@@ -2601,6 +2858,16 @@ MagnetPlugin
 								new MagnetPluginMDDownloader.DownloadListener()
 								{
 									@Override
+									public void
+									started(
+										long added_time )
+									{
+										if ( listener != null ){
+											listener.setupComplete( added_time );
+										}
+									}
+									
+									@Override
 									public void 
 									reportProgress(String str)
 									{
@@ -2630,6 +2897,7 @@ MagnetPlugin
 									{
 										if ( listener != null ){
 											listener.reportActivity( getMessageText( "report.md.done" ));
+											listener.setupComplete( -1 );
 										}
 
 										synchronized( md_downloader ){
@@ -2658,6 +2926,7 @@ MagnetPlugin
 									{
 										if ( listener != null ){
 											listener.reportActivity( getMessageText( "report.error", Debug.getNestedExceptionMessage(e)));
+											listener.setupComplete( -1 );
 										}
 
 										synchronized( md_downloader ){
@@ -2670,8 +2939,13 @@ MagnetPlugin
 								});
 						}
 					});
+		}else{
+			
+			if ( listener != null ){
+				
+				listener.setupComplete( -1 );
+			}
 		}
-
 
 		try{
 			try{
@@ -3416,6 +3690,10 @@ MagnetPlugin
 	private interface
 	DownloadAsyncListener
 	{
+		public void
+		setupComplete(
+			long		added_time );
+		
 		public void
 		complete(
 			byte[]		torrent_data );

@@ -1098,7 +1098,7 @@ public class ImageLoader
 			}
 		}
 	}
-
+	
 	public static Image getNoImage(){
 		return( getNoImage( "explicit" ));
 	}

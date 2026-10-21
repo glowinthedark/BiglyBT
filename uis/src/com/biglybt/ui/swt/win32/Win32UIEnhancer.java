@@ -21,8 +21,8 @@ import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.eclipse.swt.SWT;
@@ -33,8 +33,11 @@ import org.eclipse.swt.widgets.Shell;
 import com.biglybt.core.util.AESemaphore;
 import com.biglybt.core.util.AEThread2;
 import com.biglybt.core.util.AsyncDispatcher;
+import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
+import com.biglybt.core.util.SimpleTimer;
+import com.biglybt.core.util.StringInterner.FileKey;
 import com.biglybt.platform.win32.access.AEWin32Manager;
 import com.biglybt.platform.win32.access.impl.AEWin32AccessInterface;
 import com.biglybt.ui.swt.Utils;
@@ -308,10 +311,116 @@ public class Win32UIEnhancer
 
 	private static boolean	gfi_active = false;
 	private static int		gfi_consec_fails = 0;
+
+		// once the failure count trips the limit nothing else would ever be
+		// looked up, as only a successful call resets it and no calls are being
+		// made. give it another go periodically so a bad patch - a slow volume
+		// spinning up, say - doesn't leave icons switched off for the session
+
+	private static long		gfi_breaker_time = -1;
+
+	private static final int	GFI_MAX_FAILS		= 50;
+	private static final long	GFI_RETRY_AFTER		= 30*1000;
 	private static AsyncDispatcher	gfi_dispatcher		= new AsyncDispatcher( "gfi" );
-	private static List<Image>		gfi_pending_images	= new ArrayList<>();
 	
-	public static Image 
+		// small and large icons for the same file are different images, so the
+		// size has to be part of the key - otherwise a lookup for one size is
+		// answered with whatever the other size cached
+
+	private static class
+	IconKey
+	{
+		final FileKey	file_key;
+		final boolean	big;
+
+		IconKey(
+			File		file,
+			boolean		_big )
+		{
+			file_key	= new FileKey( file );
+			big			= _big;
+		}
+
+		public int
+		hashCode()
+		{
+			return( file_key.hashCode() + ( big?1:0 ));
+		}
+
+		public boolean
+		equals(
+			Object		_other )
+		{
+			if ( !( _other instanceof IconKey )){
+
+				return( false );
+			}
+
+			IconKey other = (IconKey)_other;
+
+			return( other.big == big && other.file_key.equals( file_key ));
+		}
+	}
+
+	private static final Map<IconKey,Object[]>	gfi_pending_images =
+			new LinkedHashMap<IconKey,Object[]>( 128, 0.75f, true )
+			{
+				@Override
+				protected boolean
+				removeEldestEntry(
+					Map.Entry<IconKey,Object[]> eldest )
+				{
+					if ( size() > 64 ){
+						
+						Object[] img = eldest.getValue();
+						
+						if ( img[0] != null ){
+							
+							((Image)img[0]).dispose();
+						}
+						
+						return( true );
+						
+					}else{
+						
+						return( false );
+					}
+				}
+			};
+		
+	static{
+	
+		SimpleTimer.addPeriodicEvent(
+			"Win32Enh",
+			2*60*1000,
+			(ev)->{
+				long now = SystemTime.getMonotonousTime();
+				
+				synchronized( Win32UIEnhancer.class ){
+					
+					Iterator<Object[]> it = gfi_pending_images.values().iterator();
+					
+					while( it.hasNext()){
+						
+						Object[] entry = it.next();
+						
+						if ( now - (Long)entry[1] > 60*1000 ){
+							
+							Image image = (Image)entry[0];
+							
+							if ( image != null ){
+								
+								image.dispose();
+							}
+							
+							it.remove();
+						}
+					}
+				}
+			});
+	}
+	
+	public static Object[] 
 	getFileIcon(
 		File file, boolean big) 
 	{
@@ -322,27 +431,93 @@ public class Win32UIEnhancer
 			return( null );
 		}
 		
+		IconKey fk = new IconKey( file, big );
+		
 		synchronized( Win32UIEnhancer.class ){
 			
-			for ( Image img: gfi_pending_images ){
-
-				img.dispose();
+			Object[] existing = gfi_pending_images.remove( fk );
+			
+			if ( existing != null ){
+				
+				return( new Object[]{ existing[0], false, false });
 			}
 			
-			gfi_pending_images.clear();
-			
-			if ( gfi_active || gfi_consec_fails > 3 ){
+			if ( gfi_active ){
 				
-				return( null );
+				if ( gfi_dispatcher.getQueueSize() < 64 ){
+					
+						// kick off a background fetch so that hopefully when a subsequent call is made for this
+						// file the result is already available
+					
+					gfi_dispatcher.dispatch(()->{
+						
+						synchronized( Win32UIEnhancer.class ){
+						
+							if ( gfi_pending_images.containsKey( fk )){
+							
+								return;
+							}
+						}
+						
+						Image res = null;
+						
+						try{
+								// user has this hanging for ages so protect against it a bit
+							
+							res = getFileIconSupport( file, big );
+											
+						}catch( Throwable e ){
+							
+							Debug.out( e );
+						}
+						
+						synchronized( Win32UIEnhancer.class ){
+							
+							Object[] old = gfi_pending_images.put( fk, new Object[]{ res, SystemTime.getMonotonousTime() });
+							
+							if ( old != null && old[0] != null ){
+									
+								((Image)old[0]).dispose();
+							}
+						}						
+					}, false );
+							
+				}
+				
+					// nothing is wrong with the file, we just can't look at it
+					// right now. the third element marks this as "busy" rather
+					// than a timeout, so the caller can come back promptly
+					// instead of recording the file as having no icon.
+				
+				return( new Object[]{ null, true, true });
+			}
+			
+			if ( gfi_consec_fails >= GFI_MAX_FAILS ){
+				
+				long now = SystemTime.getMonotonousTime();
+				
+				if ( gfi_breaker_time == -1 ){
+					
+					gfi_breaker_time = now;
+				}
+				
+				if ( now - gfi_breaker_time < GFI_RETRY_AFTER ){
+					
+					return( null );
+				}
+				
+					// let one through; if it works the count resets, if not we
+					// wait out another interval
+				
+				gfi_consec_fails 	= GFI_MAX_FAILS;
+				gfi_breaker_time	= now;
 			}
 			
 			gfi_active = true;
 		}
 	
 		AESemaphore sem = new AESemaphore( "gfi" );
-		
-		Image[]		result = { null };
-		
+				
 		gfi_dispatcher.dispatch(()->{
 			
 			Image res = null;
@@ -361,40 +536,44 @@ public class Win32UIEnhancer
 				synchronized( Win32UIEnhancer.class ){
 					
 					gfi_active = false;
-					
-					result[0] = res;
-					
-					if ( res != null ){
+															
+					Object[] old = gfi_pending_images.put( fk, new Object[]{ res, SystemTime.getMonotonousTime() });
 						
-						gfi_pending_images.add( res );
+					if ( old != null && old[0] != null ){
+							
+						((Image)old[0]).dispose();
 					}
 				}
 				
 				sem.release();
 			}
-		});
+		}, true );
 		
-		boolean ok = sem.reserve( 2500 );	//generous...
-		
+		sem.reserve( Utils.SLOW_OPERATION_TIMEOUT_MS );
+				
 		synchronized( Win32UIEnhancer.class ){
 		
+			Object[] result = gfi_pending_images.remove( fk );
+			
+			boolean ok = result != null;
+			
+			Image img;
+			
 			if ( ok ){
 				
-				gfi_consec_fails = 0;
+				img = (Image)result[0];
+				
+				gfi_consec_fails	= 0;
+				gfi_breaker_time	= -1;
 				
 			}else{
 				
+				img = null;
+				
 				gfi_consec_fails++;
 			}
-			
-			Image img = result[0];
-			
-			if ( img != null ){
-				
-				gfi_pending_images.remove( img );
-			}
-			
-			return( img );
+						
+			return( new Object[]{ img, !ok, false });
 		}
 	}
 	

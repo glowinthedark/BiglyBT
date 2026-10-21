@@ -25,7 +25,6 @@ import java.net.URL;
 import java.util.List;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.dnd.*;
@@ -62,6 +61,7 @@ import com.biglybt.ui.common.ToolBarItem;
 import com.biglybt.ui.common.table.*;
 import com.biglybt.ui.common.table.impl.TableViewImpl;
 import com.biglybt.ui.mdi.MultipleDocumentInterface;
+import com.biglybt.ui.selectedcontent.ISelectedContent;
 import com.biglybt.ui.selectedcontent.SelectedContent;
 import com.biglybt.ui.selectedcontent.SelectedContentManager;
 import com.biglybt.ui.swt.*;
@@ -81,6 +81,7 @@ import com.biglybt.ui.swt.views.table.impl.TableViewFactory;
 import com.biglybt.ui.swt.views.table.impl.TableViewSWT_TabsCommon;
 import com.biglybt.ui.swt.views.table.impl.TableViewTab;
 import com.biglybt.ui.swt.views.table.painted.TableRowPainted;
+import com.biglybt.ui.swt.views.table.utils.TableColumnFilterHelper;
 import com.biglybt.ui.swt.views.utils.CategoryUIUtils;
 import com.biglybt.ui.swt.views.utils.ManagerUtils;
 import com.biglybt.ui.swt.views.utils.TagUIUtils;
@@ -169,9 +170,13 @@ public class MyTorrentsView
   protected BubbleTextBox filterBox = null;
   private TimerEventPeriodic	txtFilterUpdateEvent;
 
+  private String		defaultFilterPrefix = "";
   private String		lastSearchConstraintString;
   private TagConstraint	lastSearchConstraint;
-  
+
+  private TableColumnFilterHelper<DownloadManager>	col_filter_helper;
+
+	
   private Object	currentTagsLock = new Object();
   private Tag[]		_currentTags;
   private List<Tag>	allTags;
@@ -223,7 +228,8 @@ public class MyTorrentsView
 
 	private volatile int[]	dmCounts = new int[3];
 	private AtomicInteger	dmCountMutations	= new AtomicInteger(0);
-	private volatile int	dmCountLast			= -1;
+	private volatile int	dmCountLast1			= -1;
+	private volatile int	dmCountLast2			= -1;
 
 	private final Set<TableRowCore> listRowsToRefresh = new HashSet<>();
 
@@ -231,47 +237,70 @@ public class MyTorrentsView
 	private boolean			created;
 	private DownloadManager	pendingAttention;
 	
-	public MyTorrentsView( boolean supportsTabs ) {
+	public 
+	MyTorrentsView(
+		BubbleTextBox	filterBox,
+		boolean			supportsTabs )
+	{
 		super("MyTorrentsView");
+		
+		setupFilterBox( filterBox );
+		
 		this.supportsTabs = supportsTabs;
 	}
 
-	public MyTorrentsView(String textPrefixID, boolean supportsTabs) {
+	public 
+	MyTorrentsView(
+		String			textPrefixID,
+		BubbleTextBox 	filterBox,
+		boolean			supportsTabs) 
+	{
 		super(textPrefixID);
+		
+		setupFilterBox( filterBox );
+		
 		this.supportsTabs = supportsTabs;
 	}
 
-  /**
-   * Initialize
-   *
-   * @param core
-   * @param isSeedingView
-   * @param basicItems
-   */
-  public
-  MyTorrentsView(
-  		Core				core,
-  		String				tableID,
-  		boolean 			isSeedingView,
-  		TableColumnCore[]	basicItems,
-		BubbleTextBox 		filterBox,
-  		boolean				supportsTabs )
-  {
+	public
+	MyTorrentsView(
+			Core				core,
+			String				tableID,
+			boolean 			isSeedingView,
+			TableColumnCore[]	basicItems,
+			BubbleTextBox 		filterBox,
+			boolean				supportsTabs )
+	{
 		super("MyTorrentsView");
-		this.filterBox = filterBox;
+
+		setupFilterBox( filterBox );
 		
-		String tooltip = MessageText.getString("MyTorrentsView.filter.tooltip");
-		
-		if ( Utils.getUserMode() > 0 ){
-			tooltip += "\n" + MessageText.getString( "search.tt.tag.constraint" );
-		}
-		
-		filterBox.setTooltip(tooltip);
 		this.supportsTabs = supportsTabs;
 		init(core, tableID, isSeedingView
 				? DownloadTypeComplete.class : DownloadTypeIncomplete.class, basicItems);
-  }
+	}
 
+	private void
+	setupFilterBox(
+		BubbleTextBox	filterBox )	
+	{
+		this.filterBox = filterBox;
+
+		if ( filterBox != null ){
+			
+			String tooltip = MessageText.getString("MyTorrentsView.filter.tooltip");
+	
+			if ( Utils.getUserMode() > 0 ){
+				tooltip += MessageText.getString("column.filter.tt.line1");
+				tooltip += MessageText.getString("column.filter.tt.line3");
+				tooltip += MessageText.getString("column.filter.tt.line2");
+				tooltip += "\n" + MessageText.getString( "search.tt.tag.constraint" );
+			}
+	
+			filterBox.setTooltip(tooltip);
+		}
+	}
+	
   // @see com.biglybt.ui.swt.views.table.impl.TableViewTab#initYourTableView()
   @Override
   public TableViewSWT<DownloadManager> initYourTableView() {
@@ -356,6 +385,10 @@ public class MyTorrentsView
 
     tv = createTableView(forDataSourceType, tableID, basicItems);
 
+    if ( filterBox != null ){
+    	col_filter_helper = new TableColumnFilterHelper<DownloadManager>( tv, "tv:search" );
+    }
+    
     /*
      * 'Big' table has taller row height
      */
@@ -481,6 +514,8 @@ public class MyTorrentsView
 
 		} else {
 
+	    	col_filter_helper = new TableColumnFilterHelper<DownloadManager>( tv, "tv:search" );
+
 			Composite mainWidget = filterBox.getMainWidget();
 			Composite filterParent = mainWidget.getParent();
 
@@ -522,7 +557,7 @@ public class MyTorrentsView
 						
 						int	mut = dmCountMutations.get();
 								
-						if ( mut != dmCountLast ){
+						if ( mut != dmCountLast1 ){
 							
 							int active 	= 0;
 							int	queued	= 0;
@@ -545,7 +580,7 @@ public class MyTorrentsView
 							
 							dmCounts = new int[]{ dms.size(), active, queued };
 							
-							dmCountLast = mut;
+							dmCountLast1 = mut;
 						}
 						
 						return( dmCounts );
@@ -571,6 +606,7 @@ public class MyTorrentsView
 						"Library.ShowTagButtons.ImageOverride",
 						"Library.ShowTagButtons.Align",
 						"Library.ShowTagButtons.Inclusive",
+						"table.library.filter.prefix",
 					}, this);
 	
 	
@@ -732,6 +768,34 @@ public class MyTorrentsView
 		  }
 	  });
 	  
+	  final MenuItem searchHistoryDefaultPrefix = new MenuItem(searchMenu, SWT.PUSH);
+	  Messages.setLanguageText( searchHistoryDefaultPrefix, "menu.default.prefix" );
+
+	  searchHistoryDefaultPrefix.addSelectionListener(new SelectionAdapter() {
+		  @Override
+		  public void widgetSelected(SelectionEvent e) {
+			  SimpleTextEntryWindow entryWindow = new SimpleTextEntryWindow(
+						"default.prefix.title", "default.prefix.message");
+				entryWindow.setPreenteredText(
+						COConfigurationManager.getStringParameter(
+								"table.library.filter.prefix", ""),
+						true);
+				entryWindow.selectPreenteredText(true);
+				entryWindow.prompt(new UIInputReceiverListener() {
+					@Override
+					public void UIInputReceiverClosed(UIInputReceiver receiver) {
+						if (!receiver.hasSubmittedInput()) {
+							return;
+						}
+
+						COConfigurationManager.setParameter(
+								"table.library.filter.prefix",
+								receiver.getSubmittedInput().trim());
+					}
+				});
+		  }
+	  });
+	  
 	  MenuItem menuEnableSimple;
 	  
 	  if ( Utils.isAZ3UI()){
@@ -798,6 +862,10 @@ public class MyTorrentsView
 
 			  searchHistoryEnable.setSelection(COConfigurationManager.getBooleanParameter( "table.filter.history.enabled", true ));
 
+			  String prefix = COConfigurationManager.getStringParameter( "table.library.filter.prefix", "");
+			  
+			  Messages.setLanguageText( searchHistoryDefaultPrefix, "menu.default.prefix", prefix.isEmpty()?"":(" (\"" + prefix + "\")"));
+
 			  if ( menuEnableSimple != null ){
 			  
 				  menuEnableSimple.setSelection(COConfigurationManager.getBooleanParameter( "Library.EnableSimpleView" ));
@@ -825,6 +893,8 @@ public class MyTorrentsView
 			}
 		});
   	
+	col_filter_helper = null;
+
     dispatcher.dispatch(
        	AERunnable.create(
        		()->{
@@ -864,7 +934,9 @@ public class MyTorrentsView
 						"Library.ShowTagButtons.FiltersOnly",
 						"Library.ShowTagButtons.ImageOverride",
 						"Library.ShowTagButtons.Align",
-						"Library.ShowTagButtons.Inclusive" },
+						"Library.ShowTagButtons.Inclusive",
+						"table.library.filter.prefix",
+						},
 					this);
        		}));
   }
@@ -1352,77 +1424,86 @@ public class MyTorrentsView
 		}
 
 		TagGroup currentGroup = null;
-				
-		for ( final Tag tag: tags ){
 			
-			boolean isCat = (tag instanceof Category);
-
-			TagGroup tg = tag.getGroupContainer();
+		try{
+				// get a lot of relayoutting when building the buttons
 			
-			if ( tg != currentGroup && currentGroup != null && !currentGroup.getTags().isEmpty()){
-								
-				Divider div = new Divider( cTitleCategoriesAndTags, SWT.NULL );
+			cTitleCategoriesAndTags.setLayoutDeferred( true );
+			
+			for ( final Tag tag: tags ){
 				
-  				RowData rd = new RowData();
-  				
-  				div.setLayoutData(rd);
-			}
-
-			currentGroup = tg;
-
-			TagCanvas button = new TagCanvas(cTitleCategoriesAndTags, tag, false, true);
-			TagPainter painter = button.getTagPainter();
-			button.setTrigger(buttonListener);
-			painter.setCompact(true,
-					COConfigurationManager.getBooleanParameter(
-							"Library.ShowTagButtons.ImageOverride"));
-
-			if (isCat) {
-				if (spacer == null) {
-					spacer = new Label(cTitleCategoriesAndTags, SWT.NONE);
-					RowData rd = new RowData();
-					rd.width = 8;
-					spacer.setLayoutData(rd);
-					spacer.moveAbove(null);
-					if ( titleLab != null ){
-						titleLab.moveAbove(spacer);
-					}
+				boolean isCat = (tag instanceof Category);
+	
+				TagGroup tg = tag.getGroupContainer();
+				
+				if ( tg != currentGroup && currentGroup != null && !currentGroup.getTags().isEmpty()){
+									
+					Divider div = new Divider( cTitleCategoriesAndTags, SWT.NULL );
+					
+	  				RowData rd = new RowData();
+	  				
+	  				div.setLayoutData(rd);
 				}
-				button.moveAbove(spacer);
+	
+				currentGroup = tg;
+	
+				TagCanvas button = new TagCanvas(cTitleCategoriesAndTags, tag, false, true);
+				TagPainter painter = button.getTagPainter();
+				button.setTrigger(buttonListener);
+				painter.setCompact(true,
+						COConfigurationManager.getBooleanParameter(
+								"Library.ShowTagButtons.ImageOverride"));
+	
+				if (isCat) {
+					if (spacer == null) {
+						spacer = new Label(cTitleCategoriesAndTags, SWT.NONE);
+						RowData rd = new RowData();
+						rd.width = 8;
+						spacer.setLayoutData(rd);
+						spacer.moveAbove(null);
+						if ( titleLab != null ){
+							titleLab.moveAbove(spacer);
+						}
+					}
+					button.moveAbove(spacer);
+				}
+				
+				button.addKeyListener(this);
+				if ( fontButton == null) {
+					fontButton = FontUtils.cache( FontUtils.getFontWithStyle(button.getFont(), SWT.NONE, 0.8f));
+				}
+				button.setFont(fontButton);
+	
+				if (isCurrent(tag)) {
+					painter.setSelected(true);
+					updateTagAlphas();
+				}
+	
+				Menu menu = new Menu( button );
+	
+				button.setMenu( menu );
+	
+				if (isCat) {
+					CategoryUIUtils.setupCategoryMenu(
+						menu, 
+						(Category) tag,
+						(dm)->{
+							return( isOurDownloadManager((DownloadManager)dm ));
+						});
+				} else {
+					TagUIUtils.createSideBarMenuItemsDelayed(
+						menu, 
+						tag,
+						(dm)->{
+							return( isOurDownloadManager((DownloadManager)dm ));
+						});
+				}
 			}
+		}finally{
 			
-			button.addKeyListener(this);
-			if ( fontButton == null) {
-				fontButton = FontUtils.cache( FontUtils.getFontWithStyle(button.getFont(), SWT.NONE, 0.8f));
-			}
-			button.setFont(fontButton);
-
-			if (isCurrent(tag)) {
-				painter.setSelected(true);
-				updateTagAlphas();
-			}
-
-			Menu menu = new Menu( button );
-
-			button.setMenu( menu );
-
-			if (isCat) {
-				CategoryUIUtils.setupCategoryMenu(
-					menu, 
-					(Category) tag,
-					(dm)->{
-						return( isOurDownloadManager((DownloadManager)dm ));
-					});
-			} else {
-				TagUIUtils.createSideBarMenuItemsDelayed(
-					menu, 
-					tag,
-					(dm)->{
-						return( isOurDownloadManager((DownloadManager)dm ));
-					});
-			}
+			cTitleCategoriesAndTags.setLayoutDeferred( false );
 		}
-
+		
 		cTableParentPanel.layout(true, true);
 	}
 
@@ -1487,8 +1568,8 @@ public class MyTorrentsView
 	public boolean 
 	filterCheck(
 		DownloadManager 	dm, 
-		String 				sLastSearch, 
-		boolean 			bRegexSearch,
+		String 				currentSearch, 
+		boolean 			regexSearch,
 		boolean				confusable )
 	{
 		if ( dm == null ){
@@ -1496,18 +1577,19 @@ public class MyTorrentsView
 		}
 		
 		boolean bOurs;
-		if (sLastSearch.length() > 0) {
+		
+		if (currentSearch.length() > 0) {
 			
-			if ( !bRegexSearch ){
+			if ( !regexSearch ){
 				
 				try{
 					TagConstraint constraint = lastSearchConstraint;
 					
-					if ( constraint == null || !sLastSearch.equals( lastSearchConstraintString )){
+					if ( constraint == null || !currentSearch.equals( lastSearchConstraintString )){
 						
-						lastSearchConstraintString = sLastSearch;
+						lastSearchConstraintString = currentSearch;
 												
-						constraint = lastSearchConstraint = tagManager.compileConstraint( sLastSearch );
+						constraint = lastSearchConstraint = tagManager.compileConstraint( currentSearch );
 					}
 					
 					if ( constraint != null && constraint.getError() == null ){
@@ -1518,186 +1600,145 @@ public class MyTorrentsView
 				}
 			}
 			
-			try {
-				String	comment = dm.getDownloadState().getUserComment();
-				if ( comment == null ){
-					comment = "";
-				}
-
-				String[][] name_mapping = {
-					{
-						"",
-						dm.getDisplayName()
-					},
-					{
-						"t:",
-						"", 	// defer (index = 1)this as costly dm.getTorrent().getAnnounceURL().getHost()
-					},
-					{
-						"st:",
-						"" + dm.getState()
-					},
-					{
-						"c:",
-						comment
-					},
-					{
-						"f:",
-						"",		//defer (index = 4)
-					},
-					{
-						"tag:",
-						""
+			try{
+				TableColumnFilterHelper.MatchTextProvider mt_provider = (key)->{
+					
+					if ( key == null ){
+						
+						return( Arrays.asList( dm.getDisplayName()));
 					}
-				};
-
-				Object o_name = name_mapping[0][1];
-
-				String tmpSearch = sLastSearch;
-
-				if ( confusable ){
-				
-					tmpSearch = GeneralUtils.getConfusableEquivalent( tmpSearch, true );
-				}
-
-				for ( int i = 1; i < name_mapping.length; i++ ){
-
-					if ( tmpSearch.startsWith(name_mapping[i][0])) {
-
-						tmpSearch = tmpSearch.substring(name_mapping[i][0].length());
-
-						if ( i == 1 ){
-
-							List<String> names = new ArrayList<>();
-
-							o_name = names;
-
-							TOTorrent t = dm.getTorrent();
-
-							if ( t != null ){
-
-								names.add( t.getAnnounceURL().getHost());
-
-								TOTorrentAnnounceURLSet[] sets = t.getAnnounceURLGroup().getAnnounceURLSets();
-
-								for ( TOTorrentAnnounceURLSet set: sets ){
-
-									URL[] urls = set.getAnnounceURLs();
-
-									for ( URL u: urls ){
-
-										names.add( u.getHost());
-									}
-								}
-
-								try{
-									byte[] hash = t.getHash();
-
-									names.add( ByteFormatter.encodeString( hash ));
-									names.add( Base32.encode( hash ));
-
-								}catch( Throwable e ){
-
-								}
-							}
-						}else if ( i == 4 ){
-
-							List<String> names = new ArrayList<>();
-
-							o_name = names;
-
-							DiskManagerFileInfoSet file_set = dm.getDiskManagerFileInfoSet();
-
-							DiskManagerFileInfo[] files = file_set.getFiles();
-
-							for ( DiskManagerFileInfo f: files ){
-
-								File file = f.getFile(true);
-
-								String name = tmpSearch.contains( File.separator )?file.getAbsolutePath():file.getName();
-
-								names.add( name );
-							}
+					
+					List<String> result = new ArrayList<>();
+					
+					switch( key ){
+						case "c":{
+							String	comment = dm.getDownloadState().getUserComment();
 							
-							names.add( dm.getSaveLocation().getAbsolutePath());		// always throw in matching against the full save path
-
-						} else if (i == 5) {
-							List<String> names = new ArrayList<String>();
-
-							o_name = names;
-
-							List<Tag> tags = tagManager.getTagsForTaggable( TagType.TT_DOWNLOAD_MANUAL, dm );
-
-							if ( tags.size() > 0 ){
-
-								tags = TagUtils.sortTags( tags );
-
-								for ( Tag t: tags ){
-
-									String str = t.getTagName( true );
-									names.add(str);
-
-								}
+							if ( comment == null ){
+								
+								comment = "";
 							}
-
-						}else{
-							o_name = name_mapping[i][1];
-						}
-					}
-				}
-
-				boolean	match_result = true;
-
-				String expr;
-				
-				if ( bRegexSearch ){
-					
-					expr = tmpSearch;
-					
-					if ( expr.startsWith( "!" )){
 						
-						expr = expr.substring(1);
-
-						match_result = false;
-					}
-				}else{
-					
-					expr = RegExUtil.convertAndOrToExpr( tmpSearch );
-				}
-
-				Pattern pattern = RegExUtil.getCachedPattern( "tv:search", expr, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-				if ( o_name instanceof String ){
-
-					String name = (String)o_name;
-					
-					if ( confusable ){
-						
-						name = GeneralUtils.getConfusableEquivalent( name, false );
-					}
-					
-					bOurs = pattern.matcher( name ).find() == match_result;
-
-				}else{
-					List<String>	names = (List<String>)o_name;
-
-						// match_result: true -> at least one match; false -> any fail
-
-					bOurs = !match_result;
-
-					for ( String name: names ){
-						
-						if ( confusable ){
-						
-							name = GeneralUtils.getConfusableEquivalent( name, false );
-						}
-
-						if ( pattern.matcher( name ).find()){
-							bOurs = match_result;
+							result.add( comment );
+							
 							break;
 						}
+						case "t":{
+					
+							TOTorrent t = dm.getTorrent();
+	
+							if ( t != null ){
+	
+								result.add( t.getAnnounceURL().getHost());
+	
+								TOTorrentAnnounceURLSet[] sets = t.getAnnounceURLGroup().getAnnounceURLSets();
+	
+								for ( TOTorrentAnnounceURLSet set: sets ){
+	
+									URL[] urls = set.getAnnounceURLs();
+	
+									for ( URL u: urls ){
+	
+										result.add( u.getHost());
+									}
+								}
+	
+								try{
+									byte[] hash = t.getHash();
+	
+									result.add( ByteFormatter.encodeString( hash ));
+									result.add( Base32.encode( hash ));
+	
+								}catch( Throwable e ){
+	
+								}
+							}
+							
+							break;
+						}
+						case "st":{
+						
+							result.add( "" + dm.getState());
+							
+							break;
+						}
+						case "f":{
+					
+								// too inefficient to have this when matching on file names
+							
+							col_filter_helper.setAutoRefilterEnabled( false );
+							
+							boolean absolute = currentSearch.contains( File.separator );
+							
+							DiskManagerFileInfoSet file_set = dm.getDiskManagerFileInfoSet();
+	
+							DiskManagerFileInfo[] files = file_set.getFiles();
+	
+							for ( DiskManagerFileInfo f: files ){
+		
+								String name = absolute?f.getFile( true ).getAbsolutePath():f.getFileName( true );
+									
+								result.add( name );
+							}
+							
+							result.add( dm.getSaveLocation().getAbsolutePath());		// always throw in matching against the full save path
+							
+							break;
+						}
+						case "tag":{
+											
+							List<Tag> tags = tagManager.getTagsForTaggable( TagType.TT_DOWNLOAD_MANUAL, dm );
+	
+							if ( tags.size() > 0 ){
+	
+								tags = TagUtils.sortTags( tags );
+	
+								for ( Tag t: tags ){
+	
+									String str = t.getTagName( true );
+									
+									result.add(str);
+								}
+							}
+							
+							break;
+						}
+						
+						default:{
+							return( null );
+						}
+					}
+					
+					return( result );
+				};
+				
+				String actualFilter;
+				
+				if ( defaultFilterPrefix.isEmpty()){
+					
+					actualFilter = currentSearch;
+					
+				}else{
+					
+					if ( currentSearch.contains( ":" )){
+						
+						actualFilter = defaultFilterPrefix + "+" + currentSearch;
+						
+					}else{
+					
+						actualFilter = defaultFilterPrefix + currentSearch;
 					}
 				}
+				
+				bOurs = 
+					col_filter_helper.filterCheck( 
+							dm, 
+							actualFilter, 
+							regexSearch, 
+							mt_provider, 
+							confusable, 
+							false );
+					
 			} catch (Exception e) {
 				// Future: report PatternSyntaxException message to user.
 
@@ -1713,7 +1754,15 @@ public class MyTorrentsView
 
 	// @see com.biglybt.ui.swt.views.table.TableViewFilterCheck#filterSet(java.lang.String)
 	@Override
-	public void filterSet(final String filter) {
+	public void 
+	filterSet(
+		String filter) 
+	{
+		if ( col_filter_helper != null ){
+		
+			col_filter_helper.filterSet( filter );
+		}
+		
 		Utils.execSWTThread(new AERunnable() {
 
 			@Override
@@ -1805,23 +1854,30 @@ public class MyTorrentsView
 		
 		if ( !filterParent.isDisposed()){
 
-			TableRowCore[] rows = view.getRows();
-
-			int	active = 0;
-
-			for ( TableRowCore row: rows ){
-
-				DownloadManager dm = (DownloadManager)row.getDataSource( true );
-
-				int	state = dm.getState();
-
-				if ( state == DownloadManager.STATE_DOWNLOADING || state == DownloadManager.STATE_SEEDING ){
-
-					active++;
+			int	mut = dmCountMutations.get();
+			
+			if ( mut != dmCountLast2 ){
+				
+				dmCountLast2 = mut;
+				
+				TableRowCore[] rows = view.getRows();
+	
+				int	active = 0;
+	
+				for ( TableRowCore row: rows ){
+	
+					DownloadManager dm = (DownloadManager)row.getDataSource( true );
+	
+					int	state = dm.getState();
+	
+					if ( state == DownloadManager.STATE_DOWNLOADING || state == DownloadManager.STATE_SEEDING ){
+	
+						active++;
+					}
 				}
+	
+				vtxi.searchUpdate( tv.getComposite(), rows.length, active );
 			}
-
-			vtxi.searchUpdate( tv.getComposite(), rows.length, active );
 		}
 	}
 
@@ -1836,8 +1892,65 @@ public class MyTorrentsView
 	}
 
 	@Override
-	public void selectionChanged(TableRowCore[] selected_rows, TableRowCore[] deselected_rows){
-		updateSelectedContent();
+	public void 
+	selectionChanged(
+		TableRowCore[] selected_rows, 
+		TableRowCore[] deselected_rows)
+	{	
+		boolean force_sc = false;
+		
+			// if we own the current selection and something has been removed from it then we really
+			// need to force the update. 
+			// this could possibly be relaxed to "if we own the current selection" but this area is nasty so
+			// just fixing a bug where removal of a datasource is being left active in sub-tabs
+		
+		if ( 	deselected_rows.length > 0 &&
+				SelectedContentManager.getCurrentlySelectedTableView() == tv &&
+				SelectedContentManager.getCurrentySelectedViewID() == tv.getTableID()){
+			
+			ISelectedContent[] sc = SelectedContentManager.getCurrentlySelectedContent();
+			
+			if ( sc != null ){
+				
+				for ( TableRowCore row: deselected_rows ){
+					
+					Object ds = row.getDataSource( true );
+				
+					SelectedContent dsc	= null;
+					DownloadManager	dm	= null;
+					
+					if (ds instanceof DownloadManager) {
+						dm = (DownloadManager) ds;
+						dsc = new SelectedContent( dm );
+					} else if (ds instanceof DiskManagerFileInfo) {
+						DiskManagerFileInfo fileInfo = (DiskManagerFileInfo) ds;
+						dm = fileInfo.getDownloadManager();
+						dsc = new SelectedContent(dm, fileInfo.getIndex());
+					}
+					
+					if ( dsc != null ){ // && dm.isDestroyed()){
+						
+						for ( ISelectedContent s: sc ){
+							
+							if ( s.sameAs( dsc )){
+								
+								force_sc = true;
+								
+								break;
+							}
+						}
+						
+						if ( force_sc ){
+							
+							break;
+						}
+					}
+				}
+			}
+		}		
+		
+		updateSelectedContent( force_sc );
+		
 	  	refreshTorrentMenu();
 	}
 	
@@ -2878,6 +2991,8 @@ public class MyTorrentsView
 			currentTagsAny = COConfigurationManager.getBooleanParameter( "Library.ShowTagButtons.Inclusive" );
 		}
 		
+		defaultFilterPrefix = COConfigurationManager.getStringParameter( "table.library.filter.prefix", "" );
+		
 		if (parameterName != null ){
 			
 			if ( 	parameterName.equals("Library.ShowTitle") ||
@@ -3117,8 +3232,8 @@ public class MyTorrentsView
   @Override
   public void 
   filePriorityChanged(
-	DownloadManager 		download,
-    DiskManagerFileInfo 	file ) 
+	DownloadManager 			download,
+    List<DiskManagerFileInfo> 	changed_files ) 
   {
 	  TableRowCore row = tv.getRow( download );
 
@@ -3553,7 +3668,23 @@ public class MyTorrentsView
 	taggableSync(
 		Tag 		tag )
 	{
-		// request to fully resync this tag
+		if ( tag instanceof Category ){
+			
+			if (((Category)tag).getType() == Category.TYPE_ALL ){
+				
+					// this is the default Tag for all views when other tags not selected
+					// membership always full, nothing to do.
+				
+				return;
+			}
+		}
+		
+		if ( col_filter_helper != null && !col_filter_helper.getAutoRefilterEnabled()){
+			
+			return;
+		}
+		
+			// request to fully resync this tag
 
 		Collection<DownloadManager> dataSources = tv.getDataSources();
 
@@ -3569,7 +3700,7 @@ public class MyTorrentsView
 
 			DownloadManager	manager = (DownloadManager)t;
 
-			if ( isOurDownloadManager( manager ) && !tv.dataSourceExists(manager)){
+			if ( isOurDownloadManager( manager ) && !tv.hasDataSourceBeenAdded(manager, true )){
 
 				tv.addDataSource(manager);
 			}
@@ -3817,6 +3948,7 @@ public class MyTorrentsView
 		DiskManagerFileInfoSet fileInfos = dm.getDiskManagerFileInfoSet();
 		if (fileInfos != null) {
 			DiskManagerFileInfo[] files = fileInfos.getFiles();
+			int[] storageTypes = null;
 			boolean copied = false;
 			int pos = 0;
 			for (int i = 0; i < files.length; i++) {
@@ -3824,9 +3956,17 @@ public class MyTorrentsView
 				if ( fileInfo.getTorrentFile().isPadFile()){
 					continue;
 				}
-				if (	fileInfo.isSkipped()
-						&& (fileInfo.getStorageType() == DiskManagerFileInfo.ST_COMPACT || fileInfo.getStorageType() == DiskManagerFileInfo.ST_REORDER_COMPACT)) {
-					continue;
+				if ( fileInfo.isSkipped()){
+					
+					if ( storageTypes == null ){
+						
+						storageTypes = fileInfos.getStorageTypes();
+					}
+					
+					if ( storageTypes[i] == DiskManagerFileInfo.ST_COMPACT || storageTypes[i] == DiskManagerFileInfo.ST_REORDER_COMPACT ){
+						
+						continue;
+					}
 				}
 				if (pos != i) {
 					if ( !copied ){
@@ -3859,7 +3999,7 @@ public class MyTorrentsView
 	@Override
 	public boolean eventOccurred(UISWTViewEvent event) {
 		boolean b = super.eventOccurred(event);
-		if (event.getType() == UISWTViewEvent.TYPE_FOCUSGAINED) {
+		if (event.getType() == UISWTViewEvent.TYPE_SHOWN) {
 			if (rebuildListOnFocusGain) {
 				List<?> dms = globalManager.getDownloadManagers();
 				List<DownloadManager> listAdds = new ArrayList<>();
@@ -3884,7 +4024,7 @@ public class MyTorrentsView
 			if ( !hiddenTags.isEmpty()){
 				createTabs();
 			}
-		} else if (event.getType() == UISWTViewEvent.TYPE_FOCUSLOST) {
+		} else if (event.getType() == UISWTViewEvent.TYPE_HIDDEN) {
 			if ( !hiddenTags.isEmpty()){
 				destroyTabs();
 			}
@@ -3908,9 +4048,9 @@ public class MyTorrentsView
 			}
 			if ( isIncompletedOnly ){
 					// if a download has removed from complete to incomplete then make it obvious
-				Long prev_removed = (Long)dm.getUserData( KEY_DM_REMOVED_FROM_COMPLETE_TABLE_TIME );
+				Long[] prev_removed = (Long[])dm.getUserData( KEY_DM_REMOVED_FROM_COMPLETE_TABLE_TIME );
 				if ( prev_removed != null ){
-					if ( SystemTime.getMonotonousTime() - prev_removed < 5000 ){						
+					if ( SystemTime.getMonotonousTime() - prev_removed[0] < 5000 ){						
 						dm.requestAttention();
 					}
 				}
@@ -3961,7 +4101,16 @@ public class MyTorrentsView
 			
 			DownloadManager dm = (DownloadManager)row.getDataSource( true );
 			
-			dm.setUserData( KEY_DM_REMOVED_FROM_COMPLETE_TABLE_TIME, SystemTime.getMonotonousTime());
+			Long[] data = (Long[])dm.getUserData( KEY_DM_REMOVED_FROM_COMPLETE_TABLE_TIME );
+			
+			if ( data == null ){
+				
+				data = new Long[]{ 0L };
+				
+				dm.setUserData( KEY_DM_REMOVED_FROM_COMPLETE_TABLE_TIME, data );
+			}
+			
+			 data[0] = SystemTime.getMonotonousTime();
 		}
 		
 		TableRowCore[] selected = tv.getSelectedRows();

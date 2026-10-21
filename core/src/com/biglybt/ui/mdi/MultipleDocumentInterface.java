@@ -264,4 +264,43 @@ public interface MultipleDocumentInterface
 	public void
 	runWhenIdle(
 		Runnable	r );
+	
+	public interface
+	VTIMdiHelper
+	{
+		public void
+		setViewTitleInfo(
+			ViewTitleInfo		vti );
+		
+		public MdiEntryVitalityImage 
+		addVitalityImage(String imageID);
+		
+		public void
+		redraw();
+		
+		public void
+		addListener(
+			MdiEntryDropListener	l );
+	}
+	
+	public interface
+	VTIFactory
+	{
+		public ViewTitleInfo
+		create(
+			VTIMdiHelper	mdiEntry,
+			Object			ds );
+	}
+	
+	public void
+	registerViewTitleInfoFactory(
+		String			id,
+		VTIFactory		factory );
+	
+	public ViewTitleInfo
+	createViewTitleInfo(
+		String 			id,
+		VTIMdiHelper	mdiEntry,
+		Object			ds );
+	
 }

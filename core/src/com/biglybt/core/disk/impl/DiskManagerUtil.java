@@ -430,7 +430,7 @@ DiskManagerUtil
 
 	    if ( torrent == null ){
 
-	        return( new DiskManagerFileInfoSetImpl(new DiskManagerFileInfoImpl[0],null) );
+	        return( new DiskManagerFileInfoSetImpl(download_manager, new DiskManagerFileInfoImpl[0],null) );
 	    }
 
 		File tempRootDir = download_manager.getAbsoluteSaveLocation().getParentFile();
@@ -489,6 +489,15 @@ DiskManagerUtil
 						return res.length;
 					}
 
+					@Override
+					public int[] 
+					getStorageTypes()
+					{
+						String[] sts = DiskManagerImpl.getStorageTypes(download_manager);
+						
+						return( convertDMStorageTypeFromStrings( sts ));
+					}
+					
 					@Override
 					public void 
 					setPriority(
@@ -717,6 +726,12 @@ DiskManagerUtil
 														FileKey file )
 													{
 														return( download_manager.getDownloadState().getFileLink( idx, file ));
+													}
+													@Override
+													public long 
+													getFileAllocationStrategy()
+													{
+														return( download_manager.getDownloadState().getLongAttribute( DownloadManagerState.AT_FILE_ALLOC_STRATEGY ));
 													}
 												},
 												new StringInterner.FileKey( target_file ),
@@ -1052,7 +1067,50 @@ DiskManagerUtil
 		            		return lazyGetFile();
 		            	}
 
-		            	private File lazyGetFile()
+		            	@Override
+		            	public String
+		            	getFileName(
+		            		boolean follow_link )
+		            	{
+
+		            		if ( follow_link ){
+
+		            			FileKey key = download_manager.getDownloadState().getFileLink( file_index, null );
+		            			
+		            			if ( key != null ){
+		            				
+		            				return( key.getName());
+		            			}
+		            		}
+		            		
+		            		return( lazyGetFileKey().getName());
+		            	}
+		            	
+		            	public FileKey 
+		            	getFileKey(
+		            		boolean follow_link )
+		            	{
+		            		if ( follow_link ){
+
+		            			FileKey key = download_manager.getDownloadState().getFileLink( file_index, null );
+		            			
+		            			if ( key != null ){
+		            				
+		            				return( key );
+		            			}
+		            		}
+		            		
+		            		return( lazyGetFileKey());
+		            	}
+		            	
+		            	private File 
+		            	lazyGetFile()
+		            	{
+		            		return( lazyGetFileKey().getFile());
+		            	}
+		            	
+		            	private FileKey 
+		            	lazyGetFileKey()
 		            	{
 		            		StringInterner.FileKey fk = dataFile.get();
 		            		
@@ -1076,7 +1134,7 @@ DiskManagerUtil
 			            		dataFile = new WeakReference<>( fk );
 		            		}
 		            		
-	            			return( fk.getFile());
+	            			return( fk );
 		            	}
 
 		            	@Override
@@ -1224,6 +1282,12 @@ DiskManagerUtil
 														FileKey file )
 													{
 														return( download_manager.getDownloadState().getFileLink( file_index, file ));
+													}
+													@Override
+													public long 
+													getFileAllocationStrategy()
+													{
+														return( download_manager.getDownloadState().getLongAttribute( DownloadManagerState.AT_FILE_ALLOC_STRATEGY ));
 													}
 	                							},
 	                							new StringInterner.FileKey( getFile( true )),
@@ -1373,7 +1437,7 @@ DiskManagerUtil
 
 	        Debug.printStackTrace(e);
 
-	        return( new DiskManagerFileInfoSetImpl(new DiskManagerFileInfoImpl[0],null) );
+	        return( new DiskManagerFileInfoSetImpl(download_manager, new DiskManagerFileInfoImpl[0],null) );
 
 	    }
 	}
@@ -1404,6 +1468,51 @@ DiskManagerUtil
 		return( DiskManagerFileInfo.ST_LINEAR );
 	}
 
+	public static int[]
+	convertDMStorageTypeFromStrings(
+		String[]		strs )
+	{
+		int[] result = new int[strs.length];
+		
+		for ( int i=0; i< strs.length; i++ ){
+			
+			String str = strs[i];
+			
+			char c = str.charAt(0);
+	
+			int x;
+			
+			switch( c ){
+				case 'L':{
+					x =  DiskManagerFileInfo.ST_LINEAR;
+					break;
+				}
+				case 'C':{
+					x =  DiskManagerFileInfo.ST_COMPACT;
+					break;
+				}
+				case 'R':{
+					x =  DiskManagerFileInfo.ST_REORDER;
+					break;
+				}
+				case 'X':{
+					x = DiskManagerFileInfo.ST_REORDER_COMPACT;
+					break;
+				}
+				default:{
+	
+					Debug.out( "eh?" );
+	
+					x = DiskManagerFileInfo.ST_LINEAR;
+				}
+			}
+			
+			result[i] = x;
+		}
+		
+		return( result );
+	}
+	
 	public static String
 	convertDMStorageTypeToString(
 		int		dm_type )

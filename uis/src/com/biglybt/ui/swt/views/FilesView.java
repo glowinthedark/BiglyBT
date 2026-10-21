@@ -31,6 +31,7 @@ import org.eclipse.swt.layout.*;
 import org.eclipse.swt.widgets.*;
 
 import com.biglybt.core.config.COConfigurationManager;
+import com.biglybt.core.config.ConfigKeys;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.DiskManager;
 import com.biglybt.core.disk.DiskManagerFileInfo;
@@ -46,6 +47,7 @@ import com.biglybt.core.tag.Taggable;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.torrent.TOTorrentFile;
 import com.biglybt.core.util.*;
+import com.biglybt.core.util.StringInterner.FileKey;
 import com.biglybt.pifimpl.local.utils.FormattersImpl;
 import com.biglybt.ui.UIFunctions;
 import com.biglybt.ui.UIFunctionsManager;
@@ -117,6 +119,7 @@ public class FilesView
 			new SizeBytesItem(tableID),
 			new DoneItem(tableID),
 			new PercentItem(tableID),
+			new RemainingItem(tableID),
 			new FirstPieceItem(tableID),
 			new LastPieceItem(tableID),
 			new PieceCountItem(tableID),
@@ -152,10 +155,17 @@ public class FilesView
   public static final String MSGID_PREFIX = "FilesView";
 
   private String view_sub_id;
+
+  private String
+  getViewKey()
+  {
+  	return( view_sub_id != null ? MSGID_PREFIX + "." + view_sub_id : MSGID_PREFIX );
+  }
   
   private DownloadManager[] managers = new DownloadManager[0];
 
   public boolean hide_dnd_files;
+  public boolean hide_pad_files;
   public boolean tree_view;
 
   private boolean viewActive;
@@ -526,7 +536,7 @@ public class FilesView
 				
 				if ( map != null ){
 					
-					Map<String,Object> view = map.get( "FilesView" );
+					Map<String,Object> view = map.get( getViewKey() );
 					
 					if ( view != null ){
 						
@@ -567,11 +577,11 @@ public class FilesView
 				}
 			}
 			
-			if ( has_clash ){
+			if ( has_clash || overall_filter == null ){
 			
 				bubbleTextBox.setState( "", false );
 				
-			}else  if ( overall_filter != null ){
+			}else{
 				
 				bubbleTextBox.setState( overall_filter, overall_regex );
 				
@@ -932,6 +942,14 @@ public class FilesView
 					return( false );
 				}
 			}
+		}else if ( hide_pad_files ){
+			
+			TOTorrentFile tf = ds.getTorrentFile();
+			
+			if ( tf != null && tf.isPadFile()){
+				
+				return( false );
+			}
 		}
 
 		if ( filter == null || filter.length() == 0 ){
@@ -1038,13 +1056,13 @@ public class FilesView
 					map = new HashMap<>( map );
 				}
 				
-				Map<String,Object> view = map.get( "FilesView" );
+				Map<String,Object> view = map.get( getViewKey() );
 				
 				if ( view == null ){
 					
 					view = new HashMap<>();
 					
-					map.put( "FilesView", view );
+					map.put( getViewKey(), view );
 				}
 				
 				MapUtils.setMapString( view, "filter", filter);
@@ -1635,9 +1653,11 @@ public class FilesView
 			case EVENT_TABLELIFECYCLE_INITIALIZED: {
 				createDragDrop();
 
-				hide_dnd_files = COConfigurationManager.getBooleanParameter(
-						"FilesView.hide.dnd");
-				COConfigurationManager.addParameterListener("FilesView.hide.dnd", this);
+				hide_dnd_files = COConfigurationManager.getBooleanParameter("FilesView.hide.dnd");
+				hide_pad_files = COConfigurationManager.getBooleanParameter(ConfigKeys.File.BCFG_HIDE_PADDING_FILES);
+				COConfigurationManager.addParameterListener(
+					new String[]{ "FilesView.hide.dnd", ConfigKeys.File.BCFG_HIDE_PADDING_FILES }, 
+					this);
 				
 				addManagerListeners( managers );
 				
@@ -1645,8 +1665,9 @@ public class FilesView
 			}
 
 			case EVENT_TABLELIFECYCLE_DESTROYED: {
-				COConfigurationManager.removeParameterListener("FilesView.hide.dnd",
-						this);
+				COConfigurationManager.removeParameterListeners(
+					new String[]{ "FilesView.hide.dnd", ConfigKeys.File.BCFG_HIDE_PADDING_FILES },
+					this);
 
 				removeManagerListeners( managers );
 				
@@ -1867,6 +1888,12 @@ public class FilesView
 					}
 				});
 			}
+			if (tv == null || tv.isDisposed()) {
+				return;
+			}
+			tv.refilter();
+		}else if (parameterName.equals(ConfigKeys.File.BCFG_HIDE_PADDING_FILES)){
+			hide_pad_files = COConfigurationManager.getBooleanParameter(parameterName);
 			if (tv == null || tv.isDisposed()) {
 				return;
 			}
@@ -2981,6 +3008,20 @@ public class FilesView
 		}
 
 		@Override
+		public String
+		getFileName( boolean follow_link )
+		{
+			return( node_path.getName());
+		}
+		
+		public FileKey 
+		getFileKey(
+			boolean follow_link )
+		{
+			return( node_path );
+		}
+		
+		@Override
 		public TOTorrentFile
 		getTorrentFile()
 		{
@@ -3318,7 +3359,21 @@ public class FilesView
 		{
 			return( delegate.getFile(follow_link));
 		}
+		
+		@Override
+		public String
+		getFileName( boolean follow_link )
+		{
+			return( delegate.getFileName( follow_link ));
+		}
 
+		public FileKey 
+		getFileKey(
+			boolean follow_link )
+		{
+			return( delegate.getFileKey(follow_link));
+		}
+		
 		@Override
 		public TOTorrentFile
 		getTorrentFile()

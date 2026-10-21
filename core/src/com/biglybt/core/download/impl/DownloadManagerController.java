@@ -3178,6 +3178,11 @@ DownloadManagerController
 			return delegate.setStorageTypes(toChange, newStorageType, force );
 		}
 
+		@Override
+		public int[] getStorageTypes(){
+			return( delegate.getStorageTypes());
+		}
+		
 		/** XXX Don't call me, call makeSureFilesFacadeFilled() */
 		protected void fixupFileInfo(fileInfoFacade[] info) {
 
@@ -3529,6 +3534,20 @@ DownloadManagerController
 			return( delegate.getFile( follow_link ));
 		}
 
+		@Override
+		public String
+		getFileName( boolean follow_link )
+		{
+			return( delegate.getFileName( follow_link ));
+		}
+
+		public FileKey 
+		getFileKey(
+			boolean follow_link )
+		{
+			return( delegate.getFileKey(follow_link));
+		}
+		
 		@Override
 		public TOTorrentFile
 		getTorrentFile()

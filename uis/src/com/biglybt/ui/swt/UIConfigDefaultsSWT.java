@@ -47,6 +47,7 @@ public class UIConfigDefaultsSWT
 		def.addParameter("GUI Refresh", 500);
 		def.addParameter("Graphics Update", 4);
 		def.addParameter("ReOrder Delay", 4);
+		def.addParameter("Filter Debounce ms", 300);
 		def.addParameter("Refresh When Inactive", 2);
 		def.addParameter("GUI Refresh Disable When Minimized", false );
 		def.addParameter("Send Version Info", true);
@@ -334,6 +335,7 @@ public class UIConfigDefaultsSWT
 	    def.addParameter( "Side Bar Indent Expanders", true );
 	    def.addParameter( "Side Bar Compact View", false );
 	    def.addParameter( "Side Bar Hide Left Icon", false );
+	    def.addParameter( "Side Bar Hidden Add To Dash", false );
 	    
 		String orderDef = "";
 		for (int i=0;i<MultipleDocumentInterface.SIDEBAR_HEADER_ORDER_DEFAULT.length;i++){

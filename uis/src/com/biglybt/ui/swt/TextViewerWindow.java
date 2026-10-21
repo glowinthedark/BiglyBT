@@ -395,6 +395,14 @@ public class TextViewerWindow {
 	  }
   }
 
+  public void
+  setSelection(
+		int	start,
+		int	end )
+  {
+	  txtInfo.setSelection( start, end );
+  }
+  
   public boolean
   getOKPressed()
   {

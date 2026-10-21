@@ -65,6 +65,8 @@ import com.biglybt.core.util.*;
 import com.biglybt.core.util.DataSourceResolver.DataSourceImporter;
 import com.biglybt.core.util.DataSourceResolver.ExportedDataSource;
 import com.biglybt.core.util.FileUtil.ProgressListener;
+import com.biglybt.core.util.StringInterner.DirKey;
+import com.biglybt.core.util.StringInterner.FileKey;
 import com.biglybt.pif.PluginInterface;
 import com.biglybt.pif.clientid.ClientIDGenerator;
 import com.biglybt.pif.download.Download;
@@ -141,7 +143,7 @@ DownloadManagerImpl
 	private static final int LDT_DOWNLOADCOMPLETE		= 2;
 	private static final int LDT_COMPLETIONCHANGED 		= 3;
 	private static final int LDT_POSITIONCHANGED 		= 4;
-	private static final int LDT_FILEPRIORITYCHANGED 	= 5;
+	private static final int LDT_FILEPRIORITIESCHANGED 	= 5;
 	private static final int LDT_FILELOCATIONCHANGED 	= 6;
 
 	private static Object 			port_init_lock = new Object();
@@ -176,9 +178,9 @@ DownloadManagerImpl
 
 						listener.completionChanged(dm, ((Boolean)value[1]).booleanValue());
 
-					}else if ( type == LDT_FILEPRIORITYCHANGED ){
+					}else if ( type == LDT_FILEPRIORITIESCHANGED ){
 
-						listener.filePriorityChanged(dm, (DiskManagerFileInfo)value[1]);
+						listener.filePriorityChanged(dm, (List<DiskManagerFileInfo>)value[1]);
 
 					}else if ( type == LDT_POSITIONCHANGED ){
 
@@ -222,12 +224,12 @@ DownloadManagerImpl
 			}
 
 			@Override
-			public void filePriorityChanged(DownloadManager download,
-			                                DiskManagerFileInfo file){
+			public void filePriorityChanged(DownloadManager 			download,
+			                                List<DiskManagerFileInfo>	files ){
 				for ( DownloadManagerListener listener: global_dm_listeners ){
 
 					try{
-						listener.filePriorityChanged(download, file);
+						listener.filePriorityChanged(download, files);
 					}catch( Throwable e ){
 						Debug.out( e );
 					}
@@ -752,7 +754,8 @@ DownloadManagerImpl
     private volatile int		tcp_port_override;
 
     private volatile int		set_file_priority_high_pieces_rem	= 0;
-
+    private volatile int		set_file_priority_high_percent_rem	= 0;
+    
 	private AtomicLong tagMutationCounter = new AtomicLong();
 
 	// Only call this with STATE_QUEUED, STATE_WAITING, or STATE_STOPPED unless you know what you are doing
@@ -1177,7 +1180,8 @@ DownloadManagerImpl
 
 					 				tc.resetTrackerUrl( false );
 					 			}
-							}else if ( attribute_name.equals( DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PIECE )){
+							}else if (	attribute_name.equals( DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PIECE ) ||
+										attribute_name.equals( DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PERCENT )){
 								
 								readFilePriorityConfig( false, false );
 							}
@@ -1188,6 +1192,7 @@ DownloadManagerImpl
 				 download_manager_state.addListener(attr_listener, DownloadManagerState.AT_PARAMETERS, DownloadManagerStateAttributeListener.WRITTEN);
 				 download_manager_state.addListener(attr_listener, DownloadManagerState.AT_NETWORKS, DownloadManagerStateAttributeListener.WRITTEN);
 				 download_manager_state.addListener(attr_listener, DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PIECE, DownloadManagerStateAttributeListener.WRITTEN);
+				 download_manager_state.addListener(attr_listener, DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PERCENT, DownloadManagerStateAttributeListener.WRITTEN);
 
 				 torrent	= download_manager_state.getTorrent();
 
@@ -1406,6 +1411,16 @@ DownloadManagerImpl
 				if ( metadata_dl ){
 
 					download_manager_state.setFlag( DownloadManagerState.FLAG_METADATA_DOWNLOAD, true );
+					
+						// metadata downloads don't come through with "new_torrent" set but we need to set an accurate
+						// added time as used for ordering. Might already be set if recovered from state cache
+					
+					long	add_time = download_manager_state.getLongParameter( DownloadManagerState.PARAM_DOWNLOAD_ADDED_TIME );
+
+					if ( add_time <= 0 ){
+					
+						download_manager_state.setLongParameter( DownloadManagerState.PARAM_DOWNLOAD_ADDED_TIME, SystemTime.getCurrentTimeUnique());
+					}
 				}
 
 				 	// if this is a newly introduced torrent trash the tracker cache. We do this to
@@ -1414,7 +1429,7 @@ DownloadManagerImpl
 
 				 if ( new_torrent ){
 
-					download_manager_state.setLongParameter( DownloadManagerState.PARAM_DOWNLOAD_ADDED_TIME, SystemTime.getCurrentTime());
+					download_manager_state.setLongParameter( DownloadManagerState.PARAM_DOWNLOAD_ADDED_TIME, SystemTime.getCurrentTimeUnique());
 
 					Map peer_cache = TorrentUtils.getPeerCache( torrent );
 
@@ -1502,14 +1517,14 @@ DownloadManagerImpl
 						 // grab an initial value from torrent file - migration only
 
 						 try{
-							 add_time = FileUtil.newFile( torrentFileName ).lastModified();
+							 add_time = FileUtil.getFileCreationTime( FileUtil.newFile( torrentFileName ));
 
 						 }catch( Throwable e ){
 						 }
 
 						 if ( add_time == 0 ){
 
-							 add_time = SystemTime.getCurrentTime();
+							 add_time = SystemTime.getCurrentTimeUnique();
 						 }
 
 						 download_manager_state.setLongParameter( DownloadManagerState.PARAM_DOWNLOAD_ADDED_TIME, add_time );
@@ -1746,14 +1761,32 @@ DownloadManagerImpl
 			sfp = COConfigurationManager.getIntParameter( ConfigKeys.Transfer.ICFG_SET_FILE_PRIORITY_REM_PIECE );
 		}
 		
+		int sfpct		= getDownloadState().getIntAttribute( DownloadManagerState.AT_SET_FILE_PRIORITY_REM_PERCENT );
+		
+		if ( sfpct == 0 ){
+			
+			sfpct = COConfigurationManager.getIntParameter( ConfigKeys.Transfer.ICFG_SET_FILE_PRIORITY_REM_PERCENT );
+		}
+		
+		boolean changed = false;
+		
 		if ( sfp != set_file_priority_high_pieces_rem ){
 		
 			set_file_priority_high_pieces_rem = sfp;
+		
+			changed = true;
+		}
+		
+		if ( sfpct != set_file_priority_high_percent_rem ){
 			
-			if ( !init ){
+			set_file_priority_high_percent_rem = sfpct;
+		
+			changed = true;
+		}
+		
+		if ( changed && !init ){
 				
-				checkFilePriorities( global_change );
-			}
+			checkFilePriorities( global_change );
 		}
 	}
 	
@@ -3642,6 +3675,7 @@ DownloadManagerImpl
 
  	private File	cached_save_location;
 	private File	cached_save_location_result;
+	private FileKey	cached_save_location_fk_result;
 
   	@Override
 	public File
@@ -3657,14 +3691,17 @@ DownloadManagerImpl
   		}
 
  		File	res;
-
+ 		boolean	simple;
+ 		
  		if ( torrent == null || torrent.isSimpleTorrent()){
 
- 			res = download_manager_state.getFileLink( 0 );
-
+ 			res		= download_manager_state.getFileLink( 0 );
+ 			simple	= true;
+ 			
  		}else{
 
- 			res = save_location;
+ 			res		= save_location;
+ 			simple	= false;
  		}
 
  		if ( res == null || res.equals(save_location) ){
@@ -3675,14 +3712,27 @@ DownloadManagerImpl
  			res = FileUtil.getCanonicalFileSafe( res );
  		}
 
- 		cached_save_location		= save_location;
- 		cached_save_location_result	= res;
+ 		cached_save_location			= save_location;
+ 		cached_save_location_result		= res;
+ 		cached_save_location_fk_result	= simple?new FileKey( cached_save_location_result ):new DirKey( cached_save_location_result );;
 
  		return( res );
  	}
 
+	@Override
+	public FileKey
+	getSaveLocationFileKey()
+	{
+		if ( torrent_save_location != cached_save_location  ){
+
+			getSaveLocation();
+		}
+		
+  		return( cached_save_location_fk_result );
+	}
+	
   	@Override
-	  public File
+	public File
   	getAbsoluteSaveLocation()
   	{
   		return( torrent_save_location );
@@ -4262,15 +4312,16 @@ DownloadManagerImpl
 			// on global change to zero we reset file priorities as user seems to want to disable the default and manually clearing priorities across
 			// all downloads is a pain
 		
-		int sfp_pieces = set_file_priority_high_pieces_rem;
+		int sfp_pieces	= set_file_priority_high_pieces_rem;
+		int sfp_percent	= set_file_priority_high_percent_rem;
 		
-		if ( global_change || sfp_pieces > 0 ){
+		if ( global_change || sfp_pieces > 0 || sfp_percent > 0 ){
 			
 			DiskManager	dm = getDiskManager();
 			
 			if ( dm != null ){
 
-				long sfp_bytes = dm.getPieceLength() * sfp_pieces;
+				long sfp_pieces_bytes = dm.getPieceLength() * sfp_pieces;
 				
 				DiskManagerFileInfoSet set = getDiskManagerFileInfoSet();
 				
@@ -4280,10 +4331,17 @@ DownloadManagerImpl
 						
 				for ( DiskManagerFileInfo file: files ){
 					
-					long	rem = file.getLength() - file.getDownloaded();
+					long file_length = file.getLength();
+					
+					long sfp_percent_bytes = (file_length*sfp_percent)/100;
+
+					long	rem = file_length - file.getDownloaded();
 		    		
-		    		int expected = sfp_bytes==0?0:( rem <= sfp_bytes?1:0);
-		    					    				
+		    		int pieces_expected		= sfp_pieces_bytes==0?0:( rem <= sfp_pieces_bytes?1:0);
+		    		int percent_expected	= sfp_percent_bytes==0?0:( rem <= sfp_percent_bytes?1:0);  
+		    		
+		    		int expected = Math.max( pieces_expected, percent_expected );
+		    		
 		    		int existing = file.getPriority();
 		    		
 		    		if ( expected != existing && ( existing == 0 || existing == 1 )){
@@ -4369,7 +4427,7 @@ DownloadManagerImpl
 
 	protected void 
 	informPrioritiesChange(
-		List	files )
+		List<DiskManagerFileInfo>	files )
 	{
 		calcFilePriorityStats();
 		
@@ -4378,8 +4436,7 @@ DownloadManagerImpl
 		try{
 			listeners_mon.enter();
 
-			for(int i=0;i<files.size();i++)
-				listeners.dispatch( LDT_FILEPRIORITYCHANGED, new Object[]{ this, (DiskManagerFileInfo)files.get(i) });
+			listeners.dispatch( LDT_FILEPRIORITIESCHANGED, new Object[]{ this, files });
 
 		}finally{
 
@@ -4430,15 +4487,16 @@ DownloadManagerImpl
 	informPieceDoneChanged(
 		DiskManagerPiece	piece )
 	{
-		int sfp_pieces = set_file_priority_high_pieces_rem;
+		int sfp_pieces	= set_file_priority_high_pieces_rem;
+		int sfp_percent	= set_file_priority_high_percent_rem;
 		
-		if ( sfp_pieces > 0 ){
+		if ( sfp_pieces > 0 || sfp_percent > 0 ){
 			
 			DiskManager	dm = getDiskManager();
 			
 			if ( dm != null ){
 					
-				long sfp_bytes = dm.getPieceLength() * sfp_pieces;	// easier to work with bytes and close enough
+				long sfp_pieces_bytes = dm.getPieceLength() * sfp_pieces;	// easier to work with bytes and close enough
 
 				DMPieceList list = piece.getPieceList();
 				
@@ -4448,9 +4506,14 @@ DownloadManagerImpl
 	
 					DiskManagerFileInfo file = entry.getFile();
 					
-					long	rem = file.getLength() - file.getDownloaded();
+					long file_length = file.getLength();
+					
+					long sfp_percent_bytes = (file_length*sfp_percent)/100;
+					
+					long	rem = file_length - file.getDownloaded();
 
-		    		if ( rem <= sfp_bytes ){
+		    		if (	(sfp_pieces_bytes > 0 && rem <= sfp_pieces_bytes ) ||
+		    				(sfp_percent_bytes > 0 && rem <= sfp_percent_bytes )){
     						    			
 		    			file.setPriority( 1 );
 		    		}
@@ -5237,18 +5300,23 @@ DownloadManagerImpl
 	protected void
 	deletePartialDataFiles()
 	{
-		DiskManagerFileInfo[] files = getDiskManagerFileInfoSet().getFiles();
-
+		DiskManagerFileInfoSet fs = getDiskManagerFileInfoSet();
+		
+		DiskManagerFileInfo[]	files			= fs.getFiles();
+		int[]					storage_types	= fs.getStorageTypes();
+		
 		String abs_root = torrent_save_location.getAbsolutePath();
 
-		for ( DiskManagerFileInfo file: files ){
+		for ( int i=0; i<files.length;i++ ){
+			
+			DiskManagerFileInfo file = files[i];
 
 			if ( !file.isSkipped()){
 
 				continue;
 			}
 			
-			int	storage_type = file.getStorageType() ;
+			int	storage_type = storage_types[i];
 
 			boolean compact = storage_type == DiskManagerFileInfo.ST_COMPACT || storage_type == DiskManagerFileInfo.ST_REORDER_COMPACT;
 
@@ -5408,6 +5476,8 @@ DownloadManagerImpl
 
 					}else{
 
+						//Debug.out( "set: " + key );
+						
 						data_ref = new LightHashMap<>(data_ref);
 
 						data_ref.remove( key );
@@ -5418,16 +5488,47 @@ DownloadManagerImpl
 				}
 			}else{
 
+				boolean already_present = false;
+				
 				if ( data_ref == null ){
 
 					data_ref = new LightHashMap<>();
 
 				}else{
 
-					data_ref = new LightHashMap<>(data_ref);
+					Object existing = data_ref.get( key );
+					
+					if ( existing != null ){
+						
+						if ( existing == value ){
+							
+							already_present = true;
+							
+						}else{
+							
+							if ( existing instanceof String && value instanceof String ){
+								
+								already_present = existing.equals(value);
+							}
+						}
+					}
+					
+					if ( !already_present ){
+					
+						//Debug.out( "set: " + key );
+						
+						data_ref = new LightHashMap<>(data_ref);
+						
+					}else{
+					
+						// Debug.out( "Value already present: " + value );
+					}
 				}
 
-				data_ref.put( key, value );
+				if ( !already_present ){
+				
+					data_ref.put( key, value );
+				}
 			}
 
 			data = data_ref;
@@ -6031,128 +6132,153 @@ DownloadManagerImpl
   }
 
   @Override
-	public void
-	copyDataFiles(
-		File									dest_parent_dir,
-		CoreOperationTask.ProgressCallback		cb )
+  public void
+  copyDataFiles(
+		  File									dest_parent_dir,
+		  List<DiskManagerFileInfo>				_selected_files,
+		  CoreOperationTask.ProgressCallback	cb )
 
-		throws DownloadManagerException
-	{
-		if ( FileUtil.exists( dest_parent_dir )){
+				  throws DownloadManagerException
+  {
+	  if ( FileUtil.exists( dest_parent_dir )){
 
-			if ( !dest_parent_dir.isDirectory()){
+		  if ( !dest_parent_dir.isDirectory()){
 
-				throw( new DownloadManagerException( "'" + dest_parent_dir + "' is not a directory" ));
-			}
-		}else{
+			  throw( new DownloadManagerException( "'" + dest_parent_dir + "' is not a directory" ));
+		  }
+	  }else{
 
-			if ( !dest_parent_dir.mkdirs()){
+		  if ( !dest_parent_dir.mkdirs()){
 
-				throw( new DownloadManagerException( "failed to create '" + dest_parent_dir + "'" ));
-			}
-		}
+			  throw( new DownloadManagerException( "failed to create '" + dest_parent_dir + "'" ));
+		  }
+	  }
 
-	  DiskManagerFileInfo[] files = controller.getDiskManagerFileInfoSet().getFiles();
+	  DiskManagerFileInfo[] all_files = controller.getDiskManagerFileInfoSet().getFiles();
+
+	  Set<DiskManagerFileInfo>	selected_files = new IdentityHashSet<>();
+
+	  if ( _selected_files == null ){
+		  
+		  _selected_files = Arrays.asList( all_files );
+	  }
+
+	  for ( DiskManagerFileInfo file: _selected_files ){
+		  
+		  if ( !file.isSkipped() && file.getDownloaded() == file.getLength()){
+			  
+			  if ( file.getDownloadManager() == this ){
+			  
+				  	// have to resolve the file as the one passed in could be a delegate and if it is
+				  	// the contains test will fail...
+				  
+				  selected_files.add( all_files[ file.getIndex()] );
+			  }
+		  }
+	  }
 
 	  FileUtil.ProgressListener pl = null;
-			  
-	  if ( cb != null ){
-		  
-		  long	_total_size = 0;
-		  
-		  for ( DiskManagerFileInfo file: files ){
 
-			  if ( !file.isSkipped() && file.getDownloaded() == file.getLength()){
+	  if ( cb != null ){
+
+		  long	_total_size = 0;
+
+		  for ( DiskManagerFileInfo file: all_files ){
+
+			  if ( selected_files.contains( file )){
 				  
 				  _total_size += file.getLength();
 			  }
 		  }
-		  
+
 		  long total_size = _total_size;
-		  
+
 		  cb.setSize( total_size );
-		  
+
 		  pl = 
-			new FileUtil.ProgressListener()
-		  	{
-			  	long	total_done 	= 0;
-			  	
-				public void
-				setTotalSize(
-					long	size )
-				{
-					// not used
-				}
-				
-				@Override
-				public void 
-				setCurrentFile(
-					File file )
-				{
-					cb.setSubTaskName( file.getName());
-				}
-				
-				public void
-				bytesDone(
-					long	num )
-				{
-					if ( total_size > 0 ){
-						
-						total_done += num;
-						
-						long prog = (total_done*1000)/total_size;
-						
-						cb.setProgress((int)prog);
-					}
-				}
-				
-				@Override
-				public int 
-				getState()
-				{
-					switch( cb.getTaskState()){
-					
-						case ProgressCallback.ST_PAUSE:{
-							return( ProgressListener.ST_PAUSED );
-						}
-						case ProgressCallback.ST_CANCEL:{
-							return( ProgressListener.ST_CANCELLED );
-						}
-						default:{
-							return( ProgressListener.ST_NORMAL );
-						}
-					}
-				}
-				
-				public void
-				complete()
-				{
-					cb.setProgress( 1000 );
-				}
-		  	};
+				  new FileUtil.ProgressListener()
+		  {
+			  long	total_done 	= 0;
+
+			  public void
+			  setTotalSize(
+					  long	size )
+			  {
+				  // not used
+			  }
+
+			  @Override
+			  public void 
+			  setCurrentFile(
+					  File file )
+			  {
+				  cb.setSubTaskName( file.getName());
+			  }
+
+			  public void
+			  bytesDone(
+					  long	num )
+			  {
+				  if ( total_size > 0 ){
+
+					  total_done += num;
+
+					  long prog = (total_done*1000)/total_size;
+
+					  cb.setProgress((int)prog);
+				  }
+			  }
+
+			  @Override
+			  public int 
+			  getState()
+			  {
+				  switch( cb.getTaskState()){
+
+				  case ProgressCallback.ST_PAUSE:{
+					  return( ProgressListener.ST_PAUSED );
+				  }
+				  case ProgressCallback.ST_CANCEL:{
+					  return( ProgressListener.ST_CANCELLED );
+				  }
+				  default:{
+					  return( ProgressListener.ST_NORMAL );
+				  }
+				  }
+			  }
+
+			  public void
+			  complete()
+			  {
+				  cb.setProgress( 1000 );
+			  }
+		  };
 	  }
-	  
-	  
+
+
 	  if ( torrent.isSimpleTorrent()){
 
-		  File file_from = files[0].getFile( true );
-
-		  try{
-			  File file_to = FileUtil.newFile( dest_parent_dir, file_from.getName());
-
-			  if ( FileUtil.exists( file_to )){
-
-				  if ( file_to.length() != file_from.length()){
-
-					  throw( new Exception( "target file '" + file_to + " already exists" ));
+		  if ( !selected_files.isEmpty()){
+			  
+			  File file_from = all_files[0].getFile( true );
+	
+			  try{
+				  File file_to = FileUtil.newFile( dest_parent_dir, file_from.getName());
+	
+				  if ( FileUtil.exists( file_to )){
+	
+					  if ( file_to.length() != file_from.length()){
+	
+						  throw( new Exception( "target file '" + file_to + " already exists" ));
+					  }
+				  }else{
+	
+					  FileUtil.copyFileWithException( file_from, file_to, pl );
 				  }
-			  }else{
-
-				  FileUtil.copyFileWithException( file_from, file_to, pl );
+			  }catch( Throwable e ){
+	
+				  throw( new DownloadManagerException( "copy of '" + file_from + "' failed", e ));
 			  }
-		  }catch( Throwable e ){
-
-			  throw( new DownloadManagerException( "copy of '" + file_from + "' failed", e ));
 		  }
 	  }else{
 
@@ -6166,17 +6292,17 @@ DownloadManagerImpl
 				  dest_parent_dir.mkdirs();
 			  }
 
-			  for ( DiskManagerFileInfo file: files ){
+			  for ( DiskManagerFileInfo file: all_files ){
 
-				  if ( !file.isSkipped() && file.getDownloaded() == file.getLength()){
+				  if ( selected_files.contains( file )){
 
 					  File file_from = file.getFile( true );
 
 					  if ( !FileUtil.exists( file_from ) && file.getTorrentFile().isPadFile()){
-						  
+
 						  continue;
 					  }
-					  
+
 					  try{
 						  String relativePath = FileUtil.getRelativePath(sl_file, file_from);
 
@@ -6265,7 +6391,10 @@ DownloadManagerImpl
   }
   
   public void
-  exportDownload( File parent_dir ) throws DownloadManagerException
+  exportDownload(
+	File parent_dir )
+  
+	throws DownloadManagerException
   {
 	  if ( !canExportDownload()){
 		  
@@ -6317,9 +6446,93 @@ DownloadManagerImpl
 						  CoreOperation operation)
 					  {
 						  try{
-							  copyDataFiles( parent_dir, cb );
+							  copyDataFiles( parent_dir, null, cb );
 
 							  copyTorrentFile( parent_dir );
+
+						  }catch( Throwable e ){
+
+							  throw( new RuntimeException( e ));
+						  }
+						  
+						  return( true );
+					  }
+
+					  @Override
+					  public ProgressCallback 
+					  getProgressCallback()
+					  {
+						  return( cb );
+					  }
+				  });
+		  
+	  }catch( Throwable e ){
+		  
+		  Throwable f = e.getCause();
+		  
+		  if ( f instanceof DownloadManagerException ){
+			  
+			  throw((DownloadManagerException)f);
+		  }
+		  
+		  throw( new DownloadManagerException( "Export failed", e ));
+	  }
+  }
+  
+  @Override
+  public void
+  exportFiles(
+	File						parent_dir,
+	List<DiskManagerFileInfo>	files )
+  
+	throws DownloadManagerException
+  {
+	  try{
+		  FileUtil.runAsTask(
+				  CoreOperation.OP_DOWNLOAD_EXPORT,
+				  new CoreOperationTask()
+				  {
+					  private ProgressCallback cb =
+						  new CoreOperationTask.ProgressCallbackAdapter()
+						  {
+						  	  private int state = ST_NONE;
+						  	
+							  @Override
+							  public int 
+							  getSupportedTaskStates()
+							  {
+								  return( ST_PAUSE | ST_RESUME | ST_CANCEL | ST_SUBTASKS );
+							  }
+						  };
+
+					  @Override
+					  public String 
+					  getName()
+					  {
+						  return( getDisplayName());
+					  }
+
+					  @Override
+					  public DownloadManager 
+					  getDownload()
+					  {
+						  return( DownloadManagerImpl.this );
+					  }
+
+					  @Override
+					  public String[] 
+					  getAffectedFileSystems()
+					  {
+						  return( FileUtil.getFileStoreNames( getAbsoluteSaveLocation(), parent_dir ));
+					  }
+
+					  @Override
+					  public boolean
+					  runOperation(
+						  CoreOperation operation)
+					  {
+						  try{
+							  copyDataFiles( parent_dir, files, cb );
 
 						  }catch( Throwable e ){
 

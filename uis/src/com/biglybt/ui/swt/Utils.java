@@ -185,6 +185,8 @@ public class Utils
 	public static final int SCT_BUBBLE_TEXT_BOX		= 1;
 	public static final int SCT_MENU_ITEM			= 2;
 	
+	public static final int SLOW_OPERATION_TIMEOUT_MS	= 250;
+	
 	/**
 	 * Debug/Diagnose SWT exec calls.  Provides useful information like how
 	 * many we are queuing up, and how long each call takes.  Good to turn on
@@ -612,13 +614,13 @@ public class Utils
 				
 				Color def = (Color)control.getData( "utils:skinned-fg" );
 								
-				control.setForeground( def );
+				updateForeground( control, def );
 
 			}else{
 			
 				control.setData( "utils:skinned-fg-forced", true );
 				
-				control.setForeground( color );
+				updateForeground( control, color );
 			}
 						
 		}else{
@@ -627,12 +629,25 @@ public class Utils
 			
 			if ( def != null ){
 				
-				control.setForeground( color==null?def:color );
-				
+				updateForeground(control, color==null?def:color );
 			}else{
 				
-				control.setForeground( color );
+				updateForeground( control, color );
 			}
+		}
+	}
+	
+	private static void
+	updateForeground(
+		Control		control,
+		Color		color )
+	{
+		Color existing = control.getForeground();
+				
+		if (	( color != existing ) &&
+				( color == null || existing == null || !existing.equals(color ))){
+		
+			control.setForeground( color );
 		}
 	}
 	
@@ -689,6 +704,20 @@ public class Utils
 		}
 	}
 	
+	private static void
+	updateBackground(
+		Control		control,
+		Color		color )
+	{
+		Color existing = control.getBackground();
+				
+		if (	( color != existing ) &&
+				( color == null || existing == null || !existing.equals(color ))){
+		
+			control.setBackground(color);
+		}
+	}
+	
 	public static void
 	setSkinnedBackground(
 		Control		control,
@@ -713,13 +742,13 @@ public class Utils
 				
 				Color def = (Color)control.getData( "utils:skinned-bg" );
 								
-				control.setBackground( def );
+				updateBackground( control, def );
 	
 			}else{
 			
 				control.setData( "utils:skinned-bg-forced", true );
 				
-				control.setBackground( color );
+				updateBackground( control, color );
 			}			
 		}else{
 			
@@ -727,11 +756,11 @@ public class Utils
 			
 			if ( def != null ){
 				
-				control.setBackground( color==null?def:color );
+				updateBackground( control, color==null?def:color );
 				
 			}else{
 				
-				control.setBackground( color );
+				updateBackground( control, color );
 			}
 		}
 	}
@@ -741,7 +770,7 @@ public class Utils
 		Control		control,
 		Control		from )
 	{
-		control.setBackground( from.getBackground());
+		updateBackground( control, from.getBackground());
 		
 		control.setData( "utils:skinned-bg-forced", from.getData( "utils:skinned-bg-forced" ));
 	}
@@ -6967,7 +6996,7 @@ public class Utils
 						if (!isMouseDown) {
 							return;
 						}
-						if (e.widget instanceof Control) {
+						if (e.widget instanceof Control && !e.widget.isDisposed()) {
 							Point size = ((Control) e.widget).getSize();
 							Rectangle bounds = new Rectangle(0, 0, size.x, size.y);
 							
@@ -7362,7 +7391,7 @@ public class Utils
 	isFileResponding(
 		File		file )
 	{
-		return( FileUtil.isResponding(file, 250 ));
+		return( FileUtil.isResponding(file, SLOW_OPERATION_TIMEOUT_MS ));
 	}
 	
 	public static boolean
@@ -7376,28 +7405,28 @@ public class Utils
 	fileExistsWithTimeout(
 		File		file )
 	{
-		return( FileUtil.existsWithTimeout( file, 250 ));
+		return( FileUtil.existsWithTimeout( file, SLOW_OPERATION_TIMEOUT_MS ));
 	}
 	
 	public static boolean
 	isDirectoryWithTimeout(
 		File		dir )
 	{
-		return( FileUtil.isDirectoryWithTimeout( dir, 250 ));
+		return( FileUtil.isDirectoryWithTimeout( dir, SLOW_OPERATION_TIMEOUT_MS ));
 	}
 	
 	public static boolean
 	canReadFileWithTimeout(
 		File		dir )
 	{
-		return( FileUtil.canReadWithTimeout( dir, 250 ));
+		return( FileUtil.canReadWithTimeout( dir, SLOW_OPERATION_TIMEOUT_MS ));
 	}
 	
 	public static long
 	fileLengthWithTimeout(
 		File		file )
 	{
-		return( FileUtil.lengthWithTimeout( file, 250 ));
+		return( FileUtil.lengthWithTimeout( file, SLOW_OPERATION_TIMEOUT_MS ));
 	}
 	
 	public static String
@@ -7406,13 +7435,13 @@ public class Utils
 	
 		throws IOException
 	{
-		return( FileUtil.getCanonicalPathWithTimeout( file, 250 ));
+		return( FileUtil.getCanonicalPathWithTimeout( file, SLOW_OPERATION_TIMEOUT_MS ));
 	}
 	
 	public static File[]
 	listFileRootsWithTimeout()
 	{
-		return( FileUtil.listRootsWithTimeout( 250 ));
+		return( FileUtil.listRootsWithTimeout( SLOW_OPERATION_TIMEOUT_MS ));
 	}
 	
 	public static void
@@ -7420,6 +7449,18 @@ public class Utils
 		String				title_resource,
 		String				text_resource,
 		Integer				def,
+		Consumer<Integer>	cons )
+	{
+		numberPrompt( title_resource, text_resource, def, Integer.MIN_VALUE, Integer.MAX_VALUE, cons );
+	}
+	
+	public static void
+	numberPrompt(
+		String				title_resource,
+		String				text_resource,
+		Integer				def,
+		int					min,
+		int					max,
 		Consumer<Integer>	cons )
 	{
 		SimpleTextEntryWindow entryWindow = new SimpleTextEntryWindow( title_resource, text_resource );
@@ -7451,6 +7492,8 @@ public class Utils
 					
 					try{
 						int num = Integer.valueOf(sReturn).intValue();
+						
+						num = Math.max(min, Math.min(max, num));
 						
 						cons.accept( num );
 						

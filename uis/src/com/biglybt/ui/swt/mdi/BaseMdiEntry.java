@@ -151,8 +151,8 @@ public abstract class BaseMdiEntry
 
 	private List<MdiAcceleratorListener> listAcceleratorListeners = null;
 	
-	private ViewTitleInfo viewTitleInfo;
-
+	private ViewTitleInfo	viewTitleInfo;
+	
 	/** Parent MDIEntry.  Doesn't mean that this view is embedded inside the parentID */
 	private String parentEntryID;
 
@@ -693,7 +693,6 @@ public abstract class BaseMdiEntry
 		}
 		redraw();
 	}
-
 
 	/* (non-Javadoc)
 	 * @see com.biglybt.ui.swt.pifimpl.UISWTViewImpl2#setPluginSkinObject(com.biglybt.ui.swt.pif.PluginUISWTSkinObject, org.eclipse.swt.widgets.Composite)
@@ -1321,6 +1320,13 @@ public abstract class BaseMdiEntry
 		
 		result.put( "mdi", ( this instanceof SideBarEntrySWT )?"sidebar":"tabbed" );
 		
+		String image_left_id = getImageLeftID();
+		
+		if ( image_left_id != null && !image_left_id.isEmpty()){
+			
+			result.put( "mdi.image_left_id", image_left_id );
+		}
+		
 		String title = null;
 		
 		ViewTitleInfo vti = getViewTitleInfo();
@@ -1328,6 +1334,13 @@ public abstract class BaseMdiEntry
 		if ( vti != null ) {
 			
 			title = (String)vti.getTitleInfoProperty( ViewTitleInfo.TITLE_TEXT );
+			
+			String fid = (String)vti.getTitleInfoProperty( ViewTitleInfo.TITLE_FACTORY_ID );
+			
+			if ( fid != null ){
+				
+				result.put( "mdi.vti_fid", fid );
+			}
 		}
 		
 		if ( title == null || title.length() == 0 ) {
@@ -1507,7 +1520,7 @@ public abstract class BaseMdiEntry
 		Runnable					callback )
 	{
 		//String	mdi_type = (String)map.get( "mdi" );
-		
+				
 		String		skin_ref = (String)map.get( "skin_ref" );
 		
 		String		skin_id	= (String)map.get( "skin_id" );
@@ -1815,15 +1828,31 @@ public abstract class BaseMdiEntry
 			}
 		}
 		
-		return( buildStandAlone(
+		SWTSkinObjectContainer result =
+			buildStandAlone(
 					soParent,
 					skin_ref,
 					skin,
 					id,
 					data_source,
 					control_type,
-					builder ));
+					builder );
 		
+		if ( result != null ){
+			
+			result.setData( "imported.data.source", data_source );
+			
+			String[] to_copy = { "mdi.image_left_id", "mdi.vti_fid" };
+			
+			for ( String str: to_copy ){
+				Object 		o = (String)map.get( str );
+				if ( o != null ){
+					result.setData( str, o );
+				}
+			}
+		}
+		
+		return( result );
 	}
 
 	private static void tryInstallPlugin(String plugin_id, String plugin_name,

@@ -18,6 +18,8 @@
 
 package com.biglybt.ui.config;
 
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
@@ -26,6 +28,7 @@ import java.util.List;
 import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.internat.MessageText;
 import com.biglybt.core.networkmanager.admin.NetworkAdmin;
+import com.biglybt.core.networkmanager.admin.NetworkAdminPropertyChangeListener;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.Wiki;
@@ -52,6 +55,20 @@ public class ConfigSectionConnectionAdvanced
 				Parameter.MODE_ADVANCED);
 	}
 
+	NetworkAdminPropertyChangeListener na_listener;
+	
+	@Override
+	public void 
+	deleteConfigSection()
+	{
+		super.deleteConfigSection();
+		
+		if ( na_listener != null ){
+			
+			NetworkAdmin.getSingleton().removePropertyChangeListener(na_listener);
+		}
+	}
+	
 	@Override
 	public void build() {
 
@@ -88,14 +105,64 @@ public class ConfigSectionConnectionAdvanced
 		BooleanParameterImpl paramInterfaceWithAddresses = new BooleanParameterImpl(
 				"ConfigView.section.connection.show.intf.with.addresses", "ConfigView.label.show.intf.with.addresses");
 		paramInterfaceWithAddresses.setDefaultValue( true );
+		add(paramInterfaceWithAddresses, listSocket);
+
+		
+		StringParameterImpl paramAdditionServiceBind = new StringParameterImpl(SCFG_NETWORK_ADDITIONAL_SERVICE_BINDS,
+				"ConfigView.label.additional.service.bind");
+		add(paramAdditionServiceBind, listSocket);	
+		
+		BooleanParameterImpl paramIgnoreBindIPv6NonGlobal = new BooleanParameterImpl(
+				BCFG_NETWORK_IGNORE_BIND_IPV6_NON_GLOBAL, "ConfigView.label.ignore.bind.ipv6.non.global");
+		add(paramIgnoreBindIPv6NonGlobal, listSocket);
+
+		BooleanParameterImpl paramIgnoreBindIPv6Temporary = new BooleanParameterImpl(
+				BCFG_NETWORK_IGNORE_BIND_IPV6_TEMPORARY, "ConfigView.label.ignore.bind.ipv6.temporary");
+		add(paramIgnoreBindIPv6Temporary, listSocket);
+
+		NetworkAdmin network_admin = NetworkAdmin.getSingleton();
 		
 		Runnable set_intf = ()->{
-			paramInterfaceList.setValue(
-					MessageText.getString("ConfigView.label.bindip.details", new String[] {
-					"\n\t" + NetworkAdmin.getSingleton().getNetworkInterfacesAsString(
+			String str = 
+					"\n\t" + network_admin.getNetworkInterfacesAsString(
 							paramInterfaceWithAddresses.getValue()).replaceAll(
-							"\n", "\n\t")
-				}));
+							"\n", "\n\t" );
+			
+			InetAddress[] binds = network_admin.getAllBindAddresses( false );
+			
+			if ( binds.length > 0 ){
+				
+				String tmp_str = "";
+				
+				for ( InetAddress bind: binds ){
+					
+					if ( bind != null ){
+						
+						tmp_str += (tmp_str.isEmpty()?"":", ") + bind.getHostAddress();
+					}
+				}
+				
+				str += "\n\t" + MessageText.getString("label.bind.addresses", new String[]{ tmp_str }) + "\n";
+			}
+			
+			if ( paramIgnoreBindIPv6Temporary.getValue()){
+			
+				List<Inet6Address> tmp = network_admin.getIgnoredTemporaryIPv6();
+				
+				String tmp_str = "";
+				
+				int num = 0;
+				
+				for ( Inet6Address ia: tmp ){
+					
+					tmp_str += (num++%3==0?"\n\t\t":", ") + ia.getHostAddress();
+				}
+				
+				str += "\n\t" + MessageText.getString("label.ignored.temporary", new String[]{ tmp_str }) + "\n";
+			}
+				
+			paramInterfaceList.setValue(
+					MessageText.getString("ConfigView.label.bindip.details", new String[]{ str }));
 		};
 				
 		paramInterfaceWithAddresses.addAndFireListener((n)->{
@@ -103,11 +170,18 @@ public class ConfigSectionConnectionAdvanced
 			set_intf.run();
 		});
 		
-		add(paramInterfaceWithAddresses, listSocket);
-	
-		StringParameterImpl paramAdditionServiceBind = new StringParameterImpl(SCFG_NETWORK_ADDITIONAL_SERVICE_BINDS,
-				"ConfigView.label.additional.service.bind");
-		add(paramAdditionServiceBind, listSocket);
+		na_listener = (n)->{
+			
+			if (	n == NetworkAdmin.PR_DEFAULT_BIND_ADDRESS || 
+					n == NetworkAdmin.PR_NETWORK_INTERFACES ){
+			
+				set_intf.run();
+			}
+		};
+		
+		network_admin.addPropertyChangeListener( na_listener );
+		
+
 		
 		BooleanParameterImpl paramIgnoreBindLAN = new BooleanParameterImpl(
 				BCFG_NETWORK_IGNORE_BIND_FOR_LAN, "ConfigView.label.ignore.bind.for.lan");

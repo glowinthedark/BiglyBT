@@ -35,12 +35,12 @@ import com.biglybt.core.config.COConfigurationManager;
 import com.biglybt.core.config.ParameterListener;
 import com.biglybt.core.disk.DiskManagerFileInfo;
 import com.biglybt.core.download.DownloadManager;
-import com.biglybt.core.download.DownloadManagerState;
 import com.biglybt.core.torrent.PlatformTorrentUtils;
 import com.biglybt.core.torrent.TOTorrent;
 import com.biglybt.core.util.Constants;
 import com.biglybt.core.util.Debug;
 import com.biglybt.core.util.FileUtil;
+import com.biglybt.core.util.StringInterner.FileKey;
 import com.biglybt.pif.download.Download;
 import com.biglybt.pif.ui.UIInputReceiver;
 import com.biglybt.pif.ui.UIInputReceiverListener;
@@ -224,6 +224,7 @@ public class ColumnThumbAndName
 		}
 
 		cell.setSortValue(name);
+		cell.setTextEquivalent(name);
 	}
 
 	@Override
@@ -329,8 +330,12 @@ public class ColumnThumbAndName
 					public void contentImageLoaded(Image image, boolean wasReturned) {
 						if (!wasReturned) {
 							// this may be triggered many times, so only invalidate and don't
-							// force a refresh()
+							// force a refresh(). redraw() is cheap enough to pair with it: it
+							// no-ops for a row that isn't visible and coalesces repeats, and
+							// without it a row that isn't otherwise changing waits for the
+							// next table refresh, which on an idle torrent is a long time
 							cell.invalidate();
+							cell.redraw();
 						}
 					}
 				});
@@ -463,15 +468,21 @@ public class ColumnThumbAndName
 
 		if ( showIcon && fileInfo != null ){
 			
-			File file = fileInfo.getFile(true);
+			FileKey fileKey = fileInfo.getFileKey(true);
 					
 			Object piCache = cell.getData( KEY_PATH_ICON );
 		
+			boolean file_complete = fileInfo.getDownloaded() == fileInfo.getLength();
+			
 			if ( piCache != null ){
 				
 				Object[] temp = (Object[])piCache;
 				
-				if ( FileUtil.areFilePathsIdentical((File)temp[0],file )){
+					// the icon a partial file resolves to isn't the one it will
+					// have once complete, so completion is part of the identity
+				
+				if ( 	FileUtil.areFilePathsIdentical(((FileKey)temp[0]).getFile(),fileKey.getFile()) &&
+						((Boolean)temp[2]) == file_complete ){
 					
 					imgThumbnail = (Image[])temp[1];
 				}
@@ -479,9 +490,28 @@ public class ColumnThumbAndName
 			
 			if ( imgThumbnail == null ){
 			
-				imgThumbnail = new Image[]{ ImageRepository.getPathIcon(file.getPath(), cellBounds.height >= 20, false) };
-		
-				cell.setData( KEY_PATH_ICON, new Object[]{ file, imgThumbnail });
+				ImageRepository.PathIcon pi =
+					ImageRepository.getPathIcon(
+						fileKey.getFile().getPath(), true, cellBounds.height >= 20, false,
+						file_complete,
+						(result)->{
+							if ( result != null ){
+								cell.setData( KEY_PATH_ICON, new Object[]{ fileKey, new Image[]{ result.image }, file_complete });
+								cell.invalidate();
+								cell.redraw();
+							}
+						});
+				
+				imgThumbnail = new Image[]{ pi.image };
+				
+					// a placeholder is what we get when the lookup couldn't run;
+					// caching it here would leave the row showing it until the
+					// cell is rebuilt, as nothing comes back to replace it
+
+				if ( !pi.temporary ){
+					
+					cell.setData( KEY_PATH_ICON, new Object[]{ fileKey, imgThumbnail, file_complete });
+				}
 			}
 		}
 
@@ -619,37 +649,28 @@ public class ColumnThumbAndName
 	getDisplayName(
 		DiskManagerFileInfo fileInfo )
 	{
+		/*
 		String prefix = fileInfo.getDownloadManager().getSaveLocation().toString() + File.separator;
 		String s = fileInfo.getFile(true).toString();
 		if (s.startsWith(prefix)) {
 			s = s.substring(prefix.length());
 		}
-		
-		/*
-		if ( fileInfo.isSkipped()){
-
-	    	String dnd_sf = fileInfo.getDownloadManager().getDownloadState().getAttribute( DownloadManagerState.AT_DND_SUBFOLDER );
-
-	    	if ( dnd_sf != null ){
-
-	    		dnd_sf = dnd_sf.trim();
-
-	    		if ( dnd_sf.length() > 0 ){
-
-	    			dnd_sf += File.separatorChar;
-
-	    			int pos = s.indexOf( dnd_sf );
-
-	    			if ( pos != -1 ){
-
-	    				s = s.substring( 0, pos ) + s.substring( pos + dnd_sf.length());
-	    			}
-	    		}
-	    	}
-		}
 		*/
 		
-		return( s );
+		FileKey saveLocation = fileInfo.getDownloadManager().getSaveLocationFileKey();
+		
+		FileKey fk = fileInfo.getFileKey(true);
+		
+		FileKey temp = fk.removePrefix( saveLocation );
+		
+		if ( temp == null ){
+		
+			return( fk.toString());
+			
+		}else{
+			
+			return( temp.toString());
+		}
 	}
 	
 	private void cellPaintName(TableCell cell, GC gc, Rectangle cellBounds,

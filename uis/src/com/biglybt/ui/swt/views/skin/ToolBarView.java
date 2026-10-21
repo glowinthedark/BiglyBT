@@ -980,7 +980,7 @@ public class ToolBarView
 
 								@Override
 								public void filePriorityChanged(DownloadManager download,
-								                                DiskManagerFileInfo file) {
+								                                List<DiskManagerFileInfo> files) {
 									refreshCoreToolBarItems();
 								}
 							};

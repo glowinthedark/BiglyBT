@@ -255,6 +255,8 @@ public class ConfigurationDefaults {
     
     def.put(ConfigKeys.File.BCFG_ENABLE_ALT_LOC_FOR_DND_FILES, FALSE );
     def.put(ConfigKeys.File.SCFG_ALT_LOC_FOR_DND_FILES, FileUtil.getUserFile( "active" ).getAbsolutePath());
+    
+    def.put( ConfigKeys.File.BCFG_HIDE_PADDING_FILES, TRUE );
 
     def.put("Max File Links Supported", 2048 );
 
@@ -317,6 +319,8 @@ public class ConfigurationDefaults {
     def.put( CFG_TORRENTADD_OPENOPTIONS, CFG_TORRENTADD_OPENOPTIONS_ALWAYS);
     def.put( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_SEP, TRUE );
     def.put( ConfigKeys.File.ICFG_UI_ADDTORRENT_OPENOPTIONS_AUTO_CLOSE_SECS, ZERO );
+    def.put( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_ALWAYS_SIDEBAR, FALSE );
+    def.put( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_ONTOP, TRUE );
     def.put( ConfigKeys.File.BCFG_UI_ADDTORRENT_OPENOPTIONS_ALWAYS_SIDEBAR, FALSE );
 
 	File f = null;
@@ -407,6 +411,8 @@ public class ConfigurationDefaults {
     	}
     }
 
+    def.put( ConfigKeys.Connection.SCFG_PROXY_DATA_NO_PROXY_PEER_SET, "" );
+    
     def.put( "DNS Alt Servers", "8.8.8.8" );
     def.put( "DNS Alt Servers SOCKS Enable", TRUE );
 
@@ -436,6 +442,7 @@ public class ConfigurationDefaults {
     def.put( ConfigKeys.Transfer.BCFG_PRIORITIZE_FIRST_PIECE_FORCE, FALSE );
     def.put( "Prioritize Most Completed Files", FALSE );
     def.put( ConfigKeys.Transfer.ICFG_SET_FILE_PRIORITY_REM_PIECE, ZERO );
+    def.put( ConfigKeys.Transfer.ICFG_SET_FILE_PRIORITY_REM_PERCENT, ZERO );
     def.put( "Piece Picker Request Hint Enabled", TRUE );
     def.put( "Use Lazy Bitfield", FALSE );
     def.put( "Zero New", FALSE );
@@ -497,6 +504,8 @@ public class ConfigurationDefaults {
     def.put( "Show IP Bindings Icon", TRUE );
     def.put( ConfigKeys.Connection.SCFG_NETWORK_ADDITIONAL_SERVICE_BINDS, "" );
     def.put( ConfigKeys.Connection.BCFG_NETWORK_IGNORE_BIND_FOR_LAN, FALSE );
+    def.put( ConfigKeys.Connection.BCFG_NETWORK_IGNORE_BIND_IPV6_NON_GLOBAL, TRUE );
+    def.put( ConfigKeys.Connection.BCFG_NETWORK_IGNORE_BIND_IPV6_TEMPORARY, TRUE );
     
     
     def.put( "Stats Period", Long.valueOf(30) );
@@ -794,6 +803,7 @@ public class ConfigurationDefaults {
     def.put( "br.backup.auto.everydays", ONE );
     def.put( "br.backup.auto.everyhours", ZERO );
     def.put( "br.backup.auto.retain", 5L );
+    def.put( ConfigKeys.BackupRestore.ICFG_BACKUP_AUTO_INIT_DELAY_MINS, 5 );
     def.put( ConfigKeys.BackupRestore.BCFG_BACKUP_PLUGINS, TRUE );
     def.put( ConfigKeys.BackupRestore.BCFG_BACKUP_PAUSE_DOWNLOADS, FALSE );
     
@@ -888,6 +898,14 @@ public class ConfigurationDefaults {
     return (String)o;
   }
 
+  public int getIntParameter(String p, int defdef ){
+	  Object obj = def.get(p);
+	  if ( obj instanceof Number ){
+		  return(((Number)obj).intValue());
+	  }else{
+		  return( defdef );
+	  }
+  }
   public int getIntParameter(String p) throws ConfigurationParameterNotFoundException {
 	    checkParameterExists(p);
 	    return ((Number) def.get(p)).intValue();

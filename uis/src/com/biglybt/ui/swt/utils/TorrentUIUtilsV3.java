@@ -73,12 +73,14 @@ public class TorrentUIUtilsV3
 
 	private static final Pattern hashPattern = Pattern.compile("download/([A-Z0-9]{32})\\.torrent");
 
-	static ImageLoader imageLoaderThumb;
+	static ImageLoader _imageLoaderThumb =  new ImageLoader(null, null);
 
+	private final static String id_parent_icon = "TorrentUIUtilsV3::parent.icon";
+	
 	public static void disposeStatic() {
-		if (imageLoaderThumb != null) {
-			imageLoaderThumb.dispose();
-			imageLoaderThumb = null;
+		if (_imageLoaderThumb != null) {
+			_imageLoaderThumb.dispose();
+			_imageLoaderThumb = null;
 		}
 	}
 
@@ -303,8 +305,12 @@ public class TorrentUIUtilsV3
 	 *
 	 * @since 4.0.0.5
 	 */
-	public static Image[] getContentImage(Object datasource, boolean big,
-			final ContentImageLoadedListener l) {
+	public static Image[] 
+	getContentImage(
+		Object datasource, 
+		boolean big,
+		final ContentImageLoadedListener l) 
+	{
 		if (l == null) {
 			return null;
 		}
@@ -314,10 +320,13 @@ public class TorrentUIUtilsV3
 			return null;
 		}
 
-		if (imageLoaderThumb == null) {
-			imageLoaderThumb = new ImageLoader(null, null);
+		ImageLoader imageLoaderThumb = _imageLoaderThumb;
+				
+		if ( imageLoaderThumb == null ){
+			
+			return( null );
 		}
-
+		
 		String thumbnailUrl = PlatformTorrentUtils.getContentThumbnailUrl(torrent);
 
 		//System.out.println("thumburl= " + thumbnailUrl);
@@ -340,21 +349,55 @@ public class TorrentUIUtilsV3
 
 		int thumbnailVersion = PlatformTorrentUtils.getContentVersion(torrent);
 
+			// a file that is still being written has no embedded icon yet, so what
+			// the shell hands back is the generic one for the type - a real answer
+			// as far as the lookup is concerned, and cached as such. the icon the
+			// finished file resolves to is a different one, so completion has to
+			// be part of the key or the placeholder is served for good.
+
+		boolean primary_complete;
+
+		{
+			DownloadManager thumb_dm = DataSourceUtils.getDM( datasource );
+
+			DiskManagerFileInfo primary = thumb_dm == null? null: thumb_dm.getDownloadState().getPrimaryFile();
+
+			primary_complete = primary == null || primary.getDownloaded() == primary.getLength();
+		}
+
 			// add torrent size here to differentiate meta-data downloads from actuals
 
-		final String id = "Thumbnail." + hash + "." + torrent.getSize() + "." + thumbnailVersion + (big ? ".big" : "");
+		final String id = "Thumbnail." + hash + "." + torrent.getSize() + "." + thumbnailVersion + (big ? ".big" : "") + (primary_complete ? "" : ".inc");
 
-		Image image = imageLoaderThumb.imageAdded(id) ? imageLoaderThumb.getImage(id) : null;
+		Image existing_image = imageLoaderThumb.imageAdded(id) ? imageLoaderThumb.getImage(id) : null;
+		
 		//System.out.println("image = " + image);
-		if (image != null && !image.isDisposed()) {
-			l.contentImageLoaded(image, true);
-			return new Image[] { image };
+		
+		if ( existing_image != null && !existing_image.isDisposed()) {
+			
+			Image[] existing_images = { existing_image };
+			
+			if ( !torrent.isSimpleTorrent()){
+				
+				Image parent_image = imageLoaderThumb.imageAdded(id_parent_icon) ? imageLoaderThumb.getImage(id_parent_icon) : null;
+
+				if ( parent_image != null && !parent_image.isDisposed()){
+					
+					existing_images = new Image[]{ existing_image, parent_image };
+				}
+			}
+			l.contentImageLoaded( existing_image, true );
+			
+			return( existing_images );
 		}
 
 		final byte[] imageBytes = PlatformTorrentUtils.getContentThumbnail(torrent);
+		
 		//System.out.println("imageBytes = " + imageBytes);
-		if (imageBytes != null) {
-			image = (Image) Utils.execSWTThreadWithObject("thumbcreator",
+		
+		if ( imageBytes != null ){
+			
+			Image explicit_image = (Image) Utils.execSWTThreadWithObject("thumbcreator",
 					new AERunnableObject() {
 						@Override
 						public Object runSupport() {
@@ -370,73 +413,123 @@ public class TorrentUIUtilsV3
 							}
 						}
 					}, 500);
+			
+			if ( explicit_image != null && !explicit_image.isDisposed()) {
+				
+				imageLoaderThumb.addImage( id, explicit_image );
+				
+				l.contentImageLoaded( explicit_image, true );
+				
+				return new Image[] { explicit_image };
+			}
 		}
-/**
-		if ((image == null || image.isDisposed()) && thumbnailUrl != null) {
-			//System.out.println("get image from " + thumbnailUrl);
-			image = imageLoader.getUrlImage(thumbnailUrl,
-					new ImageDownloaderListener() {
-						public void imageDownloaded(Image image, boolean returnedImmediately) {
-							l.contentImageLoaded(image, returnedImmediately);
-							//System.out.println("got image from thumburl");
-						}
-					});
-			//System.out.println("returning " + image + " (url loading)");
-			return image == null ? null : new Image[] { image };
-		}
-**/
-		if (image == null || image.isDisposed()) {
+		
 			//System.out.println("build image from files");
-			DownloadManager dm = DataSourceUtils.getDM(datasource);
-			/*
-			 * Try to get an image from the OS
-			 */
+		DownloadManager dm = DataSourceUtils.getDM(datasource);
+		/*
+		 * Try to get an image from the OS
+		 */
 
-			String path = null;
-			if (dm == null) {
-				TOTorrentFile[] files = torrent.getFiles();
-				if (files.length > 0) {
-					path = files[0].getRelativePath();
-				}
-			} else {
-				path = dm.getDownloadState().getPrimaryFilePath();
-				//DiskManagerFileInfo primaryFile = dm.getDownloadState().getPrimaryFile();
-				//path = primaryFile == null ? null : primaryFile.getFile(true).getName();
-				if ( path == null ){
-					path = dm.getSaveLocation().getAbsolutePath();
-				}
-			}
-			if (path != null) {
-				image = ImageRepository.getPathIcon(path, big, false);
-
-				if (image != null && !torrent.isSimpleTorrent()) {
-					Image parentPathIcon = ImageRepository.getPathIcon(new File(path).getParent(), false, false);
-					Image[] images = parentPathIcon == null || parentPathIcon.isDisposed()
-							? new Image[] {
-								image
-							} : new Image[] {
-								image,
-								parentPathIcon
-							};
-					return images;
-				}
-			}
-
-			if (image == null) {
-				imageLoaderThumb.addImageNoDipose(id, ImageLoader.noImage);
-			} else {
-				imageLoaderThumb.addImageNoDipose(id, image);
+		String path = null;
+		Boolean isFile;
+		if (dm == null) {
+			TOTorrentFile[] files = torrent.getFiles();
+			if (files.length > 0) {
+				path = files[0].getRelativePath();
+				isFile = true;
+			}else{
+				isFile = null;
 			}
 		} else {
-			//System.out.println("has mystery image");
-			imageLoaderThumb.addImage(id, image);
+			path = dm.getDownloadState().getPrimaryFilePath();
+			//DiskManagerFileInfo primaryFile = dm.getDownloadState().getPrimaryFile();
+			//path = primaryFile == null ? null : primaryFile.getFile(true).getName();
+			if ( path == null ){
+				path = dm.getSaveLocation().getAbsolutePath();
+				isFile = torrent.isSimpleTorrent();
+			}else{
+				isFile = true;
+			}
+		}
+		if ( path == null ){
+			
+			imageLoaderThumb.addImageNoDipose(id, ImageLoader.noImage);
+
+			l.contentImageLoaded(null, true);
+			
+			return new Image[] { null };
+		}
+		
+			// the per-file icon may not be ready yet, in which case the
+			// placeholder gets cached below and nothing would replace it.
+			// when the real one turns up, refresh the cached thumbnail and
+			// let the listener repaint the cell
+		
+			// pass the completion state through: the five-argument overload
+			// assumes the file is finished, so while it is still being written
+			// the generic icon the shell returns is treated as its real one -
+			// cached in memory and written to the disk cache under the key the
+			// finished file will use, where it survives a restart
+
+		ImageRepository.PathIcon pi = ImageRepository.getPathIcon(path, isFile, big, false,
+				primary_complete,
+				(result)->{
+					Utils.execSWTThread(()->{
+						if ( result != null && !result.temporary ){
+								
+							if ( !imageLoaderThumb.imageAdded( id )){
+								
+								imageLoaderThumb.addImageNoDipose(id, result.image );
+							}
+						}
+						l.contentImageLoaded( result.image, false );
+					});
+				});
+
+		Image image = pi.image;
+		
+		Image[] images = null;
+				
+		if ( image != null && !torrent.isSimpleTorrent()){
+						
+			Image parentPathIcon = ImageRepository.getPathIcon(new File(path).getParent(), false, false, false).image;
+			
+			if ( parentPathIcon == null || parentPathIcon.isDisposed()){
+				
+				images = new Image[]{ image };
+				
+			}else{
+								
+				images = new Image[]{ image, parentPathIcon };
+				
+				if ( !imageLoaderThumb.imageAdded(id_parent_icon)){
+					
+					imageLoaderThumb.addImageNoDipose(id_parent_icon, parentPathIcon );
+				}
+			}
+		}else{
+
+			images = new Image[]{ image==null?ImageLoader.noImage:image};
+		}
+		
+		image = images[0];
+				
+		if ( !pi.temporary ){
+			
+			imageLoaderThumb.addImageNoDipose(id, image );
 		}
 
-		l.contentImageLoaded(image, true);
-		return new Image[] { image };
+		l.contentImageLoaded( image, true);
+		
+		return( images );
 	}
 
-	public static void releaseContentImage(Object datasource) {
+	public static void 
+	releaseContentImage(
+		Object datasource) 
+	{
+		ImageLoader imageLoaderThumb = _imageLoaderThumb;
+
 		if (imageLoaderThumb == null) {
 			return;
 		}

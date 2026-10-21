@@ -140,8 +140,8 @@ TagPropertyConstraintHandler
 			@Override
 			public void 
 			filePriorityChanged(
-				DownloadManager 	download, 
-				DiskManagerFileInfo file )
+				DownloadManager 			download, 
+				List<DiskManagerFileInfo>	files )
 			{
 				boolean changed = false;
 				

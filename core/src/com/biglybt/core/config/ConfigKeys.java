@@ -36,6 +36,7 @@ public final class ConfigKeys {
 		public static final String ICFG_BACKUP_AUTO_EVERYDAYS = "br.backup.auto.everydays";
 		public static final String ICFG_BACKUP_AUTO_EVERYHOURS = "br.backup.auto.everyhours";
 		public static final String ICFG_BACKUP_AUTO_RETAIN = "br.backup.auto.retain";
+		public static final String ICFG_BACKUP_AUTO_INIT_DELAY_MINS = "br.backup.auto.init.delay.mins";
 		public static final String BCFG_BACKUP_NOTIFY = "br.backup.notify";
 		public static final String BCFG_RESTORE_AUTOPAUSE = "br.restore.autopause";
 		public static final String BCFG_BACKUP_PLUGINS = "br.restore.doplugins";
@@ -90,6 +91,8 @@ public final class ConfigKeys {
 		public static final String BCFG_IPV_6_IGNORE_NI_ADDRESSES = "IPV6 Ignore Network Addresses";
 		public static final String SCFG_NETWORK_ADDITIONAL_SERVICE_BINDS = "Additional Service Bind IPs";
 		public static final String BCFG_NETWORK_IGNORE_BIND_FOR_LAN = "Ignore Bind For LAN";
+		public static final String BCFG_NETWORK_IGNORE_BIND_IPV6_NON_GLOBAL = "Ignore Bind for IPv6 Non-Global";
+		public static final String BCFG_NETWORK_IGNORE_BIND_IPV6_TEMPORARY = "Ignore Bind for IPv6 Temporary";
 		
 		public static final String SCFG_DNS_ALT_SERVERS = "DNS Alt Servers";
 		public static final String BCFG_DNS_ALT_SERVERS_SOCKS_ENABLE = "DNS Alt Servers SOCKS Enable";
@@ -113,6 +116,7 @@ public final class ConfigKeys {
 		public static final String SCFG_PREFIX_PROXY_DATA_PORT = "Proxy.Data.Port";
 		public static final String SCFG_PREFIX_PROXY_DATA_USERNAME = "Proxy.Data.Username";
 		public static final String SCFG_PREFIX_PROXY_DATA_PASSWORD = "Proxy.Data.Password";
+		public static final String SCFG_PROXY_DATA_NO_PROXY_PEER_SET = "Proxy.Data.NoProxy.PeerSet";
 		public static final String BCFG_PROXY_SOCKS_DISABLE_PLUGIN_PROXIES = "Proxy.SOCKS.disable.plugin.proxies";
 		public static final String BCFG_PROXY_CHECK_ON_START = "Proxy.Check.On.Start";
 		public static final String BCFG_PROXY_SOCKS_SHOW_ICON = "Proxy.SOCKS.ShowIcon";
@@ -126,6 +130,7 @@ public final class ConfigKeys {
 		public static final String BCFG_ALWAYS_CREATE_TORRENT_SUB_FOLDER = "Always Create Torrent Sub-Folder";
 		public static final String BCFG_UI_ADDTORRENT_OPENOPTIONS_SEP = ConfigurationDefaults.CFG_TORRENTADD_OPENOPTIONS_SEP;
 		public static final String BCFG_UI_ADDTORRENT_OPENOPTIONS_ALWAYS_SIDEBAR = "ui.addtorrent.openoptions.always.sidebar";
+		public static final String BCFG_UI_ADDTORRENT_OPENOPTIONS_ONTOP = "ui.addtorrent.openoptions.ontop";
 		public static final String ICFG_UI_ADDTORRENT_OPENOPTIONS_AUTO_CLOSE_SECS = "ui.addtorrent.openoptions.auto.close.secs";
 		public static final String BCFG_DEFAULT_DIR_AUTO_SAVE_AUTO_RENAME = "DefaultDir.AutoSave.AutoRename";
 		public static final String BCFG_DEFAULT_DIR_AUTO_UPDATE = "DefaultDir.AutoUpdate";
@@ -173,6 +178,7 @@ public final class ConfigKeys {
 		public static final String BCFG_USE_INCOMPLETE_FILE_PREFIX = "Use Incomplete File Prefix";
 		public static final String BCFG_DOWNLOAD_HISTORY_ENABLED = "Download History Enabled";
 		public static final String BCFG_DOWNLOAD_HISTORY_DONT_ADD_DUP = "Download History Dont Add Duplicate";
+		public static final String BCFG_HIDE_PADDING_FILES = "Hide Padding Files";
 		public static final String BCFG_FILES_AUTO_TAG_ENABLE = "Files Auto Tag Enable";
 		public static final String ICFG_FILES_AUTO_TAG_COUNT = "Files Auto Tag Count";
 		public static final String SCFG_FILE_AUTO_TAG_NAME_DEFAULT = "File Auto Tag Name Default";
@@ -456,6 +462,7 @@ public final class ConfigKeys {
 		public static final String BCFG_PRIORITIZE_FIRST_PIECE_FORCE = "Prioritize First Piece Force";
 		public static final String BCFG_PRIORITIZE_MOST_COMPLETED_FILES = "Prioritize Most Completed Files";
 		public static final String ICFG_SET_FILE_PRIORITY_REM_PIECE = "Set File Priority Remaining Pieces";
+		public static final String ICFG_SET_FILE_PRIORITY_REM_PERCENT = "Set File Priority Remaining Percent";
 		public static final String SCFG_IGNORE_PEER_PORTS = "Ignore.peer.ports";
 		public static final String BCFG_LAN_SPEED_ENABLED = "LAN Speed Enabled";
 		public static final String LCFG_MAX_LAN_UPLOAD_SPEED_K_BS = "Max LAN Upload Speed KBs";

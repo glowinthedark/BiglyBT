@@ -20,12 +20,15 @@
 
 package com.biglybt.core.networkmanager.admin.impl;
 
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.InputStreamReader;
 import java.net.*;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.UnsupportedAddressTypeException;
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.biglybt.core.Core;
@@ -72,17 +75,35 @@ import com.biglybt.platform.PlatformManagerPingCallback;
 import com.biglybt.plugin.upnp.UPnPPlugin;
 import com.biglybt.plugin.upnp.UPnPPluginService;
 import com.biglybt.plugin.upnp.UPnPPluginServiceWAN;
+import com.biglybt.ui.UIFunctions;
+import com.biglybt.ui.UIFunctionsManager;
 
 public class
 NetworkAdminImpl
 	extends NetworkAdmin
 	implements AEDiagnosticsEvidenceGenerator
 {
+	private static NetworkAdminImpl	singleton;
+
+	public static NetworkAdminImpl
+	getSingleton()
+	{
+		synchronized( NetworkAdminImpl.class ){
+	
+			if ( singleton == null ){
+
+				singleton = new NetworkAdminImpl();
+			}
+
+			return( singleton );
+		}
+	}
+	
 	private static final LogIDs LOGID = LogIDs.NWMAN;
 
-	private static final boolean	FULL_INTF_PROBE	= false;
+	//private static final boolean	FULL_INTF_PROBE	= false;
 
-	private static InetAddress anyLocalAddress;
+	//private static InetAddress anyLocalAddress;
 	private static InetAddress anyLocalAddressIPv4;
 	private static InetAddress anyLocalAddressIPv6;
 	private static InetAddress localhostV4;
@@ -94,9 +115,9 @@ NetworkAdminImpl
 		{
 			anyLocalAddressIPv4 	= InetAddress.getByAddress(new byte[] { 0,0,0,0 });
 			anyLocalAddressIPv6  	= InetAddress.getByAddress(new byte[] {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0});
-			anyLocalAddress			= new InetSocketAddress(0).getAddress();
-			localhostV4 = InetAddress.getByAddress(new byte[] {127,0,0,1});
-			localhostV6 = InetAddress.getByAddress(new byte[] {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1});
+			//anyLocalAddress			= new InetSocketAddress(0).getAddress();
+			localhostV4 			= InetAddress.getByAddress(new byte[] {127,0,0,1});
+			localhostV6 			= InetAddress.getByAddress(new byte[] {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1});
 		} catch (UnknownHostException e)
 		{
 			e.printStackTrace();
@@ -108,6 +129,7 @@ NetworkAdminImpl
 	private static final int ROUTE_CHECK_MILLIS		= 60*1000;
 	private static final int ROUTE_CHECK_TICKS		= ROUTE_CHECK_MILLIS / INTERFACE_CHECK_MILLIS;
 
+	private volatile Set<Inet6Address>	temporary_ipv6_addresses = new HashSet<>();
 
 	private Set<NetworkInterface>					old_network_interfaces;
 	private final Map<String,AddressHistoryRecord>	address_history			= new HashMap<>();
@@ -118,11 +140,14 @@ NetworkAdminImpl
 	private boolean						supportsIPv6withNIO		= true;
 	private boolean						supportsIPv6 = true;
 	private boolean						supportsIPv4 = true;
-	private boolean						ignoreIPv4;
-	private boolean						ignoreIPv6;
 	
 	private boolean						IPv6_enabled;
 	private boolean						preferIPv6;
+		
+	private volatile boolean	ignore_v4;
+	private volatile boolean	ignore_v6;
+	private volatile boolean	ignore_v6_non_global;
+	private volatile boolean	ignore_v6_temporary;
 	
 	private InetAddress[]				additionalServiceBindIPs;
 	
@@ -135,7 +160,7 @@ NetworkAdminImpl
 
 	private final CopyOnWriteList<NetworkAdminPropertyChangeListener>	listeners = new CopyOnWriteList<>();
 
-
+	/*
 	final NetworkAdminRouteListener
 		trace_route_listener = new NetworkAdminRouteListener()
 		{
@@ -166,16 +191,20 @@ NetworkAdminImpl
 				return( true );
 			}
 		};
-
+	*/
+	
 	private static final int ASN_MIN_CHECK = 30*60*1000;
 
 	private long last_asn_lookup_time;
 
-	private final List asn_ips_checked = new ArrayList(0);
+	private final List<InetAddress> asn_ips_checked = new ArrayList<>(0);
 
-	private final List as_history = new ArrayList();
+	private final List<NetworkAdminASN> as_history = new ArrayList<>();
 
-	private final AsyncDispatcher		async_asn_dispacher 	= new AsyncDispatcher();
+	private final AsyncDispatcher		async_dispatcher 		= new AsyncDispatcher();
+	
+	private final AsyncDispatcher		async_asn_dispatcher 	= new AsyncDispatcher();
+	
 	private static final int	MAX_ASYNC_ASN_LOOKUPS	= 1024;
 
 	final Map<InetAddress, NetworkAdminASN>	async_asn_history =
@@ -217,8 +246,36 @@ NetworkAdminImpl
 			}
 		};
 	
-		
+			
+	public
+	NetworkAdminImpl()
 	{
+		COConfigurationManager.addAndFireParameterListeners(
+				new String[]{
+					ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES,
+					ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES,
+					ConfigKeys.Connection.BCFG_NETWORK_IGNORE_BIND_IPV6_NON_GLOBAL,
+					ConfigKeys.Connection.BCFG_NETWORK_IGNORE_BIND_IPV6_TEMPORARY },
+				(parameterName)->{
+					boolean start_of_day = parameterName == null;
+					
+					ignore_v4 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES );
+					ignore_v6 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES );
+					
+					ignore_v6_non_global	= COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_NETWORK_IGNORE_BIND_IPV6_NON_GLOBAL );
+					ignore_v6_temporary		= COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_NETWORK_IGNORE_BIND_IPV6_TEMPORARY );
+					
+					if ( !start_of_day ){
+							
+						async_dispatcher.dispatch(()->{
+							
+							checkNetworkInterfaces( false, true );
+					
+							checkDefaultBindAddress( false );
+						});
+					}
+				});
+
 		COConfigurationManager.addAndFireParameterListeners(
 				new String[]{ "IPV6 Enable Support", "IPV6 Prefer Addresses" },
 				new ParameterListener()
@@ -228,12 +285,30 @@ NetworkAdminImpl
 					parameterChanged(
 						String parameterName )
 					{
-						setIPv6Enabled( COConfigurationManager.getBooleanParameter("IPV6 Enable Support"));
+						boolean start_of_day = parameterName == null;
+						
+						setIPv6Enabled( COConfigurationManager.getBooleanParameter("IPV6 Enable Support"), start_of_day );
 						
 						preferIPv6 = COConfigurationManager.getBooleanParameter( "IPV6 Prefer Addresses" );
 					}
 				});
 
+		COConfigurationManager.addParameterListener(
+				new String[] {"Bind IP","Enforce Bind IP"},
+				new ParameterListener()
+				{
+					@Override
+					public void
+					parameterChanged(
+						String parameterName )
+					{
+						async_dispatcher.dispatch(()->{
+						
+							checkDefaultBindAddress( false );
+						});
+					}
+				});
+			
 		COConfigurationManager.addResetToDefaultsListener(
 				new COConfigurationManager.ResetToDefaultsListener()
 				{
@@ -246,84 +321,38 @@ NetworkAdminImpl
 				});
 		
 		loadRecentPublicIPs();
-	}
-		
-	private final boolean 	initialised;
-	
-	public
-	NetworkAdminImpl()
-	{
-		COConfigurationManager.addParameterListener(
-			new String[] {"Bind IP","Enforce Bind IP"},
-			new ParameterListener()
-			{
-				@Override
-				public void
-				parameterChanged(
-					String parameterName )
-				{
-					checkDefaultBindAddress( false );
-				}
-			});
 
-		COConfigurationManager.addAndFireParameterListeners(
-				new String[]{
-					ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES,
-					ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES },
+		COConfigurationManager.addAndFireParameterListener(
+				ConfigKeys.Connection.SCFG_NETWORK_ADDITIONAL_SERVICE_BINDS,	
 				(n)->{
-					ignoreIPv4 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES );
-					ignoreIPv6 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES );
-					
-					if ( n != null ){
+						boolean start_of_day = n == null;
 						
-						checkNetworkInterfaces( false, true );
-	
-						checkDefaultBindAddress( false );
-					}
-				});
-		
-		SimpleTimer.addPeriodicEvent(
-			"NetworkAdmin:checker",
-			INTERFACE_CHECK_MILLIS,
-			new TimerEventPerformer()
-			{
-				private int	tick_count;
-
-				@Override
-				public void
-				perform(
-					TimerEvent event )
-				{
-					tick_count++;
-
-					boolean changed = checkNetworkInterfaces( false, false );
-
-					if ( 	changed ||
-							tick_count % ROUTE_CHECK_TICKS == 0 ){
-
-						checkConnectionRoutes();
-					}
-				}
-			});
+						if ( start_of_day ){
+						
+							setupAdditionalServiceBindIPs( COConfigurationManager.getStringParameter( n ));
+							
+						}else{
+							
+							async_dispatcher.dispatch(()->{
+								
+								setupAdditionalServiceBindIPs( COConfigurationManager.getStringParameter( n ));
+							});
+						}
+					});
 
 			// populate initial values
 
 		checkNetworkInterfaces( true, true );
 
 		checkDefaultBindAddress( true );
-
-		COConfigurationManager.addAndFireParameterListener(
-			ConfigKeys.Connection.SCFG_NETWORK_ADDITIONAL_SERVICE_BINDS,	
-			(n)->{
-					setupAdditionalServiceBindIPs( COConfigurationManager.getStringParameter( n ));
-				});
 		
 		AEDiagnostics.addWeakEvidenceGenerator( this );
 
-		if (System.getProperty("skip.dns.spi.test", "0").equals("0")) {
+		if ( System.getProperty("skip.dns.spi.test", "0").equals("0")){
+			
 			checkDNSSPI();
 		}
-
+	
 		CoreFactory.addCoreRunningListener(
 			new CoreRunningListener()
 			{
@@ -336,7 +365,29 @@ NetworkAdminImpl
 				}
 			});
 
-		initialised = true;
+		SimpleTimer.addPeriodicEvent(
+				"NetworkAdmin:checker",
+				INTERFACE_CHECK_MILLIS,
+				new TimerEventPerformer()
+				{
+					private int	tick_count;
+
+					@Override
+					public void
+					perform(
+						TimerEvent event )
+					{
+						tick_count++;
+
+						boolean changed = checkNetworkInterfaces( false, false );
+
+						if ( 	changed ||
+								tick_count % ROUTE_CHECK_TICKS == 0 ){
+
+							checkConnectionRoutes();
+						}
+					}
+				});
 	}
 
 	private void
@@ -576,18 +627,22 @@ NetworkAdminImpl
 
 	protected void
 	setIPv6Enabled(
-		boolean enabled )
+		boolean 	enabled,
+		boolean		start_of_day )
 	{
 		IPv6_enabled	= enabled;
 
 		supportsIPv6withNIO		= enabled;
 		supportsIPv6 			= enabled;
 
-		if ( initialised ){
+		if ( !start_of_day ){
 
-			checkNetworkInterfaces( false, true );
+			async_dispatcher.dispatch(()->{
+				
+				checkNetworkInterfaces( false, true );
 
-			checkDefaultBindAddress( false );
+				checkDefaultBindAddress( false );
+			});
 		}
 	}
 
@@ -598,8 +653,8 @@ NetworkAdminImpl
 		return( IPv6_enabled );
 	}
 
-	private List<NetworkInterface> 	last_getni_result;
-	private final Object					getni_lock = new Object();
+	private List<NetworkInterface> 		last_getni_result;
+	private final Object				getni_lock = new Object();
 
 	protected boolean
 	checkNetworkInterfaces(
@@ -615,7 +670,7 @@ NetworkAdminImpl
 
 			synchronized( getni_lock ){
 
-				if ( last_getni_result != x ){
+				if ( last_getni_result != x || force ){
 
 					last_getni_result = x;
 
@@ -663,6 +718,16 @@ NetworkAdminImpl
 
 					if ( changed || force ){
 
+						
+						if ( IPv6_enabled && ignore_v6_temporary && !ignore_v6 ){
+							
+							temporary_ipv6_addresses = getTemporaryIPv6Addresses();
+							
+						}else{
+							
+							temporary_ipv6_addresses = new HashSet<>();
+						}
+						
 						if ( changed ){
 							
 							testedIPv6Routing = false;
@@ -685,7 +750,7 @@ NetworkAdminImpl
 							while (it.hasNext())
 							{
 								NetworkInterface ni = it.next();
-								Enumeration addresses = filter(ni.getInetAddresses());
+								Enumeration<InetAddress> addresses = filter(ni.getInetAddresses());
 								while (addresses.hasMoreElements())
 								{
 									InetAddress ia = (InetAddress) addresses.nextElement();
@@ -810,6 +875,7 @@ NetworkAdminImpl
 			}
 			*/
 			
+	
 			if ( fire_stuff ){
 
 				interfacesChanged( first_time );
@@ -952,15 +1018,7 @@ NetworkAdminImpl
 	getSingleHomedServiceBinding( String host) 
 		throws UnknownHostException, UnsupportedAddressTypeException
 	{
-		List<InetAddress> addresses;
-		
-		try{
-			addresses = DNSUtils.getSingleton().getAllByName( host );
-			
-		}catch( Throwable e ){
-			
-			addresses = Arrays.asList( InetAddress.getAllByName( host ));
-		}
+		List<InetAddress> addresses = UrlUtils.getAllByName(host);
 		
 		List<Inet4Address> ip4 = new ArrayList<>();
 		List<Inet6Address> ip6 = new ArrayList<>();
@@ -1061,15 +1119,7 @@ NetworkAdminImpl
 	
 		throws UnknownHostException, UnsupportedAddressTypeException
 	{
-		List<InetAddress> addresses;
-		
-		try{
-			addresses = DNSUtils.getSingleton().getAllByName( host );
-			
-		}catch( Throwable e ){
-			
-			addresses = Arrays.asList( InetAddress.getAllByName( host ));
-		}
+		List<InetAddress> addresses = UrlUtils.getAllByName(host);
 		
 		InetAddress bind_v4 = null;
 		InetAddress bind_v6 = null;
@@ -1165,10 +1215,22 @@ NetworkAdminImpl
 		return( calcBindAddresses( bind_to, false ));
 	}
 
-	private static List<InetAddress>
+	private List<InetAddress>
 	parseAddresses(
 		String		str )
 	{
+		if ( Constants.isCVSVersion()){
+		
+				// potential address resolution can stall for a long time
+			
+			UIFunctions uif = UIFunctionsManager.getUIFunctions();
+			
+			if ( uif != null && uif.isUIThread()){
+				
+				Debug.out( "Don't call this on the UI thread" );
+			}
+		}
+		
 		if ( str == null ){
 			str = "";
 		}
@@ -1234,21 +1296,77 @@ addressLoop:
 				continue;
 			}
 			
-			Enumeration interfaceAddresses = filter( netInterface.getInetAddresses());
-			if(ifaces.length != 2)
-				while(interfaceAddresses.hasMoreElements())
-					addrs.add((InetAddress)interfaceAddresses.nextElement());
-			else
-			{
-				int selectedAddress = 0;
-				try { selectedAddress = Integer.parseInt(ifaces[1]); }
-				catch (NumberFormatException e) {} // ignore, user could by typing atm
-				for(int j=0;interfaceAddresses.hasMoreElements();j++,interfaceAddresses.nextElement())
-					if(j==selectedAddress)
-					{
-						addrs.add((InetAddress)interfaceAddresses.nextElement());
-						continue addressLoop;
+			Enumeration<InetAddress> interfaceAddresses = filter( netInterface.getInetAddresses());
+			
+				// the order of addresses returned for an interfaces isn't deterministic...
+				// but the first address selected is significant as it is the "single homed bind address"
+			
+			if ( ifaces.length != 2 ){
+				List<InetAddress> l = new ArrayList<>();
+				while(interfaceAddresses.hasMoreElements()){
+					l.add(interfaceAddresses.nextElement());
+				}
+				l.sort((a1,a2)->{
+					boolean a1_4 = a1 instanceof Inet4Address;
+					boolean a2_4 = a2 instanceof Inet4Address;
+					if ( a1_4 && a2_4 ){
+						return(0);
+					}else if ( a1_4 ){
+						return( preferIPv6?1:-1);
+					}else if ( a2_4 ){
+						return( preferIPv6?-1:1);
+					}else{
+						return(0);
 					}
+				});
+				addrs.addAll( l );
+			}else{
+				int selectedAddress = 0;
+				
+				String indexStr = ifaces[1].toLowerCase( Locale.US );
+				
+					// as order is unstable and therefore indexing not great added (ip)v4/6 selectors
+				
+				Boolean proto_v4 = null;
+				
+				if ( indexStr.endsWith( "v4" )){
+					
+					proto_v4 = true;
+					
+				}else if ( indexStr.endsWith( "v6" )){
+					
+					proto_v4 = false;
+				}
+				
+				if ( proto_v4 != null ){
+					
+					while(interfaceAddresses.hasMoreElements()){
+						
+						InetAddress addr = interfaceAddresses.nextElement();
+						
+						if ( addr instanceof Inet4Address == proto_v4 ){
+
+							addrs.add(addr);
+						}
+					}
+				}else{
+					
+					try{
+						selectedAddress = Integer.parseInt( indexStr );
+						
+					}catch( NumberFormatException e ){
+						
+					
+						 // ignore, user could by typing atm
+					}
+					
+					for(int j=0;interfaceAddresses.hasMoreElements();j++,interfaceAddresses.nextElement()){
+						if(j==selectedAddress){
+							addrs.add((InetAddress)interfaceAddresses.nextElement());
+							continue addressLoop;
+						}
+					}
+				}
 			}
 		}
 
@@ -1357,7 +1475,7 @@ addressLoop:
 
 				if ( netInterface != null ){
 
-					Enumeration interfaceAddresses = filter( netInterface.getInetAddresses());
+					Enumeration<InetAddress> interfaceAddresses = filter( netInterface.getInetAddresses());
 
 					if ( ifaces.length != 2 ){
 
@@ -1484,19 +1602,19 @@ addressLoop:
 	@Override
 	public String getNetworkInterfacesAsString(boolean only_with_addresses)
 	{
-		Set interfaces = old_network_interfaces;
+		Set<NetworkInterface> interfaces = old_network_interfaces;
 
 		if (interfaces == null){
 
 			return ("");
 		}
 
-		Iterator it = interfaces.iterator();
+		Iterator<NetworkInterface> it = interfaces.iterator();
 		StringBuilder sb = new StringBuilder( 1024 );
 		while (it.hasNext())
 		{
-			NetworkInterface ni = (NetworkInterface) it.next();
-			Enumeration addresses = filter( ni.getInetAddresses());
+			NetworkInterface ni = it.next();
+			Enumeration<InetAddress> addresses = filter( ni.getInetAddresses());
 			if ( only_with_addresses && !addresses.hasMoreElements()){
 				continue;
 			}
@@ -1729,13 +1847,13 @@ addressLoop:
 		try{
 				// see if we have a choice
 
-			List	local_addresses 	= new ArrayList();
-			List	non_local_addresses = new ArrayList();
+			List<InetAddress>	local_addresses 	= new ArrayList<>();
+			List<InetAddress>	non_local_addresses = new ArrayList<>();
 
 			try{
 				NetworkAdminNetworkInterface[] interfaces = getInterfaces();
 
-				List possible = new ArrayList();
+				List<InetAddress> possible = new ArrayList<>();
 
 				for (int i=0;i<interfaces.length;i++){
 
@@ -2052,14 +2170,14 @@ addressLoop:
 
 	protected InetAddress
 	guessAddress(
-		List	addresses )
+		List<InetAddress>	addresses )
 	{
 			// prioritise 192.168.0.* and 192.168.1.* as common
 			// then ipv4 over ipv6
 
 		for (int i=0;i<addresses.size();i++){
 
-			InetAddress address = (InetAddress)addresses.get(i);
+			InetAddress address = addresses.get(i);
 
 			String str = address.getHostAddress();
 
@@ -2071,7 +2189,7 @@ addressLoop:
 
 		for (int i=0;i<addresses.size();i++){
 
-			InetAddress address = (InetAddress)addresses.get(i);
+			InetAddress address = addresses.get(i);
 
 			if ( address instanceof Inet4Address ){
 
@@ -2081,7 +2199,7 @@ addressLoop:
 
 		for (int i=0;i<addresses.size();i++){
 
-			InetAddress address = (InetAddress)addresses.get(i);
+			InetAddress address = addresses.get(i);
 
 			if ( address instanceof Inet6Address ){
 
@@ -2520,7 +2638,7 @@ addressLoop:
 	public boolean
 	hasDHTIPV4()
 	{
-		return( !ignoreIPv4 );	// should be brave and change this to hasIPv4Potential() but as this is really just for
+		return( !ignore_v4 );	// should be brave and change this to hasIPv4Potential() but as this is really just for
 								// testing gonna require user to explicitly ignore V4 ATM
 	}
 	
@@ -2570,7 +2688,7 @@ addressLoop:
 	public NetworkAdminNetworkInterface[]
 	getInterfaces()
 	{
-		Set	interfaces = old_network_interfaces;
+		Set<NetworkInterface>	interfaces = old_network_interfaces;
 
 		if ( interfaces == null ){
 
@@ -2579,13 +2697,13 @@ addressLoop:
 
 		NetworkAdminNetworkInterface[]	res = new NetworkAdminNetworkInterface[interfaces.size()];
 
-		Iterator	it = interfaces.iterator();
+		Iterator<NetworkInterface>	it = interfaces.iterator();
 
 		int	pos = 0;
 
 		while( it.hasNext()){
 
-			NetworkInterface ni = (NetworkInterface)it.next();
+			NetworkInterface ni = it.next();
 
 			res[pos++] = new networkInterface( ni );
 		}
@@ -2623,11 +2741,11 @@ addressLoop:
 	}
 
  	@Override
-  public NetworkAdminProtocol[]
+ 	public NetworkAdminProtocol[]
  	getInboundProtocols(
  			Core core)
  	{
-		List	protocols = new ArrayList();
+		List<NetworkAdminProtocolImpl>	protocols = new ArrayList<>();
 
 		TCPNetworkManager	tcp_manager = TCPNetworkManager.getSingleton();
 
@@ -2856,11 +2974,11 @@ addressLoop:
 	public NetworkAdminASN
 	getCurrentASN()
 	{
-		List	asns = COConfigurationManager.getListParameter( "ASN Details", new ArrayList());
+		List<Map<String,Object>>	asns = (List<Map<String,Object>>)COConfigurationManager.getListParameter( "ASN Details", new ArrayList());
 
 		if ( asns.size() > 0 ){
 
-			Map	m = (Map)asns.get(0);
+			Map<String,Object>	m = asns.get(0);
 
 			return( ASNFromMap( m ));
 		}
@@ -2868,11 +2986,11 @@ addressLoop:
 		return( new NetworkAdminASNImpl( true, "", "", "" ));
 	}
 
-	protected Map
+	protected Map<String,Object>
 	ASNToMap(
 		NetworkAdminASNImpl	x )
 	{
-		Map	m = new HashMap();
+		Map<String,Object>	m = new HashMap<>();
 
 		byte[]	as	= new byte[0];
 		byte[]	asn	= new byte[0];
@@ -2898,7 +3016,7 @@ addressLoop:
 
 	protected NetworkAdminASNImpl
 	ASNFromMap(
-		Map	m )
+		Map<String,Object>	m )
 	{
 		boolean	ipv4	= true;
 		String	as		= "";
@@ -2937,11 +3055,11 @@ addressLoop:
 			return( current );
 		}
 
-		List	asns = COConfigurationManager.getListParameter( "ASN Details", new ArrayList());
+		List<Map<String,Object>>	asns = (List<Map<String,Object>>)COConfigurationManager.getListParameter( "ASN Details", new ArrayList<>());
 
 		for (int i=0;i<asns.size();i++){
 
-			Map	m = (Map)asns.get(i);
+			Map<String,Object>	m = asns.get(i);
 
 			NetworkAdminASN x = ASNFromMap( m );
 
@@ -3023,7 +3141,7 @@ addressLoop:
 			}
 		}
 
-		int	queue_size = async_asn_dispacher.getQueueSize();
+		int	queue_size = async_asn_dispatcher.getQueueSize();
 
 		if ( queue_size >= MAX_ASYNC_ASN_LOOKUPS ){
 
@@ -3031,7 +3149,7 @@ addressLoop:
 
 		}else{
 
-			async_asn_dispacher.dispatch(
+			async_asn_dispatcher.dispatch(
 				new AERunnable()
 				{
 					@Override
@@ -3085,7 +3203,7 @@ addressLoop:
 
 			for (int i=0;i<as_history.size();i++){
 
-				 NetworkAdminASN x = (NetworkAdminASN)as_history.get(i);
+				 NetworkAdminASN x = as_history.get(i);
 
 				 if ( asn.getAS().equals( x.getAS())){
 
@@ -3115,7 +3233,7 @@ addressLoop:
 
 			for (int i=0;i<as_history.size();i++){
 
-				 NetworkAdminASN x = (NetworkAdminASN)as_history.get(i);
+				 NetworkAdminASN x = as_history.get(i);
 
 				 if ( x.matchesCIDR( address )){
 
@@ -3269,7 +3387,7 @@ addressLoop:
 			throw( new NetworkAdminException( "No trace-route capability on platform" ));
 		}
 
-		final List	nodes = new ArrayList();
+		final List<NetworkAdminNode>	nodes = new ArrayList<>();
 
 		try{
 			pm.traceRoute(
@@ -3341,6 +3459,7 @@ addressLoop:
 		return((NetworkAdminNode[])nodes.toArray( new NetworkAdminNode[nodes.size()]));
 	}
 
+	/*
 	@Override
 	public boolean
 	canPing()
@@ -3437,8 +3556,9 @@ addressLoop:
 
 		return( nodes[0] );
 	}
+	*/
 
-
+	/*
 	@Override
 	public void
 	getRoutes(
@@ -3539,7 +3659,9 @@ addressLoop:
 			((AESemaphore)sems.get(i)).reserve();
 		}
 	}
+	*/
 
+	/*
 	@Override
 	public void
 	pingTargets(
@@ -3640,7 +3762,8 @@ addressLoop:
 			((AESemaphore)sems.get(i)).reserve();
 		}
 	}
-
+	*/
+	
 	@Override
 	public boolean
 	mustBind()
@@ -3704,19 +3827,68 @@ addressLoop:
 	public static final int BS_WARNING	= 2;
 	public static final int BS_ERROR	= 3;
 
-	long		bs_last_calc 	= 0;
+	Object				bs_lock			= new Object();
+	boolean				bs_pending;
+	long				bs_last_calc 	= 0;
 	private Object[]	bs_last_value 	= null;
 
 	public Object[]
 	getBindingStatus()
 	{
-		long now = SystemTime.getMonotonousTime();
+		String 	bind_ips 	= COConfigurationManager.getStringParameter("Bind IP", "").trim();
 
-		if ( bs_last_value != null && now - bs_last_calc < 30*1000 ){
+		if ( bind_ips.length() == 0 ){
 
-			return( bs_last_value );
+			return( new Object[]{ BS_INACTIVE, "" });
 		}
+		
+		synchronized( bs_lock ){
+		
+			long now = SystemTime.getMonotonousTime();
 
+			Object[] result = bs_last_value;
+			
+			if ( result != null && ( bs_last_calc > 0 && now - bs_last_calc < 15*1000 )){
+	
+				return( result );
+			}
+
+			if ( result == null ){
+				
+				result = new Object[]{ BS_WARNING, MessageText.getString( "PeersView.state.pending" )};
+			}
+			
+			if ( !bs_pending ){
+				
+				bs_pending = true;
+				
+					async_dispatcher.dispatch(()->{
+						
+						Object[] r = null;
+						
+						try{
+							r = getBindingStatusSupport();
+							
+						}finally{
+							
+							synchronized( bs_lock ){
+								
+								bs_last_value	= r;
+								bs_last_calc	= SystemTime.getMonotonousTime();
+								
+								bs_pending		= false;
+							}
+						}
+					});
+			}
+			
+			return( result );
+		}
+	}
+	
+	private Object[]
+	getBindingStatusSupport()
+	{
 		String 	bind_ips 	= COConfigurationManager.getStringParameter("Bind IP", "").trim();
 
 		if ( bind_ips.length() == 0 ){
@@ -3935,10 +4107,7 @@ addressLoop:
 			status = enforceBind?BS_ERROR:BS_WARNING;
 		}
 
-		bs_last_value 	= new Object[]{ status, str };
-		bs_last_calc	= now;
-
-		return( bs_last_value );
+		return( new Object[]{ status, str });
 	}
 
 	private String
@@ -4374,7 +4543,10 @@ addressLoop:
 						Debug.out( e);
 					}
 
-					bs_last_calc = 0;
+					synchronized( bs_lock ){
+					
+						bs_last_calc = 0;
+					}
 
 					ui_manager.showMessageBox(
 								"settings.updated.title",
@@ -4651,7 +4823,13 @@ addressLoop:
 				writer.println( "bindable: " + getString( getBindableAddresses()));
 
 				writer.println( "ipv6_enabled=" + IPv6_enabled );
+				
+				writer.println( "ignore_v6_non_global=" + ignore_v6_non_global );
+				
+				writer.println( "ignore_v6_temporary=" + ignore_v6_temporary );
 
+				writer.println( "temporary_v6=" + temporary_ipv6_addresses );
+				
 				writer.println( "ipv4_potential=" + hasIPV4Potential());
 				writer.println( "ipv6_potential=" + hasIPV6Potential(false) + "/" + hasIPV6Potential(true));
 
@@ -4783,7 +4961,7 @@ addressLoop:
 	generateDiagnostics(
 		final IndentWriter iw )
 	{
-		Set	public_addresses = new HashSet();
+		Set<InetAddress>	public_addresses = new HashSet<>();
 
 		NetworkAdminHTTPProxy	proxy = getHTTPProxy();
 
@@ -5022,13 +5200,13 @@ addressLoop:
   		}
 		}
 
-		Iterator	it = public_addresses.iterator();
+		Iterator<InetAddress>	it = public_addresses.iterator();
 
 		iw.println( "Public Addresses" );
 
 		while( it.hasNext()){
 
-			InetAddress	pub_address = (InetAddress)it.next();
+			InetAddress	pub_address = it.next();
 
 			try{
 				NetworkAdminASN	res = lookupCurrentASN( pub_address );
@@ -5073,11 +5251,9 @@ addressLoop:
 		public NetworkAdminNetworkInterfaceAddress[]
 		getAddresses()
 		{
-				// BAH NetworkInterface has lots of goodies but is 1.6
+			Enumeration<InetAddress>	e = filter(ni.getInetAddresses());
 
-			Enumeration	e = filter(ni.getInetAddresses());
-
-			List	addresses = new ArrayList();
+			List<networkAddress>	addresses = new ArrayList<>();
 
 			while( e.hasMoreElements()){
 
@@ -5114,8 +5290,8 @@ addressLoop:
 
 		public void
 		generateDiagnostics(
-			IndentWriter 	iw,
-			Set				public_addresses )
+			IndentWriter 		iw,
+			Set<InetAddress>	public_addresses )
 		{
 			iw.println( getDisplayName() + "/" + getName());
 
@@ -5174,6 +5350,7 @@ addressLoop:
 				return( address.isLoopbackAddress());
 			}
 
+			/*
 			@Override
 			public NetworkAdminNode[]
 			getRoute(
@@ -5197,7 +5374,8 @@ addressLoop:
 			{
 				return( NetworkAdminImpl.this.pingTarget( address, target, max_millis, listener));
 			}
-
+			*/
+			
 			@Override
 			public InetAddress
 			testProtocol(
@@ -5210,8 +5388,8 @@ addressLoop:
 
 			public void
 			generateDiagnostics(
-				IndentWriter 	iw,
-				Set				public_addresses )
+				IndentWriter 		iw,
+				Set<InetAddress>	public_addresses )
 			{
 				iw.println( "" + getAddress());
 
@@ -5396,7 +5574,7 @@ addressLoop:
 		}
 	}
 
-	private static class
+	private class
 	AddressHistoryRecord
 	{
 		private final String					ni_name;
@@ -5467,50 +5645,257 @@ addressLoop:
 
 			return( result );
 		}
-	}
+	}	
 	
-	private static volatile boolean	ignore_v4;
-	private static volatile boolean	ignore_v6;
-	
-	static{
-		COConfigurationManager.addAndFireParameterListeners(
-			new String[]{
-				ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES,
-				ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES },
-			(n)->{
-				ignore_v4 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_4_IGNORE_NI_ADDRESSES );
-				ignore_v6 = COConfigurationManager.getBooleanParameter( ConfigKeys.Connection.BCFG_IPV_6_IGNORE_NI_ADDRESSES );
-			});
-	}
-	
-	
-	static Enumeration<InetAddress>
+	private Enumeration<InetAddress>
 	filter(
 		Enumeration<InetAddress> addresses )
 	{
-		if ( ignore_v4 || ignore_v6 ){
+		List<InetAddress> result = null;
+
+		if ( ignore_v4 || ignore_v6 || ignore_v6_non_global || ignore_v6_temporary ){
 			
-			Vector<InetAddress> result = new Vector<>();
+			result = new ArrayList<>();
+			
+			int		num_v6			= 0;
+			boolean has_v6_global	= false;
 			
 			while( addresses.hasMoreElements()){
 				
 				InetAddress ia =  addresses.nextElement();
 				
-				if ( 	( ia instanceof Inet4Address && ignore_v4 )||
-						( ia instanceof Inet6Address && ignore_v6 )){
+				boolean is_v4 = ( ia instanceof Inet4Address );
+				
+				if ( 	( is_v4 && ignore_v4 )||
+						( ( !is_v4)  && ignore_v6 )){
 					
 				}else{
 					
 					result.add( ia );
+					
+					if ( !is_v4 ){
+						
+						if ( AddressUtils.isGlobalAddressV6(ia)){
+							
+							has_v6_global = true;
+						}
+						
+						num_v6++;
+					}
 				}
 			}
-			return( result.elements());
+			
+			if ( ignore_v6_non_global && num_v6 >= 2 && has_v6_global ){
+				
+				Iterator<InetAddress> it = result.iterator();
+							
+				while( it.hasNext()){
+					
+					InetAddress ia = it.next();
+					
+					if ( ia instanceof Inet6Address && !AddressUtils.isGlobalAddressV6( ia )){
+						
+						num_v6--;
+						
+						it.remove();
+					}
+				}
+			}
+			
+			if ( ignore_v6_temporary && num_v6 >= 2 ){
+				
+				Set<Inet6Address> temp = temporary_ipv6_addresses;
+				
+				Iterator<InetAddress> it = result.iterator();
+				
+				while( it.hasNext() && num_v6 > 1 ){
+					
+					InetAddress ia = it.next();
+					
+					if ( ia instanceof Inet6Address && temp.contains( ia )){
+						
+						num_v6--;
+						
+						it.remove();
+					}
+				}
+			}
+		}
+		
+		if ( result == null ){
+			
+			return( addresses );
 			
 		}else{
-			return( addresses );
+			
+			return( new Vector<>( result ).elements());
 		}
 	}
+	
+	public boolean
+	isIgnoredBindAddress(
+		InetAddress		ia )
+	{
+		return( ignore_v6_temporary && temporary_ipv6_addresses.contains(ia));
+	}
+	
+	public List<Inet6Address>
+	getIgnoredTemporaryIPv6()
+	{
+		if ( ignore_v6_temporary ){
+			
+			return( new ArrayList<>( temporary_ipv6_addresses ));
+			
+		}else{
+			
+			return( Collections.emptyList());
+		}
+	}
+	
+	private Set<Inet6Address> 
+	getTemporaryIPv6Addresses() 
+	{
+		Object[] result = {null};
+		
+		AESemaphore sem = new AESemaphore( "getTemporaryIPv6Addresses" );
+		
+		AEThread2.createAndStartDaemon(
+			"getTemporaryIPv6Addresses",
+			()->{
+				try{
+					Set<Inet6Address>  x = getTemporaryIPv6AddressesSupport();
+					
+					synchronized( result ){
+						
+						result[0] = x;
+					}
+				}finally{
+					
+					sem.release();
+				}
+			});
+	
+		if ( !sem.reserve( 10*1000 )){
+			
+			Debug.out( "Timeout waiting for temporary IPv6 addresses" );
+			
+			return( new HashSet<Inet6Address>());
+		}
+		
+		synchronized( result ){
+			
+			return((Set<Inet6Address>)result[0]);
+		}
+	}
+	
+	private Set<Inet6Address> 
+	getTemporaryIPv6AddressesSupport() 
+	{
+		Set<Inet6Address> result = new HashSet<>();
 
+		try{
+			ProcessBuilder pb;
+
+			if ( Constants.isWindows ){
+
+				String system_root = "C:\\Windows";
+				
+				try{
+					String str = System.getenv( "systemroot" );
+					
+					if ( str != null && new File( str ).exists()){
+						
+						system_root = str;
+					}
+				}catch( Throwable e ){				
+				}
+
+				String[] locs = { 
+						system_root + "\\system32\\WindowsPowerShell\\v1.0\\powershell.exe",
+						system_root + "\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe"
+				};
+
+				String ps_exe = "powershell.exe";
+				
+				for ( String loc: locs ){
+					
+					if ( new File( loc ).exists()){
+						
+						ps_exe = loc;
+						
+						break;
+					}
+				}
+				
+				pb = new ProcessBuilder(
+						ps_exe, 
+						"-NoProfile", 
+						"-Command",
+						"(Get-NetIPAddress -AddressFamily IPv6 | Where-Object { $_.SuffixOrigin -eq 'Random' -and $_.PrefixOrigin -eq 'RouterAdvertisement' }).IPAddress");
+
+			}else if ( Constants.isLinux ){
+
+				pb = new ProcessBuilder("bash", "-c", "ip -6 addr show | grep temporary");
+
+			}else if ( Constants.isOSX ){
+
+				pb = new ProcessBuilder("bash", "-c", "ifconfig | grep 'inet6.*temporary'");
+				
+			}else{
+				
+				return( result );
+			}
+
+			Process process = pb.start();
+
+			try( BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))){
+
+				String line;
+
+				while ((line = reader.readLine()) != null){
+
+					Inet6Address extracted = extractIPv6(line);
+
+					if ( extracted != null ){
+
+						result.add(extracted);
+					}
+				}
+			}
+
+			process.waitFor();
+
+		} catch (Throwable e) {
+		}
+
+		return( result );
+	}
+
+	private final Pattern ipv6Pattern = Pattern.compile("([a-fA-F0-9:]+:[a-fA-F0-9:]+)");
+
+	private Inet6Address 
+	extractIPv6(
+		String input ) 
+	{        
+		Matcher matcher = ipv6Pattern.matcher( input );
+
+		if ( matcher.find()){
+
+			String addr = matcher.group(1);
+
+			if ( addr.contains(":") && addr.length() > 3){
+
+				try{
+					return((Inet6Address)InetAddress.getByName(addr));
+
+				}catch( Throwable e ){
+				}
+			}
+		}
+
+		return( null );
+	}
+	
 	public static void
 	main(
 		String[]	args )
@@ -5549,18 +5934,9 @@ addressLoop:
 
 			}
 
-			IndentWriter iw = new IndentWriter( new PrintWriter( System.out ));
+			NetworkAdminImpl admin = getSingleton();
 
-			iw.setForce( true );
-
-			COConfigurationManager.initialise();
-
-			CoreFactory.create();
-
-			NetworkAdmin admin = getSingleton();
-
-			//admin.logNATStatus( iw );
-			admin.generateDiagnostics( iw );
+			System.out.println( admin.getTemporaryIPv6Addresses());
 
 		}catch( Throwable e){
 

@@ -1711,8 +1711,8 @@ public class TableColumnImpl
 			}
 			return bSortAscending ? -val : val;
 		} catch (ClassCastException e) {
-			int c0_index = (cell0 == null) ? -999 : cell0.getTableRowCore().getIndex();
-			int c1_index = (cell1 == null) ? -999 : cell1.getTableRowCore().getIndex();
+			int c0_index = (cell0 == null) ? -999 : cell0.getTableRow().getIndex();
+			int c1_index = (cell1 == null) ? -999 : cell1.getTableRow().getIndex();
 			System.err.println("Can't compare " + c0.getClass().getName() + "("
 					+ c0.toString() + ") from row #" + c0_index
 					+ " to " + c1.getClass().getName() + "(" + c1.toString()
@@ -1983,6 +1983,29 @@ public class TableColumnImpl
 		}
 	}
 
+	@Override
+	public void
+	reset(
+		boolean	width,
+		boolean	align,
+		boolean	fg,
+		boolean bg )
+	{
+		if (width && iDefaultWidth != 0) {
+			setWidthPX(iDefaultWidth);
+		}
+		if ( align && iDefaultAlignment != -1 ){
+			setAlignment( iDefaultAlignment );
+		}
+		
+		if ( fg && foregroundColor != null ){
+			setForegroundColor( null );
+		}
+		if ( bg &&  backgroundColor != null ){
+			setBackgroundColor( null );
+		}
+	}
+	
 	/* (non-Javadoc)
 	 * @see TableColumnCore#addDataSourceType(java.lang.Class)
 	 */
